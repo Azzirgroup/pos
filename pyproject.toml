@@ -4,12 +4,22 @@ authors = [
     { name = "Rono", email = "ronoelisha625@gmail.com"}
 ]
 description = "ERPNext customizations for cosmstics shop"
-requires-python = ">=3.14"
+# Not ">=3.14" (the v17 scaffold default): Frappe v16 runs on Python 3.11/3.12,
+# so that constraint makes the app uninstallable on a v16 bench. Matches what
+# other v16-compatible apps (crm, hrms) declare.
+requires-python = ">=3.10"
 readme = "README.md"
 dynamic = ["version"]
 dependencies = [
     # "frappe~=16.0.0" # Installed and managed by bench.
 ]
+
+# Frappe Cloud refuses to install an app without this block.
+# Upper bound is <18 rather than <17 so the same source runs on the v16 target
+# and on a v17 development bench.
+[tool.bench.frappe-dependencies]
+frappe = ">=16.0.0,<18.0.0"
+erpnext = ">=16.0.0,<18.0.0"
 
 [build-system]
 requires = ["flit_core >=3.4,<4"]
@@ -21,7 +31,7 @@ build-backend = "flit_core.buildapi"
 
 [tool.ruff]
 line-length = 110
-target-version = "py314"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = [
