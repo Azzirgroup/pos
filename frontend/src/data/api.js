@@ -29,6 +29,11 @@ export function submitSale({ items, payment, customer }) {
 	})
 }
 
+/* ---------- catalog ---------- */
+
+/** Whole sellable catalog in one call; searched locally thereafter. */
+export const getCatalog = () => call('cosmestics.api.catalog.get_catalog')
+
 /* ---------- shift ---------- */
 
 export const getProfiles = () => call('cosmestics.api.shift.get_profiles')

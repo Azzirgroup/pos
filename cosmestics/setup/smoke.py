@@ -54,16 +54,16 @@ def _run(r):
 		f"{wh} (type={wh_type})",
 	)
 
-	item = _stocked_item()
+	# Sell from the warehouse the app is actually configured to use. Overriding
+	# it here would test a path production never takes — and did exactly that:
+	# submit_sale reads a cached settings doc, so an item picked for warehouse A
+	# was sold against warehouse B and died with NegativeStockError.
+	item = _stocked_item(wh)
 	if not item:
-		print("SKIP: no stocked, non-batched item to sell")
+		print(f"SKIP: no stocked, non-batched, sellable item in {wh}")
 		return
 
-	settings = frappe.get_single("Cosmestics POS Settings")
-	settings.default_source_warehouse = item.warehouse
-	settings.save(ignore_permissions=True)
-	frappe.clear_cache(doctype="Cosmestics POS Settings")
-	print(f"  selling {item.item_code} (qty {item.actual_qty}) from {item.warehouse}\n")
+	print(f"  selling {item.item_code} (qty {item.actual_qty}) from {wh}\n")
 
 	# --- Cash, over-tendered so change must be derived ---
 	res = submit_sale(
@@ -102,7 +102,86 @@ def _run(r):
 	r.check("M-Pesa reference kept", "SLK7XR2QM4" in (si2.remarks or ""), str(si2.remarks)[:50])
 	r.check("M-Pesa outstanding 0", flt(si2.outstanding_amount) == 0, str(si2.outstanding_amount))
 
+	_catalog(r)
+	_partial_payment(r, item)
 	_shift_and_credit(r, item)
+
+
+def _catalog(r):
+	"""The catalog must serve real Items — the demo SKUs do not exist in ERPNext
+	and every sale of one dies with DoesNotExistError at submit."""
+	from cosmestics.api.catalog import get_catalog
+
+	print()
+	data = get_catalog()
+	rows = data.get("items", [])
+	r.check("catalog returns items", bool(rows), f"{len(rows)} items")
+	if not rows:
+		return
+
+	r.check("catalog not flagged empty", not data.get("empty"))
+
+	sample = rows[0]
+	r.check(
+		"catalog items are real ERPNext Items",
+		bool(frappe.db.exists("Item", sample["item_code"])),
+		sample["item_code"],
+	)
+	r.check("catalog exposes a price field", "price" in sample)
+	r.check("catalog exposes stock", "stock" in sample)
+	priced = [x for x in rows if flt(x["price"]) > 0]
+	r.check("at least one item is priced", bool(priced), f"{len(priced)} priced")
+
+
+def _partial_payment(r, item):
+	"""Split tender and under-payment."""
+	from cosmestics.api.customers import create as create_customer
+	from cosmestics.api.pos import submit_sale
+
+	print()
+	cust = create_customer(customer_name="Partial Pay Customer")
+
+	# --- Split tender: 600 cash + 400 M-Pesa on a 1000 bill ---
+	res = submit_sale(
+		items=[{"item_code": item.item_code, "qty": 2, "rate": 500, "discount_pct": 0}],
+		payment={
+			"parts": [
+				{"method": "cash", "amount": 600},
+				{"method": "mpesa", "amount": 400, "reference": "SPLIT123"},
+			]
+		},
+	)
+	si = frappe.get_doc("Sales Invoice", res["invoice"])
+	r.check("split tender submitted", si.docstatus == 1, si.name)
+	r.check("two payment rows", len(si.payments) == 2, str(len(si.payments)))
+	modes = sorted(p.mode_of_payment for p in si.payments)
+	r.check("both modes recorded", modes == ["Cash", "M-Pesa"], str(modes))
+	r.check("paid_amount = 1000", flt(si.paid_amount) == 1000, str(si.paid_amount))
+	r.check("split leaves nothing outstanding", flt(si.outstanding_amount) == 0,
+	        str(si.outstanding_amount))
+
+	# --- Partial: pay 300 of 1000, 700 stays owed ---
+	res2 = submit_sale(
+		items=[{"item_code": item.item_code, "qty": 2, "rate": 500, "discount_pct": 0}],
+		payment={"parts": [{"method": "cash", "amount": 300}]},
+		customer=cust["name"],
+	)
+	si2 = frappe.get_doc("Sales Invoice", res2["invoice"])
+	r.check("partial payment submitted", si2.docstatus == 1, si2.name)
+	r.check("paid_amount = 300", flt(si2.paid_amount) == 300, str(si2.paid_amount))
+	r.check("outstanding = 700", flt(si2.outstanding_amount) == 700, str(si2.outstanding_amount))
+	r.check("partial reported to caller", flt(res2.get("outstanding")) == 700,
+	        str(res2.get("outstanding")))
+
+	# --- Partial with no customer must be refused ---
+	try:
+		submit_sale(
+			items=[{"item_code": item.item_code, "qty": 2, "rate": 500, "discount_pct": 0}],
+			payment={"parts": [{"method": "cash", "amount": 300}]},
+		)
+		r.check("partial without customer is rejected", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("partial without customer is rejected", True)
 
 
 def _shift_and_credit(r, item):
@@ -124,6 +203,13 @@ def _shift_and_credit(r, item):
 		return
 
 	profile = profiles[0]["name"]
+
+	# A cashier may already be mid-shift on this site. Close it first so the
+	# test starts from a known state — the whole run is rolled back, so the real
+	# shift is untouched.
+	if get_open_shift():
+		close_shift()
+		print("  (closed a pre-existing open shift for the test; rolled back after)")
 
 	# POS Opening Entry refuses to save if any mode in the opening balances has
 	# no company account, so a shift cannot start without these.
@@ -256,15 +342,39 @@ def _annotations(r):
 	)
 
 
-def _stocked_item():
+def _stocked_item(warehouse):
+	"""Pick an item that can actually be sold right now.
+
+	`Bin.actual_qty` is not sufficient: ERPNext validates against the stock
+	ledger as of the posting datetime, and the two disagree when a warehouse has
+	backdated or future-dated entries. Trusting Bin alone picked an item that
+	then failed with NegativeStockError, so each candidate is confirmed against
+	the real balance.
+	"""
+	from erpnext.stock.utils import get_stock_balance
+	from frappe.utils import nowdate, nowtime
+
 	rows = frappe.db.sql(
 		"""select b.item_code, b.actual_qty, b.warehouse
 		   from tabBin b join tabItem i on i.name = b.item_code
-		   where b.actual_qty >= 3
+		   where b.warehouse = %s
+		     and b.actual_qty >= 10
 		     and i.is_stock_item = 1 and i.disabled = 0
 		     and i.is_sales_item = 1
 		     and i.has_batch_no = 0 and i.has_serial_no = 0
-		   order by b.actual_qty desc limit 1""",
+		   order by b.actual_qty desc limit 25""",
+		warehouse,
 		as_dict=True,
 	)
-	return rows[0] if rows else None
+
+	for row in rows:
+		try:
+			balance = get_stock_balance(row.item_code, row.warehouse, nowdate(), nowtime())
+		except Exception:
+			continue
+		# The suite sells this item several times over; leave generous headroom.
+		if flt(balance) >= 10:
+			row.actual_qty = flt(balance)
+			return row
+
+	return None

@@ -38,6 +38,37 @@ def setup_prerequisites():
 	apply_settings_defaults(group)
 	# Must run after the settings map the till's three buttons onto real modes.
 	ensure_mode_of_payment_accounts()
+	ensure_pos_settings()
+	ensure_partial_payment_allowed()
+
+
+def ensure_pos_settings():
+	"""Keep POS Settings on Sales Invoice.
+
+	ERPNext's `validate_created_using_pos` hard-throws "Transactions using Sales
+	Invoice in POS are disabled" when this is set to POS Invoice — which would
+	break every sale this app makes, since it posts Sales Invoices by design.
+	"""
+	if not frappe.db.exists("DocType", "POS Settings"):
+		return
+
+	if frappe.db.get_single_value("POS Settings", "invoice_type") != "Sales Invoice":
+		frappe.db.set_single_value("POS Settings", "invoice_type", "Sales Invoice")
+
+
+def ensure_partial_payment_allowed():
+	"""Let the till take part-payments.
+
+	Without this ERPNext raises PartialPaymentValidationError on any sale where
+	paid_amount is under the total. The balance still lands on the customer's
+	account as outstanding, so nothing is written off.
+	"""
+	if not frappe.db.exists("DocType", "POS Profile"):
+		return
+
+	for name in frappe.get_all("POS Profile", filters={"disabled": 0}, pluck="name"):
+		if not frappe.db.get_value("POS Profile", name, "allow_partial_payment"):
+			frappe.db.set_value("POS Profile", name, "allow_partial_payment", 1)
 
 
 def ensure_mode_of_payment_accounts():

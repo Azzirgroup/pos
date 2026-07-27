@@ -9,6 +9,8 @@ import LucideCheck from '~icons/lucide/check'
 import LucideNotebookPen from '~icons/lucide/notebook-pen'
 import LucideUserPlus from '~icons/lucide/user-plus'
 import LucideAlertTriangle from '~icons/lucide/alert-triangle'
+import LucideX from '~icons/lucide/x'
+import LucideSplit from '~icons/lucide/split'
 
 const props = defineProps({
 	modelValue: { type: Boolean, default: false },
@@ -37,11 +39,56 @@ const shortfall = computed(() => round2(Math.max(0, props.total - tenderedNum.va
 
 const isCredit = computed(() => method.value === 'credit')
 
+/* ---------- split tender & part payment ---------- */
+
+const splitMode = ref(false)
+/** Applied amounts per method; cash may exceed its share, giving change. */
+const parts = ref([])
+
+const partsTotal = computed(() =>
+	parts.value.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
+)
+/** Positive = still owed, negative = over-tendered (change). */
+const remaining = computed(() => props.total - partsTotal.value)
+const isPartial = computed(() => splitMode.value && remaining.value > 0.005)
+
+function startSplit() {
+	splitMode.value = true
+	// Seed with the current method for the full amount; the cashier reduces it
+	// and adds a second row, which is how a split actually gets entered.
+	parts.value = [{ method: method.value === 'credit' ? 'cash' : method.value, amount: '', reference: '' }]
+}
+
+function addPart() {
+	const used = new Set(parts.value.map((p) => p.method))
+	const next = ['cash', 'mpesa', 'card'].find((m) => !used.has(m)) || 'cash'
+	parts.value.push({ method: next, amount: '', reference: '' })
+}
+
+function removePart(i) {
+	parts.value.splice(i, 1)
+	if (!parts.value.length) splitMode.value = false
+}
+
+/** Fill this row with whatever is still owed — the common second-row action. */
+function fillRemaining(i) {
+	const others = parts.value.reduce(
+		(sum, p, j) => sum + (j === i ? 0 : Number(p.amount) || 0),
+		0,
+	)
+	parts.value[i].amount = String(Math.max(0, +(props.total - others).toFixed(2)))
+}
+
 // Cash needs a tendered amount; credit needs a named customer to owe the money;
 // the others settle exactly.
 const canComplete = computed(() => {
 	if (props.total <= 0) return false
 	if (isCredit.value) return Boolean(props.customer)
+	if (splitMode.value) {
+		if (partsTotal.value <= 0) return false
+		// An unpaid balance is a debt, so it needs a named customer to sit against.
+		return isPartial.value ? Boolean(props.customer) : true
+	}
 	if (method.value === 'cash') return tenderedNum.value >= props.total
 	return true
 })
@@ -74,6 +121,8 @@ watch(
 		method.value = 'cash'
 		tendered.value = ''
 		reference.value = ''
+		splitMode.value = false
+		parts.value = []
 		await nextTick()
 		tenderedInput.value?.focus()
 	},
@@ -81,6 +130,24 @@ watch(
 
 function complete() {
 	if (!canComplete.value) return
+
+	if (splitMode.value) {
+		emit('complete', {
+			method: 'split',
+			parts: parts.value
+				.filter((p) => Number(p.amount) > 0)
+				.map((p) => ({
+					method: p.method,
+					amount: Number(p.amount),
+					reference: p.reference || null,
+				})),
+			tendered: partsTotal.value,
+			change: remaining.value < 0 ? -remaining.value : 0,
+			outstanding: isPartial.value ? remaining.value : 0,
+		})
+		return
+	}
+
 	emit('complete', {
 		method: method.value,
 		// A credit sale collects nothing now.
@@ -106,8 +173,147 @@ function complete() {
 				</div>
 			</div>
 
+			<!-- Split tender / part payment -->
+			<div v-if="splitMode" class="flex flex-col gap-3">
+				<div v-for="(p, i) in parts" :key="i" class="rounded-xl border border-outline-gray-2 p-3">
+					<div class="flex items-center gap-2">
+						<select
+							v-model="p.method"
+							class="h-11 min-w-0 flex-1 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-2 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						>
+							<option value="cash">Cash</option>
+							<option value="mpesa">M-Pesa</option>
+							<option value="card">Card</option>
+						</select>
+						<input
+							v-model="p.amount"
+							type="number"
+							inputmode="decimal"
+							placeholder="0"
+							class="tabular h-11 w-28 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-2 text-right text-p-lg font-semibold text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+							@focus="$event.target.select()"
+						/>
+						<button
+							class="grid h-11 w-11 shrink-0 place-items-center rounded-lg text-ink-gray-5 transition-colors hover:bg-surface-gray-2"
+							aria-label="Remove"
+							@click="removePart(i)"
+						>
+							<LucideX class="h-4 w-4" />
+						</button>
+					</div>
+					<button
+						v-if="remaining > 0.005"
+						class="mt-2 text-p-sm font-medium text-ink-blue-3"
+						@click="fillRemaining(i)"
+					>
+						Fill remaining {{ fmtMoney(remaining) }}
+					</button>
+				</div>
+
+				<div class="flex items-center gap-2">
+					<button
+						class="min-h-touch flex-1 rounded-xl border border-outline-gray-2 py-2.5 text-p-base font-medium text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
+						@click="addPart"
+					>
+						+ Add method
+					</button>
+					<button
+						class="min-h-touch rounded-xl px-4 py-2.5 text-p-base font-medium text-ink-gray-6 transition-colors hover:bg-surface-gray-2"
+						@click="splitMode = false"
+					>
+						Cancel split
+					</button>
+				</div>
+
+				<!-- The balance is the number the cashier is deciding on. -->
+				<div
+					class="flex items-center justify-between rounded-xl px-4 py-3"
+					:class="
+						Math.abs(remaining) < 0.005
+							? 'bg-surface-green-2'
+							: remaining > 0
+								? 'bg-surface-amber-2'
+								: 'bg-surface-blue-2'
+					"
+				>
+					<span
+						class="text-p-base font-medium"
+						:class="
+							Math.abs(remaining) < 0.005
+								? 'text-ink-green-3'
+								: remaining > 0
+									? 'text-ink-amber-3'
+									: 'text-ink-blue-3'
+						"
+					>
+						{{
+							Math.abs(remaining) < 0.005
+								? 'Fully paid'
+								: remaining > 0
+									? 'Balance owed'
+									: 'Change due'
+						}}
+					</span>
+					<span
+						class="tabular text-2xl font-semibold"
+						:class="
+							Math.abs(remaining) < 0.005
+								? 'text-ink-green-3'
+								: remaining > 0
+									? 'text-ink-amber-3'
+									: 'text-ink-blue-3'
+						"
+					>
+						{{ fmtMoney(Math.abs(remaining)) }}
+					</span>
+				</div>
+
+				<!-- A part-paid sale creates a debt, so it needs a named customer. -->
+				<button
+					v-if="isPartial"
+					class="flex min-h-touch items-center gap-3 rounded-xl border p-3.5 text-left transition-colors"
+					:class="
+						customer
+							? 'border-outline-gray-2 bg-surface-white hover:bg-surface-gray-2'
+							: 'border-outline-amber-2 bg-surface-amber-2'
+					"
+					@click="emit('pick-customer')"
+				>
+					<LucideUserPlus
+						class="h-5 w-5 shrink-0"
+						:class="customer ? 'text-ink-gray-5' : 'text-ink-amber-3'"
+					/>
+					<div class="min-w-0 flex-1">
+						<div
+							class="truncate text-p-base font-medium"
+							:class="customer ? 'text-ink-gray-9' : 'text-ink-amber-3'"
+						>
+							{{ customer ? customer.customer_name || customer.name : 'Choose a customer' }}
+						</div>
+						<div class="text-p-sm text-ink-gray-6">
+							{{
+								customer
+									? `Will owe ${fmtMoney(remaining)}`
+									: 'Required — someone must owe the balance'
+							}}
+						</div>
+					</div>
+				</button>
+			</div>
+
+			<!-- Split entry point. Kept out of the method row: splitting is the
+			     exception, and it must not crowd the four one-tap methods. -->
+			<button
+				v-if="!splitMode && !isCredit"
+				class="flex min-h-touch items-center justify-center gap-2 rounded-xl border border-outline-gray-2 py-2.5 text-p-base font-medium text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
+				@click="startSplit"
+			>
+				<LucideSplit class="h-4 w-4" />
+				Split or part-pay
+			</button>
+
 			<!-- Method -->
-			<div class="grid grid-cols-4 gap-2">
+			<div v-if="!splitMode" class="grid grid-cols-4 gap-2">
 				<button
 					v-for="m in METHODS"
 					:key="m.key"
@@ -125,7 +331,7 @@ function complete() {
 			</div>
 
 			<!-- Credit: the customer IS the transaction, so it leads. -->
-			<div v-if="isCredit" class="flex flex-col gap-3">
+			<div v-if="!splitMode && isCredit" class="flex flex-col gap-3">
 				<button
 					class="flex min-h-touch items-center gap-3 rounded-xl border p-3.5 text-left transition-colors"
 					:class="
@@ -264,7 +470,13 @@ function complete() {
 				@click="complete"
 			>
 				<LucideCheck class="h-5 w-5" />
-				{{ isCredit ? 'Record credit sale' : 'Complete sale' }}
+				{{
+					isCredit
+						? 'Record credit sale'
+						: isPartial
+							? `Take part-payment · ${fmtMoney(remaining)} owed`
+							: 'Complete sale'
+				}}
 			</button>
 		</div>
 	</BottomSheet>

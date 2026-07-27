@@ -31,6 +31,7 @@ import ShiftSheet from '@/components/ShiftSheet.vue'
 import CustomerSheet from '@/components/CustomerSheet.vue'
 import ScanSheet from '@/components/ScanSheet.vue'
 import { detectorSupported } from '@/composables/useCameraScanner'
+import LucideTriangleAlert from '~icons/lucide/triangle-alert'
 
 const catalog = useCatalogStore()
 const cart = useCartStore()
@@ -280,9 +281,11 @@ async function completeSale(payment) {
 	notify(
 		wasCredit
 			? `${fmtMoney(paid)} on credit to ${customerName}`
-			: payment.change > 0
-				? `Paid ${fmtMoney(paid)} · change ${fmtMoney(payment.change)}`
-				: `Paid ${fmtMoney(paid)}`,
+			: payment.outstanding > 0
+				? `Part-paid · ${fmtMoney(payment.outstanding)} owed by ${customerName}`
+				: payment.change > 0
+					? `Paid ${fmtMoney(paid)} · change ${fmtMoney(payment.change)}`
+					: `Paid ${fmtMoney(paid)}`,
 		'ok',
 	)
 
@@ -292,12 +295,23 @@ async function completeSale(payment) {
 			customer: snapshot.customer,
 			payment: {
 				method: payment.method,
+				// Present only for split tender; the backend treats it as the
+				// authoritative breakdown when it is.
+				parts: payment.parts || null,
 				tendered: payment.tendered,
 				change: payment.change,
 				reference: payment.reference,
 			},
 		})
-		notify(`Invoice ${res.invoice} posted`, 'ok')
+		notify(
+			res.outstanding > 0
+				? `Invoice ${res.invoice} · ${fmtMoney(res.outstanding)} outstanding`
+				: `Invoice ${res.invoice} posted`,
+			'ok',
+		)
+		// Stock moved, so the grid's counts are now stale. Refreshed after the
+		// receipt, never before — the cashier must not wait on this.
+		catalog.refresh()
 	} catch (e) {
 		// The customer has already walked away, so this cannot be a silent
 		// failure — it needs to be loud enough that the cashier tells someone.
@@ -414,6 +428,26 @@ useShortcuts({
 		/>
 
 		<ScanSheet v-model="scanSheet" :last-result="scanResult" @scan="onCameraScan" />
+
+		<!-- Demo catalog is unsellable: no ERPNext Item matches these codes, so
+		     checkout fails at submit. Say so up front rather than at the till. -->
+		<div
+			v-if="catalog.isDemo && catalog.loaded"
+			class="pointer-events-none fixed inset-x-0 top-16 z-40 flex justify-center px-4"
+		>
+			<div
+				class="pointer-events-auto flex items-center gap-2.5 rounded-xl bg-surface-amber-3 px-4 py-2.5 text-p-sm font-medium text-ink-white shadow-lg"
+			>
+				<LucideTriangleAlert class="h-4 w-4 shrink-0" />
+				<span>
+					{{
+						catalog.error
+							? `Catalog unavailable — showing demo items that cannot be sold`
+							: `No sellable items on this site — showing demo items that cannot be sold`
+					}}
+				</span>
+			</div>
+		</div>
 
 		<HeldSheet
 			v-model="heldSheet"

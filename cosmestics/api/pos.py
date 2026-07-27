@@ -71,6 +71,7 @@ def submit_sale(
 		"grand_total": flt(invoice.grand_total),
 		"paid_amount": flt(invoice.paid_amount),
 		"change": flt(invoice.change_amount),
+		"outstanding": flt(invoice.outstanding_amount),
 		"purchases": purchases,
 	}
 
@@ -139,7 +140,7 @@ def _build_invoice(items, payment, customer, company, settings):
 	si.calculate_taxes_and_totals()
 
 	if not is_credit:
-		_attach_payment(si, payment, settings, company)
+		_attach_payment(si, payment, settings, company, customer)
 
 	if payment.get("reference"):
 		si.remarks = _("{0} ref: {1}").format(
@@ -151,37 +152,108 @@ def _build_invoice(items, payment, customer, company, settings):
 	return si
 
 
-def _attach_payment(si, payment, settings, company):
+def _attach_payment(si, payment, settings, company, customer):
 	"""Record how the customer actually paid.
 
-	For cash the full tendered amount is recorded, not the invoice total —
-	ERPNext then derives `change_amount` itself (it only does so when
-	`paid_amount` exceeds the total *and* a payment row is of type Cash). For
-	M-Pesa and card the amount is the total exactly; there is no change.
+	Supports three shapes:
+
+	* one method for the whole bill (the common case)
+	* split tender — several methods on one sale, via `parts`
+	* partial payment — the parts total less than the bill, leaving an
+	  outstanding balance on the customer's account
+
+	Cash rows carry the *tendered* amount rather than the amount due, because
+	ERPNext derives `change_amount` itself from `paid_amount` exceeding the
+	total, and only when a payment row is of type Cash.
 	"""
-	method = (payment or {}).get("method", "cash")
-	mode = _mode_of_payment(method, settings)
-
 	total = flt(si.rounded_total or si.grand_total)
-	tendered = flt(payment.get("tendered"))
+	parts = _payment_parts(payment, total)
 
-	if method == "cash" and tendered > total:
-		amount = tendered
+	paid = 0.0
+	has_cash = False
+
+	for part in parts:
+		mode = _mode_of_payment(part["method"], settings)
+		amount = flt(part["amount"])
+		if amount <= 0:
+			continue
+
+		if part["method"] == "cash":
+			has_cash = True
+
+		si.append(
+			"payments",
+			{
+				"mode_of_payment": mode,
+				"amount": amount,
+				"account": _payment_account(mode, company),
+				"reference_no": part.get("reference"),
+			},
+		)
+		paid += amount
+
+	if not si.get("payments"):
+		frappe.throw(_("Enter at least one payment"))
+
+	# Only meaningful when something is actually over-tendered in cash.
+	if has_cash and paid > total:
 		si.account_for_change_amount = frappe.get_cached_value(
 			"Company", company, "default_cash_account"
 		)
-	else:
-		amount = total
 
-	si.append(
-		"payments",
-		{
-			"mode_of_payment": mode,
-			"amount": amount,
-			"account": _payment_account(mode, company),
-			"reference_no": payment.get("reference"),
-		},
-	)
+	if paid < total:
+		_validate_partial(si, customer, total, paid)
+
+
+def _payment_parts(payment, total) -> list:
+	"""Normalise the payload into a list of {method, amount, reference}.
+
+	`parts` is the split-tender form. A bare {method, tendered} is the single
+	-method form and is upgraded here so the rest of the code has one shape to
+	deal with.
+	"""
+	payment = payment or {}
+	parts = payment.get("parts")
+
+	if parts:
+		return [
+			{
+				"method": p.get("method", "cash"),
+				"amount": flt(p.get("amount")),
+				"reference": p.get("reference"),
+			}
+			for p in parts
+		]
+
+	method = payment.get("method", "cash")
+	tendered = flt(payment.get("tendered"))
+	# Cash may be over-tendered (change follows); other methods settle exactly.
+	amount = tendered if method == "cash" and tendered > 0 else total
+
+	return [{"method": method, "amount": amount, "reference": payment.get("reference")}]
+
+
+def _validate_partial(si, customer, total, paid):
+	"""A part-paid sale is a debt, so it needs someone to owe it and a profile
+	that permits it. ERPNext raises PartialPaymentValidationError otherwise, and
+	its message does not say where to turn the setting on."""
+	if not customer:
+		frappe.throw(
+			_("{0} of {1} is unpaid. Select a customer — someone has to owe the balance.").format(
+				frappe.format_value(total - paid, {"fieldtype": "Currency"}),
+				frappe.format_value(total, {"fieldtype": "Currency"}),
+			)
+		)
+
+	if si.pos_profile and not frappe.db.get_value(
+		"POS Profile", si.pos_profile, "allow_partial_payment"
+	):
+		frappe.throw(
+			_(
+				"Partial payment is not enabled for POS Profile {0}. "
+				"Tick 'Allow Partial Payment' on it to accept part-payments."
+			).format(si.pos_profile)
+		)
 
 
 def _mode_of_payment(method, settings) -> str:
