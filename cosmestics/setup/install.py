@@ -36,6 +36,58 @@ def setup_prerequisites():
 	group = ensure_neighbour_supplier_group()
 	ensure_mpesa_mode_of_payment()
 	apply_settings_defaults(group)
+	# Must run after the settings map the till's three buttons onto real modes.
+	ensure_mode_of_payment_accounts()
+
+
+def ensure_mode_of_payment_accounts():
+	"""Give every till payment mode a company account.
+
+	POS Opening Entry refuses to save if any mode in its opening balances lacks
+	a Mode of Payment Account for the company, so a shift cannot be started
+	otherwise. ERPNext ships Cash and Credit Card with no account mapped on a
+	fresh company, which is exactly the case that breaks.
+	"""
+	if not frappe.db.exists("DocType", "Mode of Payment"):
+		return
+
+	company = frappe.defaults.get_global_default("company")
+	if not company:
+		return
+
+	settings = frappe.get_single("Cosmestics POS Settings")
+	modes = [m for m in (settings.mode_cash, settings.mode_mpesa, settings.mode_card) if m]
+
+	for mode in modes:
+		_ensure_mode_account(mode, company)
+
+
+def _ensure_mode_account(mode: str, company: str):
+	existing = frappe.db.get_value(
+		"Mode of Payment Account", {"parent": mode, "company": company}, "default_account"
+	)
+	if existing:
+		return
+
+	account = _account_for_mode(mode, company)
+	if not account:
+		return
+
+	doc = frappe.get_doc("Mode of Payment", mode)
+	doc.append("accounts", {"company": company, "default_account": account})
+	doc.save(ignore_permissions=True)
+
+
+def _account_for_mode(mode: str, company: str) -> str | None:
+	"""Route by mode type. Card settlements land in a bank account, not the
+	drawer, so mapping everything to cash would misstate both."""
+	mode_type = frappe.db.get_value("Mode of Payment", mode, "type")
+	cash = frappe.db.get_value("Company", company, "default_cash_account")
+	bank = frappe.db.get_value("Company", company, "default_bank_account")
+
+	if mode_type == "Cash":
+		return cash or bank
+	return bank or cash
 
 
 def ensure_mpesa_mode_of_payment() -> str | None:
@@ -56,16 +108,9 @@ def ensure_mpesa_mode_of_payment() -> str | None:
 	doc.mode_of_payment = MPESA_MODE
 	doc.type = "Bank"
 	doc.enabled = 1
-
-	# Point it at the company cash account so the first sale posts cleanly.
-	# Re-map this to a dedicated M-Pesa ledger once one exists.
-	company = frappe.defaults.get_global_default("company")
-	if company:
-		account = frappe.db.get_value("Company", company, "default_cash_account")
-		if account:
-			doc.append("accounts", {"company": company, "default_account": account})
-
 	doc.insert(ignore_permissions=True)
+	# The company account is mapped by ensure_mode_of_payment_accounts(), which
+	# handles every till mode uniformly rather than special-casing this one.
 	return doc.name
 
 

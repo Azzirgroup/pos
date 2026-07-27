@@ -125,9 +125,33 @@ def _shift_and_credit(r, item):
 
 	profile = profiles[0]["name"]
 
+	# POS Opening Entry refuses to save if any mode in the opening balances has
+	# no company account, so a shift cannot start without these.
+	settings = frappe.get_single("Cosmestics POS Settings")
+	till_modes = [m for m in (settings.mode_cash, settings.mode_mpesa, settings.mode_card) if m]
+	unmapped = [
+		m
+		for m in till_modes
+		if not frappe.db.get_value(
+			"Mode of Payment Account",
+			{"parent": m, "company": frappe.defaults.get_global_default("company")},
+			"default_account",
+		)
+	]
+	r.check(
+		"every till payment mode has a company account",
+		not unmapped,
+		f"missing: {unmapped}" if unmapped else f"{len(till_modes)} modes mapped",
+	)
+
+	# Open with ALL till modes, not just Cash — this is what the UI sends, and
+	# it is the path that surfaced the missing Credit Card account.
 	shift = open_shift(
 		pos_profile=profile,
-		balances=[{"mode_of_payment": "Cash", "opening_amount": 5000}],
+		balances=[
+			{"mode_of_payment": m, "opening_amount": 5000 if m == settings.mode_cash else 0}
+			for m in till_modes
+		],
 	)
 	r.check("shift opened", bool(shift and shift["name"]), str(shift and shift["name"]))
 	r.check("open shift is findable", bool(get_open_shift()))
