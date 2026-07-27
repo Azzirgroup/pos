@@ -3,7 +3,7 @@ import { ref, computed, watch, nextTick } from 'vue'
 import LucideSearch from '~icons/lucide/search'
 import LucideX from '~icons/lucide/x'
 import LucideScanLine from '~icons/lucide/scan-line'
-import LucideLayers from '~icons/lucide/layers'
+import LucideMenu from '~icons/lucide/menu'
 
 const props = defineProps({
 	modelValue: { type: String, default: '' },
@@ -16,7 +16,7 @@ const props = defineProps({
 	cameraScan: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['update:modelValue', 'openHeld', 'openShift', 'openScanner'])
+const emit = defineEmits(['update:modelValue', 'openHeld', 'openShift', 'openScanner', 'openMenu'])
 
 const input = ref(null)
 
@@ -121,20 +121,21 @@ watch(
 		     where a HID scanner is already faster than holding up a webcam. -->
 		<button
 			v-if="cameraScan"
-			class="grid h-11 min-w-touch place-items-center rounded-lg border border-outline-gray-2 bg-surface-white px-3 text-ink-gray-7 transition-colors hover:bg-surface-gray-2 active:bg-surface-gray-3 lg:hidden"
+			class="grid h-11 min-w-touch place-items-center rounded-lg border border-outline-gray-2 bg-surface-white px-3 text-ink-gray-7 transition-colors hover:bg-surface-gray-2 active:bg-surface-gray-3 md:hidden"
 			aria-label="Scan with camera"
 			@click="emit('openScanner')"
 		>
 			<LucideScanLine class="h-[18px] w-[18px]" />
 		</button>
 
-		<!-- Parked sales. Badge only appears when there is something parked. -->
+		<!-- Below md there is no docked rail, so the shortcuts live behind this.
+		     From md up the rail carries them and this would be a duplicate. -->
 		<button
-			class="relative grid h-11 min-w-touch place-items-center rounded-lg border border-outline-gray-2 bg-surface-white px-3 text-ink-gray-7 transition-colors hover:bg-surface-gray-2 active:bg-surface-gray-3"
-			:aria-label="`Held sales (${heldCount})`"
-			@click="emit('openHeld')"
+			class="relative grid h-11 min-w-touch place-items-center rounded-lg border border-outline-gray-2 bg-surface-white px-3 text-ink-gray-7 transition-colors hover:bg-surface-gray-2 active:bg-surface-gray-3 md:hidden"
+			aria-label="Shortcuts"
+			@click="emit('openMenu')"
 		>
-			<LucideLayers class="h-[18px] w-[18px]" />
+			<LucideMenu class="h-[18px] w-[18px]" />
 			<span
 				v-if="heldCount"
 				class="absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-surface-gray-7 px-1 text-p-xs font-semibold text-ink-white"

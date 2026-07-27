@@ -11,7 +11,6 @@ declare module 'vue' {
     BottomSheet: typeof import('./src/components/BottomSheet.vue')['default']
     CartLine: typeof import('./src/components/CartLine.vue')['default']
     CartPanel: typeof import('./src/components/CartPanel.vue')['default']
-    CategoryRail: typeof import('./src/components/CategoryRail.vue')['default']
     CustomerSheet: typeof import('./src/components/CustomerSheet.vue')['default']
     HeldSheet: typeof import('./src/components/HeldSheet.vue')['default']
     ItemCard: typeof import('./src/components/ItemCard.vue')['default']
@@ -22,6 +21,7 @@ declare module 'vue' {
     RouterView: typeof import('vue-router')['RouterView']
     ScanSheet: typeof import('./src/components/ScanSheet.vue')['default']
     ShiftSheet: typeof import('./src/components/ShiftSheet.vue')['default']
+    Sidebar: typeof import('./src/components/Sidebar.vue')['default']
     StockActionSheet: typeof import('./src/components/StockActionSheet.vue')['default']
     TopBar: typeof import('./src/components/TopBar.vue')['default']
   }

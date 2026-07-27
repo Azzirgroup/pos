@@ -19,7 +19,7 @@ import {
 } from '@/data/api'
 
 import TopBar from '@/components/TopBar.vue'
-import CategoryRail from '@/components/CategoryRail.vue'
+import Sidebar from '@/components/Sidebar.vue'
 import ItemGrid from '@/components/ItemGrid.vue'
 import CartPanel from '@/components/CartPanel.vue'
 import MobileCartBar from '@/components/MobileCartBar.vue'
@@ -39,12 +39,12 @@ const { isCompact } = useBreakpoint()
 const { lines, count, total, isEmpty, held } = storeToRefs(cart)
 
 const query = ref('')
-const category = ref(null)
 const topBar = ref(null)
 
 const cartSheet = ref(false)
 const paySheet = ref(false)
 const heldSheet = ref(false)
+const menuSheet = ref(false)
 const stockSheet = ref(false)
 const stockItem = ref(null)
 const scanFlash = ref(0)
@@ -137,23 +137,25 @@ function pickCustomer(required = false) {
 	customerSheet.value = true
 }
 
+/** Re-read prices and stock. Cheap enough to offer as a manual shortcut, since
+ *  another till selling the same stock is the normal case in a busy shop. */
+async function refreshCatalog() {
+	if (catalog.loading) return
+	await catalog.refresh()
+	notify(catalog.isDemo ? 'Still showing demo items' : 'Prices and stock refreshed', catalog.isDemo ? 'warn' : 'ok')
+}
+
 function onCustomerSelected(c) {
 	customer.value = c
 	cart.customer = c ? c.customer_name || c.name : null
 }
 
-const visibleItems = computed(() => catalog.search(query.value, category.value))
+const visibleItems = computed(() => catalog.search(query.value))
 
 /** item_code → qty, so ItemCard can show its pip without scanning the cart. */
 const cartQtys = computed(() => {
 	const m = {}
 	for (const l of lines.value) m[l.item_code] = (m[l.item_code] || 0) + l.qty
-	return m
-})
-
-const categoryCounts = computed(() => {
-	const m = {}
-	for (const it of catalog.items) m[it.category] = (m[it.category] || 0) + 1
 	return m
 })
 
@@ -350,26 +352,46 @@ useShortcuts({
 			@open-held="heldSheet = true"
 			@open-shift="openShiftSheet"
 			@open-scanner="scanSheet = true"
+			@open-menu="menuSheet = true"
 		/>
 
+		<!-- Demo catalog is unsellable: no ERPNext Item matches these codes, so
+		     checkout fails at submit. Inline rather than floating — as an overlay
+		     it sat on top of the item grid and hid a product card. -->
+		<div
+			v-if="catalog.isDemo && catalog.loaded"
+			class="flex shrink-0 items-center gap-2.5 bg-surface-amber-3 px-4 py-2 text-p-sm font-medium text-ink-white"
+		>
+			<LucideTriangleAlert class="h-4 w-4 shrink-0" />
+			<span class="min-w-0">
+				{{
+					catalog.error
+						? 'Catalog unavailable — showing demo items that cannot be sold'
+						: 'No sellable items on this site — showing demo items that cannot be sold'
+				}}
+			</span>
+		</div>
+
 		<div class="flex min-h-0 flex-1 overflow-hidden">
-			<!-- Desktop only: persistent category rail -->
-			<CategoryRail
-				v-model="category"
+			<!-- Shortcut rail. Docked from md up; below that it opens as a sheet
+			     from the top bar, since a rail would eat a phone's width. -->
+			<Sidebar
 				variant="rail"
-				:categories="catalog.categories"
-				:counts="categoryCounts"
-				:total="catalog.items.length"
-				class="hidden xl:flex"
+				class="hidden md:flex"
+				:shift="shift"
+				:held-count="held.length"
+				:customer="customer"
+				:camera-scan="cameraScanAvailable"
+				:refreshing="catalog.loading"
+				:is-demo="catalog.isDemo"
+				@shift="openShiftSheet"
+				@held="heldSheet = true"
+				@scan="scanSheet = true"
+				@customer="pickCustomer(false)"
+				@refresh="refreshCatalog"
 			/>
 
 			<div class="flex min-w-0 flex-1 flex-col overflow-hidden">
-				<CategoryRail
-					v-model="category"
-					variant="chips"
-					:categories="catalog.categories"
-					class="xl:hidden"
-				/>
 				<ItemGrid
 					:items="visibleItems"
 					:cart-qtys="cartQtys"
@@ -429,25 +451,26 @@ useShortcuts({
 
 		<ScanSheet v-model="scanSheet" :last-result="scanResult" @scan="onCameraScan" />
 
-		<!-- Demo catalog is unsellable: no ERPNext Item matches these codes, so
-		     checkout fails at submit. Say so up front rather than at the till. -->
-		<div
-			v-if="catalog.isDemo && catalog.loaded"
-			class="pointer-events-none fixed inset-x-0 top-16 z-40 flex justify-center px-4"
-		>
-			<div
-				class="pointer-events-auto flex items-center gap-2.5 rounded-xl bg-surface-amber-3 px-4 py-2.5 text-p-sm font-medium text-ink-white shadow-lg"
-			>
-				<LucideTriangleAlert class="h-4 w-4 shrink-0" />
-				<span>
-					{{
-						catalog.error
-							? `Catalog unavailable — showing demo items that cannot be sold`
-							: `No sellable items on this site — showing demo items that cannot be sold`
-					}}
-				</span>
-			</div>
-		</div>
+		<!-- Phone: the same shortcuts, as a sheet. -->
+		<BottomSheet v-model="menuSheet" title="Shortcuts">
+			<Sidebar
+				variant="sheet"
+				:shift="shift"
+				:held-count="held.length"
+				:customer="customer"
+				:camera-scan="cameraScanAvailable"
+				:refreshing="catalog.loading"
+				:is-demo="catalog.isDemo"
+				@shift="menuSheet = false; openShiftSheet()"
+				@held="menuSheet = false; heldSheet = true"
+				@scan="menuSheet = false; scanSheet = true"
+				@customer="menuSheet = false; pickCustomer(false)"
+				@refresh="refreshCatalog"
+			/>
+		</BottomSheet>
+
+		<!-- Placeholder: the real banner is rendered inline above the grid so it
+		     pushes content rather than covering it. See the strip after TopBar. -->
 
 		<HeldSheet
 			v-model="heldSheet"
