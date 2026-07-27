@@ -1,0 +1,12 @@
+{
+	"private": true,
+	"type": "module",
+	"name": "cosmestics",
+	"description": "Fast, mobile-responsive POS for a busy cosmetics shop",
+	"license": "mit",
+	"scripts": {
+		"postinstall": "cd frontend && yarn install --check-files",
+		"dev": "cd frontend && yarn dev",
+		"build": "cd frontend && yarn build"
+	}
+}

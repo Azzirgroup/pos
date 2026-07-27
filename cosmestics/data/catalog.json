@@ -1,0 +1,629 @@
+{
+	"categories": [
+		{
+			"name": "Skincare",
+			"icon": "sparkles"
+		},
+		{
+			"name": "Makeup",
+			"icon": "palette"
+		},
+		{
+			"name": "Haircare",
+			"icon": "wind"
+		},
+		{
+			"name": "Fragrance",
+			"icon": "flower-2"
+		},
+		{
+			"name": "Nails",
+			"icon": "hand"
+		},
+		{
+			"name": "Bath & Body",
+			"icon": "droplets"
+		},
+		{
+			"name": "Tools",
+			"icon": "scissors"
+		},
+		{
+			"name": "Men's",
+			"icon": "user"
+		}
+	],
+	"warehouses": [
+		{
+			"name": "Shop Floor - CO",
+			"label": "Shop Floor",
+			"is_default": true
+		},
+		{
+			"name": "Back Store - CO",
+			"label": "Back Store"
+		},
+		{
+			"name": "Westlands Branch - CO",
+			"label": "Westlands Branch"
+		},
+		{
+			"name": "CBD Branch - CO",
+			"label": "CBD Branch"
+		}
+	],
+	"neighbours": [
+		{
+			"name": "Zara Beauty Shop",
+			"phone": "254722000111"
+		},
+		{
+			"name": "Glow Point Cosmetics",
+			"phone": "254733000222"
+		},
+		{
+			"name": "Amani Beauty Hub",
+			"phone": "254711000333"
+		}
+	],
+	"items": [
+		{
+			"item_code": "SKN-001",
+			"item_name": "Vitamin C Brightening Serum 30ml",
+			"brand": "Glowline",
+			"category": "Skincare",
+			"price": 2450,
+			"stock": 24,
+			"barcode": "6001234500011"
+		},
+		{
+			"item_code": "SKN-002",
+			"item_name": "Hyaluronic Acid Moisturiser 50ml",
+			"brand": "Glowline",
+			"category": "Skincare",
+			"price": 1980,
+			"stock": 31,
+			"barcode": "6001234500028"
+		},
+		{
+			"item_code": "SKN-003",
+			"item_name": "Niacinamide 10% + Zinc 30ml",
+			"brand": "PureLab",
+			"category": "Skincare",
+			"price": 1650,
+			"stock": 18,
+			"barcode": "6001234500035"
+		},
+		{
+			"item_code": "SKN-004",
+			"item_name": "Gentle Foaming Cleanser 150ml",
+			"brand": "PureLab",
+			"category": "Skincare",
+			"price": 1200,
+			"stock": 42,
+			"barcode": "6001234500042"
+		},
+		{
+			"item_code": "SKN-005",
+			"item_name": "SPF 50 Invisible Sunscreen 60ml",
+			"brand": "SunVeil",
+			"category": "Skincare",
+			"price": 2800,
+			"stock": 12,
+			"barcode": "6001234500059"
+		},
+		{
+			"item_code": "SKN-006",
+			"item_name": "Retinol Night Cream 30ml",
+			"brand": "Glowline",
+			"category": "Skincare",
+			"price": 3400,
+			"stock": 7,
+			"barcode": "6001234500066"
+		},
+		{
+			"item_code": "SKN-007",
+			"item_name": "Clay Detox Face Mask 100ml",
+			"brand": "Terra",
+			"category": "Skincare",
+			"price": 1450,
+			"stock": 26,
+			"barcode": "6001234500073"
+		},
+		{
+			"item_code": "SKN-008",
+			"item_name": "Rose Water Toner 200ml",
+			"brand": "Terra",
+			"category": "Skincare",
+			"price": 950,
+			"stock": 55,
+			"barcode": "6001234500080"
+		},
+		{
+			"item_code": "SKN-009",
+			"item_name": "Under Eye Gel Patches (30 pairs)",
+			"brand": "Glowline",
+			"category": "Skincare",
+			"price": 1750,
+			"stock": 19,
+			"barcode": "6001234500097"
+		},
+		{
+			"item_code": "SKN-010",
+			"item_name": "Shea Body Butter 250ml",
+			"brand": "Terra",
+			"category": "Skincare",
+			"price": 1350,
+			"stock": 0,
+			"barcode": "6001234500103"
+		},
+		{
+			"item_code": "MKP-001",
+			"item_name": "Matte Liquid Lipstick — Cocoa",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 1250,
+			"stock": 38,
+			"barcode": "6001234510010"
+		},
+		{
+			"item_code": "MKP-002",
+			"item_name": "Matte Liquid Lipstick — Ruby",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 1250,
+			"stock": 29,
+			"barcode": "6001234510027"
+		},
+		{
+			"item_code": "MKP-003",
+			"item_name": "Matte Liquid Lipstick — Nude Rose",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 1250,
+			"stock": 6,
+			"barcode": "6001234510034"
+		},
+		{
+			"item_code": "MKP-004",
+			"item_name": "Full Coverage Foundation — Deep 8",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 2650,
+			"stock": 15,
+			"barcode": "6001234510041"
+		},
+		{
+			"item_code": "MKP-005",
+			"item_name": "Full Coverage Foundation — Warm 5",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 2650,
+			"stock": 21,
+			"barcode": "6001234510058"
+		},
+		{
+			"item_code": "MKP-006",
+			"item_name": "Loose Setting Powder — Translucent",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 1890,
+			"stock": 17,
+			"barcode": "6001234510065"
+		},
+		{
+			"item_code": "MKP-007",
+			"item_name": "Volumising Mascara — Jet Black",
+			"brand": "LashLab",
+			"category": "Makeup",
+			"price": 1450,
+			"stock": 44,
+			"barcode": "6001234510072"
+		},
+		{
+			"item_code": "MKP-008",
+			"item_name": "Brow Definer Pencil — Dark Brown",
+			"brand": "LashLab",
+			"category": "Makeup",
+			"price": 780,
+			"stock": 61,
+			"barcode": "6001234510089"
+		},
+		{
+			"item_code": "MKP-009",
+			"item_name": "12-Shade Eyeshadow Palette — Sunset",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 3200,
+			"stock": 9,
+			"barcode": "6001234510096"
+		},
+		{
+			"item_code": "MKP-010",
+			"item_name": "Cream Blush Stick — Coral",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 1100,
+			"stock": 23,
+			"barcode": "6001234510102"
+		},
+		{
+			"item_code": "MKP-011",
+			"item_name": "Concealer Wand — Medium 4",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 1350,
+			"stock": 27,
+			"barcode": "6001234510119"
+		},
+		{
+			"item_code": "MKP-012",
+			"item_name": "Highlighter Duo — Champagne",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 1650,
+			"stock": 14,
+			"barcode": "6001234510126"
+		},
+		{
+			"item_code": "MKP-013",
+			"item_name": "Lip Gloss — Clear Shine",
+			"brand": "Velour",
+			"category": "Makeup",
+			"price": 690,
+			"stock": 72,
+			"barcode": "6001234510133"
+		},
+		{
+			"item_code": "MKP-014",
+			"item_name": "Liquid Eyeliner — Precision Black",
+			"brand": "LashLab",
+			"category": "Makeup",
+			"price": 890,
+			"stock": 35,
+			"barcode": "6001234510140"
+		},
+		{
+			"item_code": "HAR-001",
+			"item_name": "Argan Oil Shampoo 400ml",
+			"brand": "Mane",
+			"category": "Haircare",
+			"price": 1450,
+			"stock": 33,
+			"barcode": "6001234520019"
+		},
+		{
+			"item_code": "HAR-002",
+			"item_name": "Argan Oil Conditioner 400ml",
+			"brand": "Mane",
+			"category": "Haircare",
+			"price": 1450,
+			"stock": 30,
+			"barcode": "6001234520026"
+		},
+		{
+			"item_code": "HAR-003",
+			"item_name": "Deep Repair Hair Mask 250ml",
+			"brand": "Mane",
+			"category": "Haircare",
+			"price": 1850,
+			"stock": 16,
+			"barcode": "6001234520033"
+		},
+		{
+			"item_code": "HAR-004",
+			"item_name": "Leave-In Curl Cream 200ml",
+			"brand": "Coil",
+			"category": "Haircare",
+			"price": 1600,
+			"stock": 22,
+			"barcode": "6001234520040"
+		},
+		{
+			"item_code": "HAR-005",
+			"item_name": "Edge Control Gel 100ml",
+			"brand": "Coil",
+			"category": "Haircare",
+			"price": 650,
+			"stock": 84,
+			"barcode": "6001234520057"
+		},
+		{
+			"item_code": "HAR-006",
+			"item_name": "Braid Sheen Spray 300ml",
+			"brand": "Coil",
+			"category": "Haircare",
+			"price": 720,
+			"stock": 47,
+			"barcode": "6001234520064"
+		},
+		{
+			"item_code": "HAR-007",
+			"item_name": "Anti-Dandruff Shampoo 300ml",
+			"brand": "Mane",
+			"category": "Haircare",
+			"price": 1290,
+			"stock": 28,
+			"barcode": "6001234520071"
+		},
+		{
+			"item_code": "HAR-008",
+			"item_name": "Hair Growth Oil 100ml",
+			"brand": "Coil",
+			"category": "Haircare",
+			"price": 1150,
+			"stock": 3,
+			"barcode": "6001234520088"
+		},
+		{
+			"item_code": "HAR-009",
+			"item_name": "Heat Protectant Spray 200ml",
+			"brand": "Mane",
+			"category": "Haircare",
+			"price": 1380,
+			"stock": 19,
+			"barcode": "6001234520095"
+		},
+		{
+			"item_code": "FRG-001",
+			"item_name": "Amber Noir Eau de Parfum 50ml",
+			"brand": "Maison K",
+			"category": "Fragrance",
+			"price": 6500,
+			"stock": 5,
+			"barcode": "6001234530018"
+		},
+		{
+			"item_code": "FRG-002",
+			"item_name": "Citrus Bloom Eau de Toilette 100ml",
+			"brand": "Maison K",
+			"category": "Fragrance",
+			"price": 4200,
+			"stock": 8,
+			"barcode": "6001234530025"
+		},
+		{
+			"item_code": "FRG-003",
+			"item_name": "Vanilla Musk Body Mist 250ml",
+			"brand": "Maison K",
+			"category": "Fragrance",
+			"price": 1450,
+			"stock": 36,
+			"barcode": "6001234530032"
+		},
+		{
+			"item_code": "FRG-004",
+			"item_name": "Oud Intense Eau de Parfum 75ml",
+			"brand": "Maison K",
+			"category": "Fragrance",
+			"price": 8900,
+			"stock": 2,
+			"barcode": "6001234530049"
+		},
+		{
+			"item_code": "FRG-005",
+			"item_name": "Coconut Breeze Body Mist 250ml",
+			"brand": "Maison K",
+			"category": "Fragrance",
+			"price": 1450,
+			"stock": 41,
+			"barcode": "6001234530056"
+		},
+		{
+			"item_code": "NAL-001",
+			"item_name": "Gel Polish — Classic Red",
+			"brand": "Lacque",
+			"category": "Nails",
+			"price": 850,
+			"stock": 52,
+			"barcode": "6001234540017"
+		},
+		{
+			"item_code": "NAL-002",
+			"item_name": "Gel Polish — Midnight Blue",
+			"brand": "Lacque",
+			"category": "Nails",
+			"price": 850,
+			"stock": 38,
+			"barcode": "6001234540024"
+		},
+		{
+			"item_code": "NAL-003",
+			"item_name": "Gel Polish — Soft Pink",
+			"brand": "Lacque",
+			"category": "Nails",
+			"price": 850,
+			"stock": 44,
+			"barcode": "6001234540031"
+		},
+		{
+			"item_code": "NAL-004",
+			"item_name": "Top Coat 15ml",
+			"brand": "Lacque",
+			"category": "Nails",
+			"price": 620,
+			"stock": 29,
+			"barcode": "6001234540048"
+		},
+		{
+			"item_code": "NAL-005",
+			"item_name": "Acetone Nail Remover 250ml",
+			"brand": "Lacque",
+			"category": "Nails",
+			"price": 480,
+			"stock": 67,
+			"barcode": "6001234540055"
+		},
+		{
+			"item_code": "NAL-006",
+			"item_name": "Press-On Nail Kit — Almond",
+			"brand": "Lacque",
+			"category": "Nails",
+			"price": 1250,
+			"stock": 18,
+			"barcode": "6001234540062"
+		},
+		{
+			"item_code": "NAL-007",
+			"item_name": "Cuticle Oil Pen 5ml",
+			"brand": "Lacque",
+			"category": "Nails",
+			"price": 540,
+			"stock": 33,
+			"barcode": "6001234540079"
+		},
+		{
+			"item_code": "BOD-001",
+			"item_name": "Cocoa Butter Lotion 400ml",
+			"brand": "Terra",
+			"category": "Bath & Body",
+			"price": 890,
+			"stock": 63,
+			"barcode": "6001234550016"
+		},
+		{
+			"item_code": "BOD-002",
+			"item_name": "Exfoliating Sugar Scrub 300g",
+			"brand": "Terra",
+			"category": "Bath & Body",
+			"price": 1250,
+			"stock": 24,
+			"barcode": "6001234550023"
+		},
+		{
+			"item_code": "BOD-003",
+			"item_name": "Charcoal Body Wash 500ml",
+			"brand": "Terra",
+			"category": "Bath & Body",
+			"price": 780,
+			"stock": 48,
+			"barcode": "6001234550030"
+		},
+		{
+			"item_code": "BOD-004",
+			"item_name": "Roll-On Deodorant 50ml",
+			"brand": "Fresh",
+			"category": "Bath & Body",
+			"price": 420,
+			"stock": 95,
+			"barcode": "6001234550047"
+		},
+		{
+			"item_code": "BOD-005",
+			"item_name": "Hand Cream 75ml",
+			"brand": "Terra",
+			"category": "Bath & Body",
+			"price": 560,
+			"stock": 71,
+			"barcode": "6001234550054"
+		},
+		{
+			"item_code": "BOD-006",
+			"item_name": "Bath Bomb Set (6 pcs)",
+			"brand": "Terra",
+			"category": "Bath & Body",
+			"price": 1450,
+			"stock": 11,
+			"barcode": "6001234550061"
+		},
+		{
+			"item_code": "TLS-001",
+			"item_name": "Makeup Brush Set (12 pcs)",
+			"brand": "ProKit",
+			"category": "Tools",
+			"price": 2850,
+			"stock": 13,
+			"barcode": "6001234560015"
+		},
+		{
+			"item_code": "TLS-002",
+			"item_name": "Beauty Blender Sponge",
+			"brand": "ProKit",
+			"category": "Tools",
+			"price": 450,
+			"stock": 88,
+			"barcode": "6001234560022"
+		},
+		{
+			"item_code": "TLS-003",
+			"item_name": "Ceramic Hair Straightener",
+			"brand": "ProKit",
+			"category": "Tools",
+			"price": 4500,
+			"stock": 4,
+			"barcode": "6001234560039"
+		},
+		{
+			"item_code": "TLS-004",
+			"item_name": "Eyelash Curler",
+			"brand": "ProKit",
+			"category": "Tools",
+			"price": 620,
+			"stock": 26,
+			"barcode": "6001234560046"
+		},
+		{
+			"item_code": "TLS-005",
+			"item_name": "Wide Tooth Detangling Comb",
+			"brand": "ProKit",
+			"category": "Tools",
+			"price": 350,
+			"stock": 74,
+			"barcode": "6001234560053"
+		},
+		{
+			"item_code": "TLS-006",
+			"item_name": "Satin Hair Bonnet",
+			"brand": "ProKit",
+			"category": "Tools",
+			"price": 550,
+			"stock": 39,
+			"barcode": "6001234560060"
+		},
+		{
+			"item_code": "MEN-001",
+			"item_name": "Beard Oil 50ml",
+			"brand": "Forge",
+			"category": "Men's",
+			"price": 1150,
+			"stock": 21,
+			"barcode": "6001234570014"
+		},
+		{
+			"item_code": "MEN-002",
+			"item_name": "Beard Balm 60g",
+			"brand": "Forge",
+			"category": "Men's",
+			"price": 1250,
+			"stock": 17,
+			"barcode": "6001234570021"
+		},
+		{
+			"item_code": "MEN-003",
+			"item_name": "Aftershave Balm 100ml",
+			"brand": "Forge",
+			"category": "Men's",
+			"price": 980,
+			"stock": 25,
+			"barcode": "6001234570038"
+		},
+		{
+			"item_code": "MEN-004",
+			"item_name": "Shaving Gel 200ml",
+			"brand": "Forge",
+			"category": "Men's",
+			"price": 720,
+			"stock": 43,
+			"barcode": "6001234570045"
+		},
+		{
+			"item_code": "MEN-005",
+			"item_name": "Hair Pomade 100g",
+			"brand": "Forge",
+			"category": "Men's",
+			"price": 890,
+			"stock": 30,
+			"barcode": "6001234570052"
+		}
+	]
+}

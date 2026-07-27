@@ -8,7 +8,18 @@ app_license = "mit"
 # Apps
 # ------------------
 
-# required_apps = []
+# Items, warehouses, suppliers and purchase documents all come from ERPNext.
+required_apps = ["erpnext"]
+
+# Installation
+# ------------
+
+# Creates the neighbour Supplier Group and POS settings defaults, then seeds the
+# demo catalog only if the site has no items yet (see cosmestics/setup/demo.py).
+after_install = "cosmestics.setup.install.after_install"
+
+# Prerequisites only — never seeds data.
+after_migrate = "cosmestics.setup.install.after_migrate"
 
 # Each item in the list will be shown as an app in the apps page
 # add_to_apps_screen = [
@@ -52,6 +63,34 @@ app_license = "mit"
 # ------------------
 # include app icons in desk
 # app_include_icons = "cosmestics/public/icons.svg"
+
+# Website
+# ----------
+
+# Serve the POS SPA (and all its client-side routes) from cosmestics/www/pos.html
+website_route_rules = [
+	{"from_route": "/pos/<path:app_path>", "to_route": "pos"},
+]
+
+add_to_apps_screen = [
+	{
+		"name": "cosmestics",
+		"logo": "/assets/cosmestics/images/logo.svg",
+		"title": "POS",
+		"route": "/pos",
+	}
+]
+
+# Document Events
+# ---------------
+
+doc_events = {
+	"Material Request": {
+		# Posts the request to the staff WhatsApp group. Enqueued, best-effort:
+		# a bridge outage must never block the request itself.
+		"on_submit": "cosmestics.api.notifications.on_material_request_submit",
+	},
+}
 
 # Home Pages
 # ----------

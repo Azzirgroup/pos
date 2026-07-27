@@ -1,0 +1,87 @@
+@import 'frappe-ui/style.css';
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+	:root {
+		/* Safe-area insets so the mobile pay bar clears the iOS/Android home bar. */
+		--pos-safe-b: env(safe-area-inset-bottom, 0px);
+		--pos-safe-t: env(safe-area-inset-top, 0px);
+	}
+
+	html,
+	body,
+	#app {
+		height: 100%;
+		/* 100dvh so the layout doesn't jump when mobile browser chrome hides. */
+		min-height: 100dvh;
+	}
+
+	body {
+		@apply bg-surface-gray-1 text-ink-gray-9 antialiased;
+		/* A till is a kiosk: never rubber-band, never text-select on double tap. */
+		overscroll-behavior: none;
+		-webkit-tap-highlight-color: transparent;
+	}
+
+	/* Money and quantities must not shift width as digits change. */
+	.tabular {
+		font-variant-numeric: tabular-nums;
+		font-feature-settings: 'tnum';
+	}
+}
+
+@layer components {
+	/* Scroll regions inside the fixed POS shell. */
+	.pos-scroll {
+		@apply overflow-y-auto overscroll-contain;
+		scrollbar-width: thin;
+		-webkit-overflow-scrolling: touch;
+	}
+
+	.pos-scroll::-webkit-scrollbar {
+		width: 6px;
+		height: 6px;
+	}
+
+	.pos-scroll::-webkit-scrollbar-thumb {
+		@apply rounded-full bg-surface-gray-4;
+	}
+
+	.pos-scroll::-webkit-scrollbar-track {
+		background: transparent;
+	}
+
+	/* Hide the scrollbar but keep scrolling — used on horizontal chip rails. */
+	.no-scrollbar {
+		scrollbar-width: none;
+		-ms-overflow-style: none;
+	}
+
+	.no-scrollbar::-webkit-scrollbar {
+		display: none;
+	}
+}
+
+@layer utilities {
+	.pb-safe {
+		padding-bottom: var(--pos-safe-b);
+	}
+
+	.pt-safe {
+		padding-top: var(--pos-safe-t);
+	}
+}
+
+/* Respect the OS setting — some cashiers get motion sick on a long shift. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation-duration: 0.01ms !important;
+		animation-iteration-count: 1 !important;
+		transition-duration: 0.01ms !important;
+	}
+}

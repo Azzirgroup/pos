@@ -1,0 +1,135 @@
+{
+ "actions": [],
+ "creation": "2026-07-26 23:20:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "payments_section",
+  "mode_cash",
+  "mode_mpesa",
+  "column_break_pay",
+  "mode_card",
+  "selling_price_list",
+  "whatsapp_section",
+  "notify_material_request",
+  "whatsapp_group_jid",
+  "column_break_wa",
+  "whatsapp_sender",
+  "sourcing_section",
+  "neighbour_supplier_group",
+  "column_break_src",
+  "default_source_warehouse"
+ ],
+ "fields": [
+  {
+   "fieldname": "payments_section",
+   "fieldtype": "Section Break",
+   "label": "Payment Methods"
+  },
+  {
+   "description": "Mode of Payment recorded when the cashier takes cash.",
+   "fieldname": "mode_cash",
+   "fieldtype": "Link",
+   "label": "Cash",
+   "options": "Mode of Payment"
+  },
+  {
+   "description": "Created by the installer if it does not already exist.",
+   "fieldname": "mode_mpesa",
+   "fieldtype": "Link",
+   "label": "M-Pesa",
+   "options": "Mode of Payment"
+  },
+  {
+   "fieldname": "column_break_pay",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "mode_card",
+   "fieldtype": "Link",
+   "label": "Card",
+   "options": "Mode of Payment"
+  },
+  {
+   "description": "Price list the till sells at. Defaults to the standard selling list.",
+   "fieldname": "selling_price_list",
+   "fieldtype": "Link",
+   "label": "Selling Price List",
+   "options": "Price List"
+  },
+  {
+   "fieldname": "whatsapp_section",
+   "fieldtype": "Section Break",
+   "label": "WhatsApp Notifications"
+  },
+  {
+   "default": "1",
+   "fieldname": "notify_material_request",
+   "fieldtype": "Check",
+   "label": "Post Material Requests to WhatsApp Group"
+  },
+  {
+   "depends_on": "notify_material_request",
+   "description": "Group JID from the WhatsApp bridge, e.g. 120363012345678901@g.us. Not a phone number.",
+   "fieldname": "whatsapp_group_jid",
+   "fieldtype": "Data",
+   "label": "Staff Group JID",
+   "mandatory_depends_on": "notify_material_request"
+  },
+  {
+   "fieldname": "column_break_wa",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Optional. Which connected WhatsApp number sends the message.",
+   "fieldname": "whatsapp_sender",
+   "fieldtype": "Data",
+   "label": "Sender"
+  },
+  {
+   "fieldname": "sourcing_section",
+   "fieldtype": "Section Break",
+   "label": "Neighbour Sourcing"
+  },
+  {
+   "description": "Suppliers in this group are offered at the till when an item is out of stock. Created and set by the installer.",
+   "fieldname": "neighbour_supplier_group",
+   "fieldtype": "Link",
+   "label": "Neighbour Supplier Group",
+   "options": "Supplier Group"
+  },
+  {
+   "fieldname": "column_break_src",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Warehouse goods bought from a neighbour are received into before being sold.",
+   "fieldname": "default_source_warehouse",
+   "fieldtype": "Link",
+   "label": "Sourcing Warehouse",
+   "options": "Warehouse"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "issingle": 1,
+ "links": [],
+ "modified": "2026-07-26 23:20:00.000000",
+ "modified_by": "Administrator",
+ "module": "Cosmestics",
+ "name": "Cosmestics POS Settings",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
