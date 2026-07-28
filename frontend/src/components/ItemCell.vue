@@ -24,6 +24,23 @@ const dot = computed(() => {
 	if (low.value) return 'bg-surface-amber-3'
 	return 'bg-surface-green-3'
 })
+
+/**
+ * The count in words a cashier uses. "Out" rather than "0" because the two are
+ * read differently under pressure, and fractional quantities (grams, ml) are
+ * rounded down — promising a customer 2.7 units of anything is not useful.
+ */
+const stockLabel = computed(() => {
+	const qty = Number(props.item.stock) || 0
+	if (qty <= 0) return 'Out'
+	return `${Math.floor(qty).toLocaleString()} left`
+})
+
+const stockTone = computed(() => {
+	if (out.value) return 'text-ink-red-3'
+	if (low.value) return 'text-ink-amber-3'
+	return 'text-ink-gray-5'
+})
 </script>
 
 <template>
@@ -46,9 +63,17 @@ const dot = computed(() => {
 					{{ item.item_name }}
 				</span>
 			</div>
-			<span class="tabular pl-3 text-p-xs text-ink-gray-6">
-				KES {{ fmtMoneyShort(item.price).replace(/^\D+/, '') }}
-			</span>
+			<!-- Price and stock on one line. The dot alone said "low" but never how
+			     low, and a cashier deciding whether to promise the last two units
+			     needs the number, not a colour. -->
+			<div class="flex items-baseline justify-between gap-1.5 pl-3">
+				<span class="tabular text-p-xs text-ink-gray-6">
+					KES {{ fmtMoneyShort(item.price).replace(/^\D+/, '') }}
+				</span>
+				<span class="tabular shrink-0 text-p-xs font-medium" :class="stockTone">
+					{{ stockLabel }}
+				</span>
+			</div>
 		</div>
 
 		<!-- Quantity controls only once the item is in the cart, mirroring the

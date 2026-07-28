@@ -209,6 +209,33 @@ def _round(value, rounding):
 	return flt(value, 2)
 
 
+def _write_price(name: str, rate: float, _retry: bool = True):
+	"""Save one Item Price, surviving a concurrent edit.
+
+	`doc.save()` refuses when the row's `modified` has moved since it was read —
+	which happens for real here, because another app's hook can touch an Item
+	Price during the same bulk run, and because two managers can apply price
+	changes at the same time. Left unhandled it fails the whole batch partway
+	through, leaving some prices written and some not, with no way to tell which.
+
+	`reload()` re-reads the row and the new rate is applied on top. That is safe
+	precisely because this endpoint sets an absolute price rather than adjusting
+	the existing one — the arithmetic was already done in the preview, so a
+	fresher row cannot change the answer. One retry only: a second failure is a
+	real conflict and should be reported, not looped over.
+	"""
+	doc = frappe.get_doc("Item Price", name)
+	doc.price_list_rate = rate
+	try:
+		doc.save(ignore_permissions=True)
+	except frappe.TimestampMismatchError:
+		if not _retry:
+			raise
+		doc.reload()
+		doc.price_list_rate = rate
+		doc.save(ignore_permissions=True)
+
+
 @frappe.whitelist(methods=["POST"])
 def apply_bulk_change(price_list: str, changes: list | str):
 	"""Write the reviewed prices. `changes` is [{item_code, new_price}]."""
@@ -234,9 +261,7 @@ def apply_bulk_change(price_list: str, changes: list | str):
 			if flt(existing.price_list_rate) == rate:
 				unchanged += 1
 				continue
-			doc = frappe.get_doc("Item Price", existing.name)
-			doc.price_list_rate = rate
-			doc.save(ignore_permissions=True)
+			_write_price(existing.name, rate)
 			updated += 1
 		else:
 			doc = frappe.new_doc("Item Price")

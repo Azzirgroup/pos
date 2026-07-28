@@ -429,6 +429,595 @@ def _negative_stock_rows() -> dict:
 	}
 
 
+# --------------------------------------------------------------------------
+# Tabs
+#
+# Each tab answers one department's question and returns the same shape —
+# {stats, sections} — so the front end renders them all through one component
+# rather than growing a bespoke screen per tab. `sections` is a list of
+# {key, title, subtitle, columns, rows}, which is the same contract DataTable
+# already takes everywhere else in the app.
+# --------------------------------------------------------------------------
+
+
+def _section(key, title, subtitle, columns, rows):
+	return {"key": key, "title": title, "subtitle": subtitle, "columns": columns, "rows": rows}
+
+
+def _col(label, key, kind="text"):
+	return {"label": label, "key": key, "type": kind}
+
+
+@frappe.whitelist()
+def filters() -> dict:
+	"""Options for the dashboard's filter row.
+
+	Branches are POS Profiles: every till sale already carries `pos_profile`, so
+	this needs no new field on any document and cannot disagree with what the
+	shift screens report.
+	"""
+	company = _company()
+	profile_filters = {"disabled": 0}
+	warehouse_filters = {"disabled": 0, "is_group": 0}
+	if company:
+		profile_filters["company"] = company
+		warehouse_filters["company"] = company
+
+	return {
+		"branches": [
+			{"label": p.name, "value": p.name}
+			for p in frappe.get_all("POS Profile", filters=profile_filters, fields=["name"])
+		],
+		"warehouses": [
+			{"label": w.warehouse_name or w.name, "value": w.name}
+			for w in frappe.get_all(
+				"Warehouse", filters=warehouse_filters, fields=["name", "warehouse_name", "warehouse_type"]
+			)
+			if w.warehouse_type != "Transit"
+		],
+	}
+
+
+@frappe.whitelist()
+def sales(days: int = DEFAULT_DAYS, branch: str | None = None) -> dict:
+	"""Sales, optionally narrowed to one till."""
+	start, end, days = _window(days)
+	branch_cond = " and si.pos_profile = %(branch)s" if branch else ""
+	args = _args({"start": start, "end": end, "branch": branch, "limit": SHORTLIST})
+
+	totals = frappe.db.sql(
+		f"""select count(si.name) as invoices, sum(si.grand_total) as revenue,
+		           sum(si.outstanding_amount) as outstanding
+		    from `tabSales Invoice` si
+		    where si.docstatus = 1 and si.posting_date between %(start)s and %(end)s
+		      {_scope('si')} {branch_cond}""",
+		args,
+		as_dict=True,
+	)[0]
+
+	by_day = frappe.db.sql(
+		f"""select si.posting_date as day, count(si.name) as invoices,
+		           sum(si.grand_total) as revenue
+		    from `tabSales Invoice` si
+		    where si.docstatus = 1 and si.posting_date between %(start)s and %(end)s
+		      {_scope('si')} {branch_cond}
+		    group by si.posting_date order by si.posting_date desc""",
+		args,
+		as_dict=True,
+	)
+
+	by_cashier = frappe.db.sql(
+		f"""select si.owner as cashier, count(si.name) as invoices,
+		           sum(si.grand_total) as revenue
+		    from `tabSales Invoice` si
+		    where si.docstatus = 1 and si.posting_date between %(start)s and %(end)s
+		      {_scope('si')} {branch_cond}
+		    group by si.owner order by revenue desc limit %(limit)s""",
+		args,
+		as_dict=True,
+	)
+
+	by_item = frappe.db.sql(
+		f"""select sii.item_name, sum(sii.qty) as qty, sum(sii.base_net_amount) as revenue
+		    from `tabSales Invoice Item` sii
+		    join `tabSales Invoice` si on si.name = sii.parent
+		    where si.docstatus = 1 and si.posting_date between %(start)s and %(end)s
+		      {_scope('si')} {branch_cond}
+		    group by sii.item_name order by revenue desc limit %(limit)s""",
+		args,
+		as_dict=True,
+	)
+
+	invoices = cint(totals.invoices)
+	return {
+		"period": {"from": str(start), "to": str(end), "days": days},
+		"branch": branch,
+		"stats": [
+			{"key": "revenue", "label": "Revenue", "value": flt(totals.revenue), "type": "currency", "icon": "money"},
+			{"key": "invoices", "label": "Sales", "value": invoices, "type": "number", "icon": "receipt"},
+			{
+				"key": "basket",
+				"label": "Average sale",
+				"value": flt(totals.revenue) / invoices if invoices else 0,
+				"type": "currency",
+				"icon": "cart",
+			},
+			{
+				"key": "outstanding",
+				"label": "Unpaid",
+				"value": flt(totals.outstanding),
+				"type": "currency",
+				"icon": "hourglass",
+				"tone": "warn" if flt(totals.outstanding) else "good",
+			},
+		],
+		"sections": [
+			_section(
+				"by_day",
+				"By day",
+				"Newest first",
+				[_col("Date", "day"), _col("Sales", "invoices", "number"), _col("Revenue", "revenue", "currency")],
+				by_day,
+			),
+			_section(
+				"by_cashier",
+				"By cashier",
+				"Who rang it up",
+				[_col("Cashier", "cashier"), _col("Sales", "invoices", "number"), _col("Revenue", "revenue", "currency")],
+				by_cashier,
+			),
+			_section(
+				"by_item",
+				"Best sellers",
+				"Net of tax",
+				[_col("Item", "item_name"), _col("Qty", "qty", "number"), _col("Revenue", "revenue", "currency")],
+				by_item,
+			),
+		],
+	}
+
+
+@frappe.whitelist()
+def branches(days: int = DEFAULT_DAYS) -> dict:
+	"""Every till side by side.
+
+	Sales with no `pos_profile` are reported under their own heading rather than
+	dropped — off-till invoices are real revenue, and silently excluding them
+	would make the branch totals disagree with the sales tab.
+	"""
+	start, end, days = _window(days)
+	args = _args({"start": start, "end": end})
+
+	rows = frappe.db.sql(
+		f"""select ifnull(nullif(si.pos_profile, ''), 'Not on a till') as branch,
+		           count(si.name) as invoices,
+		           sum(si.grand_total) as revenue,
+		           sum(si.outstanding_amount) as outstanding,
+		           count(distinct si.owner) as cashiers,
+		           count(distinct si.customer) as customers
+		    from `tabSales Invoice` si
+		    where si.docstatus = 1 and si.posting_date between %(start)s and %(end)s
+		      {_scope('si')}
+		    group by branch order by revenue desc""",
+		args,
+		as_dict=True,
+	)
+	for row in rows:
+		row["basket"] = flt(row.revenue) / cint(row.invoices) if cint(row.invoices) else 0
+
+	shifts = frappe.db.sql(
+		f"""select c.pos_profile as branch, count(c.name) as shifts,
+		           sum((select sum(d.closing_amount - d.expected_amount)
+		                from `tabPOS Closing Entry Detail` d where d.parent = c.name)) as difference
+		    from `tabPOS Closing Entry` c
+		    where c.docstatus = 1 and c.posting_date between %(start)s and %(end)s
+		      {_scope('c')}
+		    group by c.pos_profile order by shifts desc""",
+		args,
+		as_dict=True,
+	)
+
+	revenue = sum(flt(r.revenue) for r in rows)
+	best = rows[0] if rows else None
+	return {
+		"period": {"from": str(start), "to": str(end), "days": days},
+		"stats": [
+			{"key": "branches", "label": "Branches selling", "value": len(rows), "type": "number", "icon": "landmark"},
+			{"key": "revenue", "label": "Revenue", "value": revenue, "type": "currency", "icon": "money"},
+			{
+				"key": "best",
+				"label": "Busiest branch",
+				"value": best["branch"] if best else "—",
+				"type": "text",
+				"icon": "trending-up",
+				"hint": f"{flt(best['revenue']):,.0f}" if best else None,
+			},
+			{
+				"key": "open_tills",
+				"label": "Tills open now",
+				"value": _open_tills()["count"],
+				"type": "number",
+				"icon": "unlock",
+			},
+		],
+		"sections": [
+			_section(
+				"performance",
+				"Branch performance",
+				"By revenue",
+				[
+					_col("Branch", "branch"),
+					_col("Sales", "invoices", "number"),
+					_col("Revenue", "revenue", "currency"),
+					_col("Average sale", "basket", "currency"),
+					_col("Unpaid", "outstanding", "currency"),
+					_col("Cashiers", "cashiers", "number"),
+					_col("Customers", "customers", "number"),
+				],
+				rows,
+			),
+			_section(
+				"shifts",
+				"Shifts closed",
+				"Over and short, per branch",
+				[
+					_col("Branch", "branch"),
+					_col("Shifts", "shifts", "number"),
+					_col("Over / short", "difference", "currency"),
+				],
+				shifts,
+			),
+		],
+	}
+
+
+@frappe.whitelist()
+def warehouses(days: int = DEFAULT_DAYS, warehouse: str | None = None) -> dict:
+	"""Stock by location, optionally narrowed to one."""
+	start, end, days = _window(days)
+	bin_cond = " and b.warehouse = %(warehouse)s" if warehouse else ""
+	sle_cond = " and sle.warehouse = %(warehouse)s" if warehouse else ""
+	args = {"start": start, "end": end, "warehouse": warehouse, "limit": SHORTLIST}
+
+	holdings = frappe.db.sql(
+		f"""select b.warehouse, count(distinct b.item_code) as items,
+		           sum(b.actual_qty) as qty,
+		           sum(b.actual_qty * b.valuation_rate) as value
+		    from tabBin b
+		    where b.actual_qty != 0 {bin_cond}
+		    group by b.warehouse order by value desc""",
+		args,
+		as_dict=True,
+	)
+
+	movement = frappe.db.sql(
+		f"""select sle.warehouse,
+		           sum(case when sle.actual_qty > 0 then sle.actual_qty else 0 end) as received,
+		           sum(case when sle.actual_qty < 0 then -sle.actual_qty else 0 end) as issued,
+		           sum(sle.actual_qty) as net
+		    from `tabStock Ledger Entry` sle
+		    where sle.is_cancelled = 0 and sle.posting_date between %(start)s and %(end)s {sle_cond}
+		    group by sle.warehouse order by issued desc""",
+		args,
+		as_dict=True,
+	)
+
+	negative = frappe.db.sql(
+		f"""select i.item_name, b.warehouse, b.actual_qty
+		    from tabBin b join tabItem i on i.name = b.item_code
+		    where b.actual_qty < 0 {bin_cond}
+		    order by b.actual_qty asc limit %(limit)s""",
+		args,
+		as_dict=True,
+	)
+
+	value = sum(flt(r.value) for r in holdings)
+	return {
+		"period": {"from": str(start), "to": str(end), "days": days},
+		"warehouse": warehouse,
+		"stats": [
+			{"key": "value", "label": "Stock value", "value": value, "type": "currency", "icon": "money"},
+			{"key": "locations", "label": "Locations holding stock", "value": len(holdings), "type": "number", "icon": "boxes"},
+			{
+				"key": "items",
+				"label": "Item lines",
+				"value": sum(cint(r.items) for r in holdings),
+				"type": "number",
+				"icon": "package",
+			},
+			{
+				"key": "negative",
+				"label": "Negative balances",
+				"value": len(negative),
+				"type": "number",
+				"icon": "alert",
+				"tone": "bad" if negative else "good",
+			},
+		],
+		"sections": [
+			_section(
+				"holdings",
+				"What each location holds",
+				"By value",
+				[
+					_col("Warehouse", "warehouse"),
+					_col("Items", "items", "number"),
+					_col("Qty", "qty", "number"),
+					_col("Value", "value", "currency"),
+				],
+				holdings,
+			),
+			_section(
+				"movement",
+				"Movement in the period",
+				"Received against issued",
+				[
+					_col("Warehouse", "warehouse"),
+					_col("Received", "received", "number"),
+					_col("Issued", "issued", "number"),
+					_col("Net", "net", "number"),
+				],
+				movement,
+			),
+			_section(
+				"negative",
+				"Negative stock",
+				"Sold but never received — a ledger problem, not a shelf one",
+				[_col("Item", "item_name"), _col("Warehouse", "warehouse"), _col("On hand", "actual_qty", "number")],
+				negative,
+			),
+		],
+	}
+
+
+@frappe.whitelist()
+def procurement(days: int = DEFAULT_DAYS) -> dict:
+	"""What we are buying, what has arrived, and what is still owed."""
+	start, end, days = _window(days)
+	args = _args({"start": start, "end": end, "limit": SHORTLIST})
+
+	spend = frappe.db.sql(
+		f"""select pi.supplier, count(pi.name) as invoices,
+		           sum(pi.grand_total) as spend,
+		           sum(pi.outstanding_amount) as owed
+		    from `tabPurchase Invoice` pi
+		    where pi.docstatus = 1 and pi.posting_date between %(start)s and %(end)s
+		      {_scope('pi')}
+		    group by pi.supplier order by spend desc limit %(limit)s""",
+		args,
+		as_dict=True,
+	)
+
+	orders = frappe.db.sql(
+		f"""select po.name, po.transaction_date as date, po.supplier, po.status,
+		           po.per_received, po.per_billed, po.grand_total
+		    from `tabPurchase Order` po
+		    where po.docstatus = 1 and po.status not in ('Completed', 'Closed')
+		      {_scope('po')}
+		    order by po.transaction_date asc limit %(limit)s""",
+		args,
+		as_dict=True,
+	)
+
+	# Received but not billed is where a payable hides: the goods are on the
+	# shelf and nothing says we still owe for them.
+	unbilled = frappe.db.sql(
+		f"""select pr.name, pr.posting_date as date, pr.supplier, pr.per_billed, pr.grand_total
+		    from `tabPurchase Receipt` pr
+		    where pr.docstatus = 1 and ifnull(pr.per_billed, 0) < 100 {_scope('pr')}
+		    order by pr.posting_date asc limit %(limit)s""",
+		args,
+		as_dict=True,
+	)
+
+	requests = frappe.db.sql(
+		"""select mr.name, mr.transaction_date as date, mr.material_request_type,
+		          mr.status, mr.per_ordered, mr.set_warehouse as destination
+		   from `tabMaterial Request` mr
+		   where mr.docstatus = 1 and mr.status in ('Pending', 'Partially Ordered')
+		   order by mr.transaction_date asc limit %(limit)s""",
+		args,
+		as_dict=True,
+	)
+
+	total_spend = sum(flt(r.spend) for r in spend)
+	total_owed = sum(flt(r.owed) for r in spend)
+	return {
+		"period": {"from": str(start), "to": str(end), "days": days},
+		"stats": [
+			{"key": "spend", "label": "Spend", "value": total_spend, "type": "currency", "icon": "money"},
+			{
+				"key": "owed",
+				"label": "Owed to suppliers",
+				"value": total_owed,
+				"type": "currency",
+				"icon": "truck",
+				"tone": "warn" if total_owed else "good",
+			},
+			{"key": "orders", "label": "Orders still open", "value": len(orders), "type": "number", "icon": "clipboard"},
+			{
+				"key": "unbilled",
+				"label": "Received not billed",
+				"value": len(unbilled),
+				"type": "number",
+				"icon": "package",
+				"tone": "warn" if unbilled else "good",
+			},
+		],
+		"sections": [
+			_section(
+				"spend",
+				"Spend by supplier",
+				"In this period",
+				[
+					_col("Supplier", "supplier"),
+					_col("Invoices", "invoices", "number"),
+					_col("Spend", "spend", "currency"),
+					_col("Still owed", "owed", "currency"),
+				],
+				spend,
+			),
+			_section(
+				"orders",
+				"Open purchase orders",
+				"Oldest first",
+				[
+					_col("Order", "name"),
+					_col("Date", "date"),
+					_col("Supplier", "supplier"),
+					_col("Status", "status"),
+					_col("Received %", "per_received", "number"),
+					_col("Billed %", "per_billed", "number"),
+					_col("Total", "grand_total", "currency"),
+				],
+				orders,
+			),
+			_section(
+				"unbilled",
+				"Received but not billed",
+				"Goods on the shelf with no invoice against them",
+				[
+					_col("Receipt", "name"),
+					_col("Date", "date"),
+					_col("Supplier", "supplier"),
+					_col("Billed %", "per_billed", "number"),
+					_col("Value", "grand_total", "currency"),
+				],
+				unbilled,
+			),
+			_section(
+				"requests",
+				"Material requests outstanding",
+				"Where the stock is being asked for",
+				[
+					_col("Request", "name"),
+					_col("Date", "date"),
+					_col("Type", "material_request_type"),
+					_col("Goes to", "destination"),
+					_col("Status", "status"),
+					_col("Ordered %", "per_ordered", "number"),
+				],
+				requests,
+			),
+		],
+	}
+
+
+@frappe.whitelist()
+def accounts(days: int = DEFAULT_DAYS) -> dict:
+	"""Where the money is, and which way it is owed."""
+	start, end, days = _window(days)
+	money = _money_position()
+	company = _company()
+
+	balances = []
+	if company:
+		balances = frappe.db.sql(
+			"""select a.account_name as account, a.account_type as type,
+			          sum(gle.debit) - sum(gle.credit) as balance
+			   from `tabGL Entry` gle join tabAccount a on a.name = gle.account
+			   where gle.is_cancelled = 0 and gle.company = %(company)s
+			     and a.account_type in ('Bank', 'Cash') and a.is_group = 0
+			   group by a.account_name, a.account_type order by balance desc""",
+			{"company": company},
+			as_dict=True,
+		)
+
+	receivable = frappe.db.sql(
+		f"""select si.customer as party, count(si.name) as invoices,
+		           sum(si.outstanding_amount) as outstanding
+		    from `tabSales Invoice` si
+		    where si.docstatus = 1 and si.outstanding_amount > 0 {_scope('si')}
+		    group by si.customer order by outstanding desc limit %(limit)s""",
+		_args({"limit": SHORTLIST}),
+		as_dict=True,
+	)
+
+	payable = frappe.db.sql(
+		f"""select pi.supplier as party, count(pi.name) as invoices,
+		           sum(pi.outstanding_amount) as outstanding
+		    from `tabPurchase Invoice` pi
+		    where pi.docstatus = 1 and pi.outstanding_amount > 0 {_scope('pi')}
+		    group by pi.supplier order by outstanding desc limit %(limit)s""",
+		_args({"limit": SHORTLIST}),
+		as_dict=True,
+	)
+
+	tax = frappe.db.sql(
+		f"""select t.account_head as account, sum(t.base_tax_amount) as tax
+		    from `tabSales Taxes and Charges` t
+		    join `tabSales Invoice` si on si.name = t.parent
+		    where si.docstatus = 1 and si.posting_date between %(start)s and %(end)s
+		      {_scope('si')}
+		    group by t.account_head order by tax desc""",
+		_args({"start": start, "end": end}),
+		as_dict=True,
+	)
+
+	net = flt(money["receivable"]) - flt(money["payable"])
+	return {
+		"period": {"from": str(start), "to": str(end), "days": days},
+		"stats": [
+			{"key": "cash", "label": "Cash and bank", "value": money["cash_and_bank"], "type": "currency", "icon": "landmark"},
+			{
+				"key": "receivable",
+				"label": "Customers owe us",
+				"value": money["receivable"],
+				"type": "currency",
+				"icon": "users",
+				"tone": "warn" if money["receivable"] else "good",
+				"hint": f"{money['overdue_count']} overdue" if money["overdue_count"] else None,
+			},
+			{
+				"key": "payable",
+				"label": "We owe suppliers",
+				"value": money["payable"],
+				"type": "currency",
+				"icon": "truck",
+				"tone": "bad" if money["payable"] else "good",
+			},
+			{
+				"key": "net",
+				"label": "Net position",
+				"value": net,
+				"type": "currency",
+				"icon": "trending-up",
+				"tone": "good" if net >= 0 else "bad",
+			},
+		],
+		"sections": [
+			_section(
+				"balances",
+				"Cash and bank accounts",
+				"Balance to date, not just this period",
+				[_col("Account", "account"), _col("Type", "type"), _col("Balance", "balance", "currency")],
+				balances,
+			),
+			_section(
+				"receivable",
+				"Customers who owe us",
+				"Biggest first",
+				[_col("Customer", "party"), _col("Invoices", "invoices", "number"), _col("Owes", "outstanding", "currency")],
+				receivable,
+			),
+			_section(
+				"payable",
+				"Suppliers we owe",
+				"Biggest first",
+				[_col("Supplier", "party"), _col("Invoices", "invoices", "number"), _col("We owe", "outstanding", "currency")],
+				payable,
+			),
+			_section(
+				"tax",
+				"Tax collected",
+				"In this period",
+				[_col("Account", "account"), _col("Tax", "tax", "currency")],
+				tax,
+			),
+		],
+	}
+
+
 def _open_tills() -> dict:
 	rows = frappe.db.sql(
 		f"""select o.name, o.user, o.pos_profile, o.period_start_date

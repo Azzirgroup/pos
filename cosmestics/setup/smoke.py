@@ -10,7 +10,7 @@ on failure.
 """
 
 import frappe
-from frappe.utils import flt
+from frappe.utils import add_days, flt, nowdate
 
 
 class _Report:
@@ -45,6 +45,7 @@ def _run(r):
 	from cosmestics.setup.install import _default_warehouse
 
 	_annotations(r)
+	_custom_fields_visible(r)
 
 	wh = _default_warehouse()
 	wh_type = frappe.db.get_value("Warehouse", wh, "warehouse_type") if wh else None
@@ -107,8 +108,13 @@ def _run(r):
 	_catalog(r)
 	_partial_payment(r, item)
 	_shift_and_credit(r, item)
+	_till(r, item)
+	_neighbour_sourcing(r, item)
 	_documents(r, item, wh)
 	_dashboard(r)
+	_dashboard_tabs(r)
+	_master_data(r)
+	_recent_sales(r)
 	_barcodes(r)
 	_whatsapp(r)
 
@@ -247,6 +253,29 @@ def _catalog(r):
 		bool(frappe.db.exists("Item", sample["item_code"])),
 		sample["item_code"],
 	)
+	# Buying from a neighbour looks identical at the till whether it is
+	# unconfigured or simply has no shops in the group — the button is dead
+	# either way. The status has to say which, or nobody can act on it.
+	sourcing = data.get("sourcing") or {}
+	r.check(
+		"catalog reports why neighbour sourcing is or is not available",
+		"available" in sourcing and (sourcing["available"] or bool(sourcing.get("reason"))),
+		str(sourcing),
+	)
+	# A cashier out of stock with a customer waiting must always have someone to
+	# attribute the purchase to, or the sale cannot complete.
+	r.check(
+		"at least one neighbour shop exists to buy from",
+		bool(data.get("neighbours")),
+		str([n["name"] for n in (data.get("neighbours") or [])][:4]),
+	)
+
+	r.check(
+		"sourcing status agrees with the neighbour list",
+		bool(data.get("neighbours")) == bool(sourcing.get("available")),
+		f"{len(data.get('neighbours') or [])} neighbours, available={sourcing.get('available')}",
+	)
+
 	r.check("catalog exposes a price field", "price" in sample)
 	r.check("catalog exposes stock", "stock" in sample)
 	priced = [x for x in rows if flt(x["price"]) > 0]
@@ -506,7 +535,134 @@ def _documents(r, item, warehouse):
 	except frappe.DoesNotExistError:
 		r.check("unregistered doctype is refused", True)
 
+	_document_creation(r, item, warehouse)
 	_document_actions(r, item, warehouse)
+
+
+def _document_creation(r, item, warehouse):
+	"""Raising Sales Orders, Purchase Orders and Material Requests in the app.
+
+	Each is actually created and read back. A form endpoint that returns the
+	right-looking fields but produces a document ERPNext rejects is the failure
+	worth catching, and only an insert proves it does not.
+	"""
+	from cosmestics.api import documents
+
+	print()
+	creatable = [d for d in documents.DOCUMENTS if d.get("create")]
+	r.check(
+		"the three a shop raises itself are creatable",
+		{"sales-order", "purchase-order", "material-request"} <= {d["key"] for d in creatable},
+		str([d["key"] for d in creatable]),
+	)
+
+	# Declared form fields must exist on their DocTypes, or the form silently
+	# drops whatever was typed into them.
+	problems = []
+	for entry in creatable:
+		meta = frappe.get_meta(entry["doctype"])
+		child = frappe.get_meta(meta.get_field("items").options)
+		for field in entry["create"]["fields"]:
+			if not meta.has_field(field["fieldname"]):
+				problems.append(f"{entry['doctype']}.{field['fieldname']}")
+		for field in entry["create"]["items"]:
+			if not child.has_field(field["fieldname"]):
+				problems.append(f"{child.name}.{field['fieldname']}")
+		for line_field in (entry["create"].get("line_from_header") or {}):
+			if not child.has_field(line_field):
+				problems.append(f"{child.name}.{line_field} (inherited)")
+	r.check("create-form fields exist on their DocTypes", not problems, "; ".join(problems) if problems else f"{len(creatable)} forms")
+
+	customer = frappe.get_all("Customer", limit=1, pluck="name")
+	supplier = frappe.get_all("Supplier", filters={"disabled": 0}, limit=1, pluck="name")
+
+	cases = [
+		(
+			"sales-order",
+			{"customer": customer[0] if customer else None, "delivery_date": add_days(nowdate(), 7)},
+			[{"item_code": item.item_code, "qty": 2, "warehouse": warehouse}],
+		),
+		(
+			"purchase-order",
+			{"supplier": supplier[0] if supplier else None, "schedule_date": add_days(nowdate(), 7)},
+			[{"item_code": item.item_code, "qty": 3, "rate": 90, "warehouse": warehouse}],
+		),
+		(
+			"material-request",
+			{
+				"material_request_type": "Purchase",
+				"schedule_date": add_days(nowdate(), 7),
+				"set_warehouse": warehouse,
+			},
+			[{"item_code": item.item_code, "qty": 4}],
+		),
+	]
+
+	for key, values, lines in cases:
+		if any(v is None for v in values.values()):
+			print(f"  SKIP {key}: no party on this site")
+			continue
+
+		try:
+			form = frappe.call(documents.new_document_form, key=key)
+			r.check(f"{key} form loads", bool(form["fields"]) and bool(form["items"]), f"{len(form['fields'])} fields")
+			r.check(
+				f"{key} form defaults its dates",
+				all(f.get("default") for f in form["fields"] if f["type"] == "date"),
+			)
+
+			values["transaction_date"] = nowdate()
+			res = frappe.call(documents.create_document, key=key, values=values, items=lines)
+			r.check(f"{key} created as a draft", res["docstatus"] == 0, res["name"])
+
+			doc = frappe.get_doc(res["doctype"], res["name"])
+			r.check(f"{key} kept its lines", len(doc.items) == len(lines), f"{len(doc.items)} lines")
+			# Only the trading documents are priced. A Material Request asks for
+			# stock to be moved or bought; it carries no rate, and asserting one
+			# would be testing a fact about ERPNext that is not true.
+			if key != "material-request":
+				r.check(
+					f"{key} priced the line from the price list",
+					flt(doc.items[0].rate) > 0,
+					str(doc.items[0].rate),
+				)
+			# Material Request lines need a warehouse and a date ERPNext validates
+			# per row; the form only asks once, so the inheritance has to work.
+			if key == "material-request":
+				r.check(
+					"material request lines inherit the destination",
+					doc.items[0].warehouse == warehouse,
+					str(doc.items[0].warehouse),
+				)
+
+			submitted = frappe.call(
+				documents.create_document, key=key, values=values, items=lines, submit=1
+			)
+			r.check(f"{key} can be created and submitted", submitted["docstatus"] == 1, submitted["name"])
+		except Exception as e:
+			r.check(f"{key} creation", False, f"{type(e).__name__}: {e}")
+
+	# The guards.
+	try:
+		frappe.call(documents.create_document, key="sales-order", values={}, items=[])
+		r.check("creating with no lines is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("creating with no lines is refused", True)
+
+	try:
+		frappe.call(documents.new_document_form, key="pos-closing")
+		r.check("a type with no form is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("a type with no form is refused", True)
+
+	try:
+		documents.link_options(key="purchase-order", fieldname="qty")
+		r.check("link options on a non-link field are refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("link options on a non-link field are refused", True)
+
+	items = documents.link_options(key="purchase-order", fieldname="item_code", search=item.item_code[:3])
+	r.check("item picker searches", isinstance(items, list), f"{len(items)} matches")
 
 
 def _document_actions(r, item, warehouse):
@@ -640,6 +796,323 @@ def _dashboard(r):
 		flt(week["stats"][0]["value"]) <= flt(data["stats"][0]["value"]) + 0.01,
 		f"7d {week['stats'][0]['value']} vs 30d {data['stats'][0]['value']}",
 	)
+
+
+def _custom_fields_visible(r):
+	"""Every Custom Field on the sales documents must be visible in the meta.
+
+	A field that exists in the database but not in the cached DocType meta is
+	invisible to the controllers that read it, and any other app's hook doing
+	`doc.some_custom_field` then dies with AttributeError — at the counter, on
+	submit, after the customer has paid.
+
+	This was observed live: posawesome reads `posa_delivery_charges` on every
+	Sales Invoice, and a run against a stale cache failed submit with
+	"'SalesInvoice' object has no attribute 'posa_delivery_charges'". Nothing in
+	this app was wrong; the cache was. `bench --site <site> clear-cache` fixes
+	it, and this check is how you find out that is what happened.
+	"""
+	stale = {}
+	for doctype in ("Sales Invoice", "Sales Invoice Item", "POS Invoice", "Customer", "Item"):
+		if not frappe.db.exists("DocType", doctype):
+			continue
+		declared = frappe.get_all(
+			"Custom Field", filters={"dt": doctype}, pluck="fieldname", limit_page_length=0
+		)
+		meta = frappe.get_meta(doctype)
+		missing = [f for f in declared if not meta.has_field(f)]
+		if missing:
+			stale[doctype] = missing
+
+	r.check(
+		"custom fields are visible in the DocType meta (cache is fresh)",
+		not stale,
+		f"stale meta — run `bench clear-cache`: {stale}" if stale else "no stale fields",
+	)
+
+
+def _till(r, item):
+	"""The till's own wiring: tenders, M-Pesa channels, context and receipts."""
+	from cosmestics.api import pos, session
+
+	print()
+	methods = pos.get_payment_methods()
+	keys = [m["key"] for m in methods["methods"]]
+	r.check("till offers at least cash", "cash" in keys, str(keys))
+	r.check(
+		"every offered tender maps to a real Mode of Payment",
+		all(frappe.db.exists("Mode of Payment", m["mode_of_payment"]) for m in methods["methods"]),
+		str([(m["key"], m["mode_of_payment"]) for m in methods["methods"]]),
+	)
+	r.check(
+		"the three M-Pesa channels are offered",
+		{"mpesa_send", "mpesa_paybill", "mpesa_withdraw"} <= set(keys),
+		str([m["key"] for m in methods["mpesa_channels"]]),
+	)
+
+	# Each channel must be its own Mode of Payment, with its own company account.
+	# Sharing one mode is what makes a shift impossible to reconcile: the money
+	# is in three different places and the closing entry sees one number.
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	company = frappe.defaults.get_global_default("company")
+	channel_modes = {}
+	for channel in ("mpesa_send", "mpesa_paybill", "mpesa_withdraw"):
+		try:
+			mode = pos._mode_of_payment(channel, settings)
+			channel_modes[channel] = mode
+			r.check(f"{channel} resolves to a Mode of Payment", bool(mode), mode)
+		except Exception as e:
+			r.check(f"{channel} resolves to a Mode of Payment", False, f"{type(e).__name__}: {e}")
+
+	r.check(
+		"the three M-Pesa channels are separate Modes of Payment",
+		len(set(channel_modes.values())) == 3,
+		str(channel_modes),
+	)
+	unmapped = [
+		mode
+		for mode in set(channel_modes.values())
+		if company
+		and not frappe.db.get_value(
+			"Mode of Payment Account", {"parent": mode, "company": company}, "default_account"
+		)
+	]
+	r.check(
+		"every M-Pesa channel has a company account, so a shift can open",
+		not unmapped,
+		f"missing: {unmapped}" if unmapped else f"{len(channel_modes)} mapped",
+	)
+
+	# A sale through a channel must actually book against that channel's mode.
+	res = frappe.call(
+		pos.submit_sale,
+		items=[{"item_code": item.item_code, "qty": 1, "rate": 250, "discount_pct": 0}],
+		payment={"method": "mpesa_paybill", "tendered": 250, "change": 0, "reference": "PB123"},
+	)
+	si = frappe.get_doc("Sales Invoice", res["invoice"])
+	expected = settings.get("mode_mpesa_paybill") or settings.mode_mpesa
+	r.check(
+		"a paybill sale books against the paybill mode",
+		si.payments[0].mode_of_payment == expected,
+		f"{si.payments[0].mode_of_payment} (expected {expected})",
+	)
+
+	receipt = frappe.call(pos.receipt_url, invoice=si.name)
+	r.check("receipt url built for a real sale", "/printview?" in receipt["url"], receipt["url"][:70])
+	r.check("receipt offers a print format", isinstance(receipt["formats"], list), str(receipt["formats"][:3]))
+
+	try:
+		frappe.call(pos.receipt_url, invoice="NOT-A-REAL-INVOICE")
+		r.check("receipt for a missing invoice is refused", False, "no error raised")
+	except frappe.DoesNotExistError:
+		r.check("receipt for a missing invoice is refused", True)
+
+	ctx = session.context()
+	r.check(
+		"till context names a warehouse to sell from",
+		bool(ctx["warehouse"]),
+		f"branch={ctx['branch']} warehouse={ctx['warehouse']} shift={bool(ctx['shift'])}",
+	)
+	# The header must not claim one warehouse while the sale draws from another.
+	r.check(
+		"context warehouse matches the one the sale used",
+		ctx["warehouse"] == si.items[0].warehouse,
+		f"{ctx['warehouse']} vs {si.items[0].warehouse}",
+	)
+
+
+def _neighbour_sourcing(r, item):
+	"""Buying mid-sale from a shop nobody had added to the master list first.
+
+	This is the path that used to refuse the purchase — and therefore the sale —
+	because the shop next door was not yet a Supplier. The customer is standing
+	there and the goods have changed hands, so it has to succeed.
+	"""
+	from cosmestics.api.sourcing import receive_from_neighbours
+
+	print()
+	novel = "Smoke Test Corner Shop"
+	r.check("the test neighbour does not exist yet", not frappe.db.exists("Supplier", novel))
+
+	res = receive_from_neighbours(
+		lines=[{"item_code": item.item_code, "qty": 1, "buy_rate": 120, "supplier": novel}]
+	)
+	r.check("buying from an unknown neighbour succeeds", bool(res["invoices"]), str(res["invoices"]))
+	r.check("the shop is created as a Supplier", bool(frappe.db.exists("Supplier", novel)))
+
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	r.check(
+		"the new shop lands in the neighbour group, so the till offers it next time",
+		frappe.db.get_value("Supplier", novel, "supplier_group") == settings.neighbour_supplier_group,
+		str(frappe.db.get_value("Supplier", novel, "supplier_group")),
+	)
+
+	pi = frappe.get_doc("Purchase Invoice", res["invoices"][0]["name"])
+	r.check("the purchase is submitted", pi.docstatus == 1, pi.name)
+	r.check("the purchase received stock", pi.update_stock == 1)
+
+
+def _dashboard_tabs(r):
+	"""The five department tabs.
+
+	All return {stats, sections}; the front end renders them through one
+	component, so a tab that quietly returns a different shape would render as a
+	blank panel rather than an error.
+	"""
+	from cosmestics.api import dashboard
+
+	print()
+	opts = dashboard.filters()
+	r.check(
+		"dashboard filters offer branches and warehouses",
+		isinstance(opts["branches"], list) and isinstance(opts["warehouses"], list),
+		f"{len(opts['branches'])} branches, {len(opts['warehouses'])} warehouses",
+	)
+
+	for tab in ("sales", "branches", "warehouses", "procurement", "accounts"):
+		try:
+			data = frappe.call(getattr(dashboard, tab), days=90)
+			shape_ok = (
+				isinstance(data.get("stats"), list)
+				and data["stats"]
+				and isinstance(data.get("sections"), list)
+				and data["sections"]
+			)
+			r.check(f"dashboard tab {tab}", shape_ok, f"{len(data.get('sections', []))} sections")
+			bad = [
+				s["key"]
+				for s in data["sections"]
+				if not s.get("columns") or not isinstance(s.get("rows"), list)
+			]
+			r.check(f"tab {tab} sections carry their own columns", not bad, f"missing: {bad}" if bad else "")
+		except Exception as e:
+			r.check(f"dashboard tab {tab}", False, f"{type(e).__name__}: {e}")
+
+	# The filters have to actually filter, or they are decoration.
+	profiles = frappe.get_all("POS Profile", filters={"disabled": 0}, pluck="name")
+	if profiles:
+		everything = frappe.call(dashboard.sales, days=3650)
+		one = frappe.call(dashboard.sales, days=3650, branch=profiles[0])
+		r.check(
+			"branch filter narrows the sales tab",
+			flt(one["stats"][0]["value"]) <= flt(everything["stats"][0]["value"]) + 0.01,
+			f"{profiles[0]}: {one['stats'][0]['value']} of {everything['stats'][0]['value']}",
+		)
+
+	warehouses = frappe.get_all("Warehouse", filters={"is_group": 0, "disabled": 0}, pluck="name")
+	if warehouses:
+		everything = frappe.call(dashboard.warehouses, days=3650)
+		one = frappe.call(dashboard.warehouses, days=3650, warehouse=warehouses[0])
+		r.check(
+			"warehouse filter narrows the warehouses tab",
+			len(one["sections"][0]["rows"]) <= len(everything["sections"][0]["rows"]),
+			f"{len(one['sections'][0]['rows'])} of {len(everything['sections'][0]['rows'])} locations",
+		)
+
+
+def _master_data(r):
+	"""Quick-add. Creating the record is the whole point, so it is created."""
+	from cosmestics.api import master
+
+	print()
+	types = master.list_types()
+	r.check("master types listed", bool(types), str([t["key"] for t in types]))
+
+	declared = {t["key"] for t in types}
+	r.check(
+		"the five a shop asks for are all there",
+		{"customer", "supplier", "item", "warehouse", "account"} <= declared or not declared,
+		str(sorted(declared)),
+	)
+
+	# Every declared field must exist on its DocType, or the form silently drops
+	# what the user typed into it.
+	problems = []
+	for entry in master.MASTERS:
+		meta = frappe.get_meta(entry["doctype"])
+		for field in entry["fields"]:
+			# `opening_price` is this app's own, written as an Item Price after insert.
+			if field["fieldname"] == "opening_price":
+				continue
+			if not meta.has_field(field["fieldname"]):
+				problems.append(f"{entry['doctype']}.{field['fieldname']}")
+		if not meta.has_field(entry["title_field"]):
+			problems.append(f"{entry['doctype']}.{entry['title_field']} (title)")
+	r.check("quick-add fields exist on their DocTypes", not problems, "; ".join(problems) if problems else f"{len(master.MASTERS)} types")
+
+	try:
+		master.options(key="customer", fieldname="customer_name")
+		r.check("asking for options on a non-link field is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("asking for options on a non-link field is refused", True)
+
+	groups = master.options(key="customer", fieldname="customer_group")
+	r.check("link options resolve", isinstance(groups, list), f"{len(groups)} customer groups")
+
+	res = frappe.call(
+		master.create,
+		key="customer",
+		values={"customer_name": "Quick Add Smoke Customer", "mobile_no": "254700111222"},
+	)
+	r.check("customer created from quick-add", bool(res["name"]), res["name"])
+	r.check(
+		"created customer is real",
+		frappe.db.exists("Customer", res["name"]),
+		str(frappe.db.get_value("Customer", res["name"], "mobile_no")),
+	)
+	r.check("quick-add returns a desk link", "/app/" in res["desk_url"], res["desk_url"])
+
+	try:
+		frappe.call(master.create, key="customer", values={})
+		r.check("quick-add refuses a missing required field", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("quick-add refuses a missing required field", True)
+
+	try:
+		frappe.call(master.create, key="user", values={"customer_name": "x"})
+		r.check("an unregistered master type is refused", False, "no error raised")
+	except frappe.DoesNotExistError:
+		r.check("an unregistered master type is refused", True)
+
+	# A supplier in the neighbour group must actually reach the till, which is
+	# the whole reason quick-add offers Supplier at all.
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	if settings.neighbour_supplier_group:
+		frappe.call(
+			master.create,
+			key="supplier",
+			values={
+				"supplier_name": "Quick Add Neighbour Shop",
+				"supplier_group": settings.neighbour_supplier_group,
+			},
+		)
+		from cosmestics.api.catalog import _neighbours, _sourcing_status
+
+		names = [n["name"] for n in _neighbours()]
+		r.check("a neighbour added here reaches the till", "Quick Add Neighbour Shop" in names, str(names))
+		r.check("sourcing reports available once a shop exists", _sourcing_status()["available"])
+
+
+def _recent_sales(r):
+	from cosmestics.api import pos
+
+	print()
+	data = frappe.call(pos.recent_sales, limit=10)
+	r.check("recent sales load", isinstance(data["rows"], list), f"{len(data['rows'])} sales")
+	r.check("recent sales default to this cashier", data["mine"] is True)
+	if data["rows"]:
+		r.check(
+			"recent sales are newest first",
+			[str(x["creation"]) for x in data["rows"]]
+			== sorted((str(x["creation"]) for x in data["rows"]), reverse=True),
+		)
+		mine = frappe.get_all(
+			"Sales Invoice", filters={"docstatus": 1, "owner": frappe.session.user}, pluck="name"
+		)
+		r.check(
+			"'only mine' really is only mine",
+			all(x["name"] in mine for x in data["rows"]),
+		)
 
 
 def _barcodes(r):
@@ -783,6 +1256,7 @@ def _annotations(r):
 		customers,
 		dashboard,
 		documents,
+		master,
 		notifications,
 		modules,
 		pos,
@@ -812,6 +1286,9 @@ def _annotations(r):
 		(sourcing.receive_from_neighbours, {"lines": []}),
 		(catalog.get_catalog, {}),
 		(session.me, {}),
+		(session.context, {}),
+		(pos.get_payment_methods, {}),
+		(pos.receipt_url, {"invoice": "x", "print_format": None}),
 		(modules.inventory, {"warehouse": "x", "search": "y", "limit": 10}),
 		(modules.warehouses, {}),
 		(modules.sales, {"days": 30, "limit": 10}),
@@ -836,12 +1313,25 @@ def _annotations(r):
 			{"key": "x", "days": 30, "status": None, "party": None, "search": None, "limit": 10, "start": 0},
 		),
 		(documents.get_document, {"key": "x", "name": "y"}),
+		(documents.new_document_form, {"key": "x"}),
+		(documents.link_options, {"key": "x", "fieldname": "y", "search": None, "limit": 20}),
+		(documents.create_document, {"key": "x", "values": {}, "items": [], "submit": 0}),
 		(documents.run_action, {"key": "x", "name": "y", "action": "submit"}),
 		(documents.print_url, {"key": "x", "name": "y", "print_format": None}),
 		(documents.send_whatsapp, {"key": "x", "name": "y", "to": None, "sender": None, "as_pdf": 1}),
 		(documents.whatsapp_senders, {}),
 		(documents.insights, {"key": "x", "days": 30}),
 		(dashboard.overview, {"days": 30}),
+		(dashboard.filters, {}),
+		(dashboard.sales, {"days": 30, "branch": None}),
+		(dashboard.branches, {"days": 30}),
+		(dashboard.warehouses, {"days": 30, "warehouse": None}),
+		(dashboard.procurement, {"days": 30}),
+		(dashboard.accounts, {"days": 30}),
+		(master.list_types, {}),
+		(master.options, {"key": "customer", "fieldname": "customer_group", "search": None, "limit": 20}),
+		(master.create, {"key": "customer", "values": {}}),
+		(pos.recent_sales, {"limit": 20, "mine": 1}),
 		(barcodes.list_items, {"search": None, "only_missing": 1, "limit": 50}),
 		(barcodes.generate, {"item_codes": [], "skip_existing": 1}),
 		(notifications.test_whatsapp, {"to": "x", "message": None}),

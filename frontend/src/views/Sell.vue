@@ -4,6 +4,7 @@ import { storeToRefs } from 'pinia'
 
 import { useCatalogStore } from '@/stores/catalog'
 import { useCartStore } from '@/stores/cart'
+import { useTillStore } from '@/stores/till'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useScanner } from '@/composables/useScanner'
 import { useShortcuts } from '@/composables/useShortcuts'
@@ -16,6 +17,9 @@ import {
 	getClosingSummary,
 	openShift as apiOpenShift,
 	closeShift as apiCloseShift,
+	getPaymentMethods,
+	getReceiptUrl,
+	getRecentSales,
 } from '@/data/api'
 
 import { Button, FormControl, TabButtons } from 'frappe-ui'
@@ -37,9 +41,12 @@ import LucideSunset from '~icons/lucide/sunset'
 import LucideLayers from '~icons/lucide/layers'
 import LucideScanLine from '~icons/lucide/scan-line'
 import LucideUserRound from '~icons/lucide/user-round'
+import LucidePrinter from '~icons/lucide/printer'
+import LucideReceiptText from '~icons/lucide/receipt-text'
 
 const catalog = useCatalogStore()
 const cart = useCartStore()
+const till = useTillStore()
 const { isCompact } = useBreakpoint()
 const { lines, count, total, isEmpty, held } = storeToRefs(cart)
 
@@ -92,6 +99,17 @@ const customer = ref(null)
 const customerSheet = ref(false)
 const customerRequired = ref(false)
 
+/**
+ * The last posted sale, kept only so the cashier can print its receipt.
+ *
+ * Held after the cart is cleared on purpose: the receipt is wanted *after* the
+ * sale is done, and by then there is nothing left on screen to print from.
+ */
+const lastSale = ref(null)
+
+/** M-Pesa channels this shop is set up for; the pay sheet falls back if absent. */
+const mpesaChannels = ref([])
+
 onMounted(async () => {
 	catalog.load()
 	try {
@@ -102,6 +120,59 @@ onMounted(async () => {
 		// Shifts are a convenience, not a gate — never block selling on this.
 		console.warn('[pos] shift lookup failed', e)
 	}
+
+	// Separately: a failure here must not cost us the shift lookup above.
+	try {
+		const methods = await getPaymentMethods()
+		if (methods?.mpesa_channels?.length) mpesaChannels.value = methods.mpesa_channels
+	} catch (e) {
+		console.warn('[pos] payment methods lookup failed', e)
+	}
+})
+
+async function printReceipt(invoice) {
+	const target = invoice || lastSale.value?.invoice
+	if (!target) return
+	try {
+		const { url } = await getReceiptUrl({ invoice: target })
+		window.open(url, '_blank', 'noopener')
+	} catch (e) {
+		notify(e.message || 'Could not open the receipt', 'warn')
+	}
+}
+
+/* ---------- recent sales ---------- */
+
+/**
+ * "Did that one go through?" is asked at a counter several times a day, and
+ * until now the only way to answer it was to leave the till for the back
+ * office. Defaults to this cashier's own sales — the question is almost always
+ * about the sale just rung up, and everyone else's invoices bury it.
+ */
+const recentSheet = ref(false)
+const recent = ref({ rows: [], totals: {} })
+const recentLoading = ref(false)
+const recentMine = ref(true)
+
+async function openRecent() {
+	recentSheet.value = true
+	await loadRecent()
+}
+
+async function loadRecent() {
+	recentLoading.value = true
+	try {
+		recent.value = await getRecentSales({ limit: 25, mine: recentMine.value })
+	} catch (e) {
+		notify(e.message || 'Could not load recent sales', 'warn')
+		recent.value = { rows: [], totals: {} }
+	} finally {
+		recentLoading.value = false
+	}
+}
+
+watch(recentMine, () => {
+	if (recentSheet.value) loadRecent()
 })
 
 async function openShiftSheet() {
@@ -126,6 +197,10 @@ async function doOpenShift(payload) {
 	try {
 		shift.value = await apiOpenShift(payload)
 		shiftSheet.value = false
+		// The header chip reads the shift from the shared store, so it has to be
+		// told — otherwise it keeps saying "No shift" until the page reloads,
+		// which is the one moment it most needs to be right.
+		till.refresh()
 		notify('Shift opened', 'ok')
 	} catch (e) {
 		notify(e.message || 'Could not open shift', 'warn')
@@ -140,6 +215,7 @@ async function doCloseShift(payload) {
 		const res = await apiCloseShift(payload)
 		shift.value = null
 		shiftSheet.value = false
+		till.refresh()
 		notify(
 			res.difference === 0
 				? `Shift closed — balanced (${res.name})`
@@ -340,6 +416,7 @@ async function completeSale(payment) {
 				reference: payment.reference,
 			},
 		})
+		lastSale.value = { invoice: res.invoice, total: paid, at: Date.now() }
 		notify(
 			res.outstanding > 0
 				? `Invoice ${res.invoice} · ${fmtMoney(res.outstanding)} outstanding`
@@ -417,6 +494,25 @@ useShortcuts({
 				tooltip="Refresh prices and stock"
 				@click="refreshCatalog"
 			/>
+			<!-- Appears only once there is something to print, and names the
+			     invoice: a cashier three customers later needs to know which sale
+			     this receipt is for before pressing it. -->
+			<!-- Appears only once there is something to print, and names the
+			     invoice: a cashier three customers later needs to know which sale
+			     this receipt is for before pressing it. -->
+			<Button
+				v-if="lastSale"
+				variant="subtle"
+				:icon-left="LucidePrinter"
+				:label="`Receipt ${lastSale.invoice}`"
+				@click="printReceipt()"
+			/>
+			<Button
+				variant="subtle"
+				:icon-left="LucideReceiptText"
+				label="Recent sales"
+				@click="openRecent"
+			/>
 			<Button
 				variant="subtle"
 				:icon-left="shift ? LucideSunset : LucideSunrise"
@@ -493,10 +589,58 @@ useShortcuts({
 			</div>
 		</BottomSheet>
 
+		<BottomSheet v-model="recentSheet" title="Recent sales" tall>
+			<div class="flex flex-col gap-2 px-4 pb-5">
+				<div class="flex items-center justify-between gap-2">
+					<FormControl v-model="recentMine" type="checkbox" label="Only mine" />
+					<span class="tabular text-p-sm text-ink-gray-6">
+						{{ recent.totals.count || 0 }} sales · {{ fmtMoney(recent.totals.revenue || 0) }}
+					</span>
+				</div>
+
+				<div v-if="recentLoading" class="grid h-32 place-items-center">
+					<span class="text-p-sm text-ink-gray-5">Loading…</span>
+				</div>
+				<p v-else-if="!recent.rows.length" class="py-8 text-center text-p-sm text-ink-gray-5">
+					No sales yet.
+				</p>
+
+				<button
+					v-for="row in recent.rows"
+					:key="row.name"
+					class="flex items-center gap-3 rounded-xl border border-outline-gray-2 p-3 text-left transition-colors hover:bg-surface-gray-1"
+					@click="printReceipt(row.name)"
+				>
+					<div class="min-w-0 flex-1">
+						<div class="truncate text-p-base font-medium text-ink-gray-9">
+							{{ row.customer }}
+						</div>
+						<div class="truncate text-p-xs text-ink-gray-5">
+							{{ row.name }} · {{ row.posting_date }}
+							<span v-if="!row.is_pos"> · off-till</span>
+						</div>
+					</div>
+					<div class="shrink-0 text-right">
+						<div class="tabular text-p-base font-semibold text-ink-gray-9">
+							{{ fmtMoney(row.grand_total) }}
+						</div>
+						<div
+							v-if="row.outstanding_amount > 0"
+							class="tabular text-p-xs font-medium text-ink-red-3"
+						>
+							{{ fmtMoney(row.outstanding_amount) }} owed
+						</div>
+					</div>
+					<LucidePrinter class="h-4 w-4 shrink-0 text-ink-gray-5" />
+				</button>
+			</div>
+		</BottomSheet>
+
 		<PaySheet
 			v-model="paySheet"
 			:total="total"
 			:customer="customer"
+			:mpesa-channels="mpesaChannels.length ? mpesaChannels : undefined"
 			@complete="completeSale"
 			@pick-customer="pickCustomer(true)"
 		/>

@@ -14,6 +14,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
 import DocumentModal from '@/components/DocumentModal.vue'
+import DocumentFormSheet from '@/components/DocumentFormSheet.vue'
 import Reports from '@/views/Reports.vue'
 import { resolveIcon } from '@/utils/icons'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
@@ -24,6 +25,7 @@ import LucideCopy from '~icons/lucide/copy'
 import LucideUndo from '~icons/lucide/undo-2'
 import LucidePrinter from '~icons/lucide/printer'
 import LucideSend from '~icons/lucide/send'
+import LucidePlus from '~icons/lucide/plus'
 
 /**
  * Every transactional document, in one screen.
@@ -171,6 +173,8 @@ async function loadInsights() {
 
 const open = ref(false)
 const selected = ref(null)
+/** Raising a new document of the type currently on screen. */
+const newOpen = ref(false)
 
 function openRow(row) {
 	selected.value = row.name
@@ -276,6 +280,16 @@ function notify(message, tone = 'good') {
 		<div class="flex min-w-0 flex-1 flex-col overflow-hidden">
 			<PageHeader :title="activeType?.label || 'Documents'" :subtitle="subtitle">
 				<template #actions>
+					<!-- Only for types that declare a form and that this user may
+					     create; the server decides both. -->
+					<Button
+						v-if="activeType?.creatable"
+						theme="gray"
+						variant="solid"
+						:icon-left="LucidePlus"
+						:label="`New ${activeType.label}`"
+						@click="newOpen = true"
+					/>
 					<div class="w-[190px] lg:hidden">
 						<FormControl
 							type="select"
@@ -419,6 +433,13 @@ function notify(message, tone = 'good') {
 			<!-- Reports: the reports screen itself, narrowed to this document type. -->
 			<Reports v-else embedded :only="activeType?.reports || []" />
 		</div>
+
+		<DocumentFormSheet
+			v-model:open="newOpen"
+			:doc-key="activeKey"
+			@created="load"
+			@notify="notify($event.message, $event.tone)"
+		/>
 
 		<DocumentModal
 			v-model:open="open"

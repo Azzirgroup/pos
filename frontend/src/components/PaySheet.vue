@@ -17,6 +17,20 @@ const props = defineProps({
 	total: { type: Number, default: 0 },
 	/** Selected customer, or null for walk-in. Required for a credit sale. */
 	customer: { type: Object, default: null },
+	/**
+	 * M-Pesa channels the shop is set up for, from the server. Defaulted so the
+	 * sheet still works if the call has not landed — a till that cannot take
+	 * payment because a lookup is slow is worse than one offering a channel that
+	 * books against the generic M-Pesa mode.
+	 */
+	mpesaChannels: {
+		type: Array,
+		default: () => [
+			{ key: 'mpesa_send', label: 'Send Money' },
+			{ key: 'mpesa_paybill', label: 'Paybill' },
+			{ key: 'mpesa_withdraw', label: 'Withdraw' },
+		],
+	},
 })
 
 const emit = defineEmits(['update:modelValue', 'complete', 'pick-customer'])
@@ -32,6 +46,25 @@ const method = ref('cash')
 const tendered = ref('')
 const reference = ref('')
 const tenderedInput = ref(null)
+
+/**
+ * Which M-Pesa channel the money came through.
+ *
+ * M-Pesa is one button because the cashier knows it is M-Pesa before they know
+ * which kind; the channel is the second, smaller decision. They settle into
+ * different accounts, so the choice has to reach the invoice — sending them all
+ * as plain "mpesa" is what left the shift unable to reconcile.
+ */
+const mpesaChannel = ref('mpesa_send')
+
+const isMpesa = computed(() => method.value === 'mpesa')
+
+/** The key the server should book this against. */
+const tenderKey = computed(() => (isMpesa.value ? mpesaChannel.value : method.value))
+
+const channelLabel = computed(
+	() => props.mpesaChannels.find((c) => c.key === mpesaChannel.value)?.label || 'M-Pesa',
+)
 
 const tenderedNum = computed(() => Number(tendered.value) || 0)
 const change = computed(() => round2(Math.max(0, tenderedNum.value - props.total)))
@@ -56,12 +89,21 @@ function startSplit() {
 	splitMode.value = true
 	// Seed with the current method for the full amount; the cashier reduces it
 	// and adds a second row, which is how a split actually gets entered.
-	parts.value = [{ method: method.value === 'credit' ? 'cash' : method.value, amount: '', reference: '' }]
+	parts.value = [
+		{ method: isCredit.value ? 'cash' : tenderKey.value, amount: '', reference: '' },
+	]
 }
+
+/** Split rows offer the same tenders as the main row, channels included. */
+const splitOptions = computed(() => [
+	{ key: 'cash', label: 'Cash' },
+	...props.mpesaChannels,
+	{ key: 'card', label: 'Card' },
+])
 
 function addPart() {
 	const used = new Set(parts.value.map((p) => p.method))
-	const next = ['cash', 'mpesa', 'card'].find((m) => !used.has(m)) || 'cash'
+	const next = splitOptions.value.find((o) => !used.has(o.key))?.key || 'cash'
 	parts.value.push({ method: next, amount: '', reference: '' })
 }
 
@@ -119,6 +161,7 @@ watch(
 	async (open) => {
 		if (!open) return
 		method.value = 'cash'
+		mpesaChannel.value = props.mpesaChannels[0]?.key || 'mpesa_send'
 		tendered.value = ''
 		reference.value = ''
 		splitMode.value = false
@@ -149,7 +192,9 @@ function complete() {
 	}
 
 	emit('complete', {
-		method: method.value,
+		// The M-Pesa channel, not the bare method — that is what decides the
+		// Mode of Payment and therefore which account the money lands in.
+		method: tenderKey.value,
 		// A credit sale collects nothing now.
 		tendered: isCredit.value ? 0 : method.value === 'cash' ? tenderedNum.value : props.total,
 		change: method.value === 'cash' ? change.value : 0,
@@ -181,9 +226,9 @@ function complete() {
 							v-model="p.method"
 							class="h-11 min-w-0 flex-1 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-2 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
 						>
-							<option value="cash">Cash</option>
-							<option value="mpesa">M-Pesa</option>
-							<option value="card">Card</option>
+							<option v-for="o in splitOptions" :key="o.key" :value="o.key">
+								{{ o.label }}
+							</option>
 						</select>
 						<input
 							v-model="p.amount"
@@ -330,6 +375,30 @@ function complete() {
 				</button>
 			</div>
 
+			<!-- Which M-Pesa. A second, smaller decision than "is it M-Pesa", and
+			     only asked once that one is made — but it has to be asked, because
+			     the three settle into different accounts. -->
+			<div v-if="!splitMode && isMpesa && mpesaChannels.length > 1" class="flex flex-col gap-1.5">
+				<span class="text-p-sm font-medium text-ink-gray-7">How did it come in?</span>
+				<!-- Flex rather than a computed grid-cols-N: Tailwind's scanner only
+				     sees literal class names, so an interpolated one produces no CSS. -->
+				<div class="flex flex-wrap gap-2">
+					<button
+						v-for="c in mpesaChannels"
+						:key="c.key"
+						class="min-h-touch min-w-[96px] flex-1 rounded-xl border px-3 py-2.5 text-p-sm font-medium transition-colors"
+						:class="
+							mpesaChannel === c.key
+								? 'border-outline-gray-4 bg-surface-gray-3 text-ink-gray-9'
+								: 'border-outline-gray-2 bg-surface-white text-ink-gray-6 hover:bg-surface-gray-2'
+						"
+						@click="mpesaChannel = c.key"
+					>
+						{{ c.label }}
+					</button>
+				</div>
+			</div>
+
 			<!-- Credit: the customer IS the transaction, so it leads. -->
 			<div v-if="!splitMode && isCredit" class="flex flex-col gap-3">
 				<button
@@ -451,14 +520,14 @@ function complete() {
 			<!-- M-Pesa / card reference -->
 			<div v-else>
 				<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
-					{{ method === 'mpesa' ? 'M-Pesa code' : 'Card reference' }}
+					{{ isMpesa ? `${channelLabel} code` : 'Card reference' }}
 					<span class="font-normal text-ink-gray-4">(optional)</span>
 				</label>
 				<input
 					v-model="reference"
 					type="text"
 					autocapitalize="characters"
-					:placeholder="method === 'mpesa' ? 'e.g. SLK7XR2QM4' : 'Last 4 digits'"
+					:placeholder="isMpesa ? 'e.g. SLK7XR2QM4' : 'Last 4 digits'"
 					class="h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-4 text-p-lg uppercase text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
 					@keyup.enter="complete"
 				/>

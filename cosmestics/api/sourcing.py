@@ -93,11 +93,36 @@ def _make_purchase_invoice(supplier, rows, company, warehouse, paid):
 
 
 def _ensure_supplier(supplier):
+	"""Make sure the shop we just bought from exists as a Supplier.
+
+	Created rather than refused. The customer is at the counter and the goods
+	have already changed hands — refusing the purchase because nobody had added
+	the shop next door to a master list beforehand blocks a sale that has, in
+	every practical sense, already happened.
+
+	It lands in the neighbour group, which is where it belongs and where the till
+	will offer it next time, so this fills the list in as the shop actually
+	trades rather than demanding it be filled in up front.
+	"""
 	if frappe.db.exists("Supplier", supplier):
 		return
-	frappe.throw(
-		_("{0} is not set up as a supplier. Add the shop under Suppliers first.").format(supplier)
+
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	group = settings.neighbour_supplier_group or frappe.db.get_value(
+		"Supplier Group", {"is_group": 0}, "name"
 	)
+	if not group:
+		frappe.throw(
+			_("{0} is not a supplier, and there is no supplier group to file it under.").format(
+				supplier
+			)
+		)
+
+	doc = frappe.new_doc("Supplier")
+	doc.supplier_name = supplier
+	doc.supplier_group = group
+	doc.supplier_type = "Company"
+	doc.insert(ignore_permissions=True)
 
 
 def _sourcing_warehouse(company):

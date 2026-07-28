@@ -7,7 +7,10 @@
   "payments_section",
   "mode_cash",
   "mode_mpesa",
+  "mode_mpesa_send",
+  "mode_mpesa_paybill",
   "column_break_pay",
+  "mode_mpesa_withdraw",
   "mode_card",
   "selling_price_list",
   "whatsapp_section",
@@ -41,8 +44,29 @@
    "options": "Mode of Payment"
   },
   {
+   "description": "Customer sends to a phone number. Leave blank to book it against the generic M-Pesa mode above.",
+   "fieldname": "mode_mpesa_send",
+   "fieldtype": "Link",
+   "label": "M-Pesa · Send Money",
+   "options": "Mode of Payment"
+  },
+  {
+   "description": "Customer pays a business paybill and account number. Leave blank to fall back to M-Pesa.",
+   "fieldname": "mode_mpesa_paybill",
+   "fieldtype": "Link",
+   "label": "M-Pesa · Paybill",
+   "options": "Mode of Payment"
+  },
+  {
    "fieldname": "column_break_pay",
    "fieldtype": "Column Break"
+  },
+  {
+   "description": "Cash taken over the agent counter against an M-Pesa withdrawal. Leave blank to fall back to M-Pesa.",
+   "fieldname": "mode_mpesa_withdraw",
+   "fieldtype": "Link",
+   "label": "M-Pesa · Withdraw",
+   "options": "Mode of Payment"
   },
   {
    "fieldname": "mode_card",

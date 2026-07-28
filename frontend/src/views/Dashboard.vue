@@ -1,7 +1,7 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { Button, FormControl, Spinner } from 'frappe-ui'
-import { getDashboard } from '@/data/api'
+import { Button, FormControl, Spinner, TabButtons } from 'frappe-ui'
+import { getDashboard, getDashboardFilters, getDashboardTab } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
@@ -31,15 +31,64 @@ const PERIODS = [
 	{ label: 'Last year', value: 365 },
 ]
 
-onMounted(load)
-watch(days, load)
+/**
+ * Overview is charts and needs its own layout; the other five are all
+ * {stats, sections} and share one renderer. Adding a sixth department is a tab
+ * entry and an endpoint, not another screen.
+ */
+const TABS = [
+	{ label: 'Overview', value: 'overview' },
+	{ label: 'Sales', value: 'sales' },
+	{ label: 'Branches', value: 'branches' },
+	{ label: 'Warehouses', value: 'warehouses' },
+	{ label: 'Procurement', value: 'procurement' },
+	{ label: 'Accounts', value: 'accounts' },
+]
+
+const tab = ref('overview')
+const tabData = ref(null)
+
+// Select drops options whose value is falsy, so "all" needs a real token.
+const ALL = '__all__'
+const branch = ref(ALL)
+const warehouse = ref(ALL)
+const filterOptions = ref({ branches: [], warehouses: [] })
+
+const usesBranch = computed(() => tab.value === 'sales')
+const usesWarehouse = computed(() => tab.value === 'warehouses')
+
+const branchOptions = computed(() => [
+	{ label: 'All branches', value: ALL },
+	...filterOptions.value.branches,
+])
+const warehouseOptions = computed(() => [
+	{ label: 'All warehouses', value: ALL },
+	...filterOptions.value.warehouses,
+])
+
+onMounted(async () => {
+	filterOptions.value = await getDashboardFilters().catch(() => ({ branches: [], warehouses: [] }))
+	load()
+})
+
+watch([days, tab, branch, warehouse], load)
 
 async function load() {
 	loading.value = true
 	try {
-		data.value = await getDashboard({ days: days.value })
+		if (tab.value === 'overview') {
+			data.value = await getDashboard({ days: days.value })
+		} else {
+			tabData.value = await getDashboardTab({
+				tab: tab.value,
+				days: days.value,
+				branch: usesBranch.value && branch.value !== ALL ? branch.value : null,
+				warehouse: usesWarehouse.value && warehouse.value !== ALL ? warehouse.value : null,
+			})
+		}
 	} catch (e) {
 		console.error('[dashboard]', e)
+		if (tab.value !== 'overview') tabData.value = null
 	} finally {
 		loading.value = false
 	}
@@ -124,6 +173,14 @@ const attention = computed(() => {
 	<div class="flex min-h-0 flex-1 flex-col overflow-hidden">
 		<PageHeader title="Dashboard" :subtitle="subtitle">
 			<template #actions>
+				<!-- One filter row above everything it scopes: every figure on the
+				     tab answers the same question about the same slice. -->
+				<div v-if="usesBranch" class="w-[180px]">
+					<FormControl type="select" v-model="branch" :options="branchOptions" />
+				</div>
+				<div v-if="usesWarehouse" class="w-[190px]">
+					<FormControl type="select" v-model="warehouse" :options="warehouseOptions" />
+				</div>
 				<div class="w-[160px]">
 					<FormControl type="select" v-model="days" :options="PERIODS" />
 				</div>
@@ -131,7 +188,49 @@ const attention = computed(() => {
 			</template>
 		</PageHeader>
 
-		<div v-if="!data && loading" class="grid flex-1 place-items-center">
+		<div class="shrink-0 overflow-x-auto px-4 pt-3">
+			<TabButtons v-model="tab" :buttons="TABS" />
+		</div>
+
+		<!-- The five department tabs: same shape, one renderer. -->
+		<div
+			v-if="tab !== 'overview'"
+			class="min-h-0 flex-1 overflow-auto pb-4 transition-opacity"
+			:class="loading ? 'opacity-60' : ''"
+		>
+			<div v-if="!tabData && loading" class="grid h-40 place-items-center">
+				<Spinner class="h-5 w-5" />
+			</div>
+			<template v-else-if="tabData">
+				<StatTiles :stats="tabData.stats" dense />
+				<div class="grid gap-3 px-4 lg:grid-cols-2">
+					<section
+						v-for="section in tabData.sections"
+						:key="section.key"
+						class="flex min-w-0 flex-col overflow-hidden rounded-lg border border-outline-gray-2 bg-surface-white"
+					>
+						<header class="border-b border-outline-gray-2 px-3 py-2">
+							<h2 class="text-p-sm font-semibold text-ink-gray-8">{{ section.title }}</h2>
+							<p v-if="section.subtitle" class="truncate text-p-xs text-ink-gray-5">
+								{{ section.subtitle }}
+							</p>
+						</header>
+						<div class="max-h-[320px] overflow-auto">
+							<DataTable
+								:columns="section.columns"
+								:rows="section.rows"
+								empty-text="Nothing in this period."
+							/>
+						</div>
+					</section>
+				</div>
+			</template>
+			<div v-else class="grid h-40 place-items-center px-6 text-center">
+				<p class="text-p-sm text-ink-gray-5">Could not load this tab.</p>
+			</div>
+		</div>
+
+		<div v-else-if="!data && loading" class="grid flex-1 place-items-center">
 			<Spinner class="h-5 w-5" />
 		</div>
 

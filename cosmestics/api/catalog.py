@@ -66,6 +66,7 @@ def get_catalog():
 		"categories": _categories(rows),
 		"warehouses": _warehouses(warehouse),
 		"neighbours": _neighbours(),
+		"sourcing": _sourcing_status(),
 		"price_list": price_list,
 		"warehouse": warehouse,
 		"empty": False,
@@ -158,3 +159,33 @@ def _neighbours() -> list:
 		fields=["name", "mobile_no"],
 	)
 	return [{"name": r.name, "phone": r.mobile_no} for r in rows]
+
+
+def _sourcing_status() -> dict:
+	"""Why buying from a neighbour is or is not available.
+
+	An empty neighbour list and a feature that was never configured look
+	identical at the till — the button is simply dead either way. This says
+	which it is, because "no shops are set up in the Neighbour Shop group" is
+	something a manager can act on and a blank panel is not.
+	"""
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	group = settings.neighbour_supplier_group
+
+	if not group:
+		return {
+			"available": False,
+			"reason": _("No neighbour supplier group is set in Cosmestics POS Settings."),
+		}
+
+	count = frappe.db.count("Supplier", {"supplier_group": group, "disabled": 0})
+	if not count:
+		return {
+			"available": False,
+			"group": group,
+			"reason": _(
+				"No shops in the {0} supplier group yet. Add the shops you buy from as Suppliers in that group."
+			).format(group),
+		}
+
+	return {"available": True, "group": group, "count": count}

@@ -172,6 +172,168 @@ File so the bridge can fetch it. The URL is unguessable but not
 access-controlled. That is the integration's design, not this app's, but it is a
 real consideration for customer invoices.
 
+### 10. Till fixes
+
+- **M-Pesa is three channels, not one.** Send Money, Paybill and Withdraw settle
+  into different accounts, so booking them all against one Mode of Payment left
+  the shift unable to reconcile. Three new fields in Cosmestics POS Settings,
+  each falling back to the generic M-Pesa mode when blank — a shop that has not
+  filled them in must still be able to sell. The till asks "how did it come in?"
+  only after M-Pesa is chosen, because that is the order the cashier knows it in.
+- **Receipts.** `pos.receipt_url` renders through ERPNext's print engine, so the
+  receipt carries the letterhead and tax lines and matches what the desk prints.
+  The button appears after a sale and names the invoice.
+- **Stock count on item cards.** The dot said "low" but never how low.
+- **Shift, branch and warehouse in the header**, from `session.context()`. The
+  warehouse resolution deliberately mirrors `submit_sale`, and `smoke.py` asserts
+  the two agree — a header claiming one warehouse while the sale draws from
+  another is worse than showing nothing.
+- **Tenders come from the server** (`pos.get_payment_methods`). A shop with no
+  card machine was previously offered a Card button that threw when pressed.
+
+### 11. Buy from neighbour — a setup gap, not a code bug
+
+The `Neighbour Shop` supplier group exists on this site but contains **zero
+suppliers**, so the till had nothing to offer and the feature looked dead.
+`catalog` now returns a `sourcing` block saying which of the two it is
+(unconfigured vs. configured-but-empty), and `smoke.py` asserts that block
+agrees with the neighbour list. **To actually enable it: add the shops you buy
+from as Suppliers in the `Neighbour Shop` group.**
+
+### 12. Dashboard tabs — `/dashboard`
+
+Overview (charts) plus five department tabs: **Sales** (filter by branch),
+**Branches**, **Warehouses** (filter by warehouse), **Procurement**,
+**Accounts**. The five all return `{stats, sections}` and share one renderer, so
+a sixth department is an endpoint and a tab entry, not another screen.
+
+**A branch is a POS Profile.** Every till sale already carries `pos_profile`, so
+this needs no new field on any document and cannot disagree with what the shift
+screens report. Sales with no profile are reported under "Not on a till" rather
+than dropped — off-till invoices are real revenue, and excluding them silently
+would make the branch totals disagree with the sales tab.
+
+Procurement answers the "where do material requests go" question: the requests
+section carries a **Goes to** column (`set_warehouse`), and the
+received-but-not-billed section surfaces payables that are otherwise invisible.
+
+### 13. Master data quick-add — the "New" button in the header
+
+`api/master.py` covers Customer, Supplier, Item, Warehouse and Account. It is
+deliberately **not** a reimplementation of ERPNext's forms: each type exposes the
+fields a shop actually fills in, everything else is left to ERPNext's defaults,
+and the confirmation links to the desk for the rest. A partial form that gets
+finished beats a complete one nobody does, and it cannot drift.
+
+As in `documents.py`, the registry key is the boundary — no caller-supplied
+string becomes a doctype name. Link options are fetched per field so each
+dropdown is scoped to what that field can hold; a generic "search any doctype"
+endpoint would be a way to read any table in the system.
+
+Smoke asserts every declared field exists on its DocType, and that a supplier
+created in the neighbour group actually reaches the till.
+
+### 14. Recent sales at the till
+
+`pos.recent_sales` plus a sheet on the till. Defaults to this cashier's own
+sales — "did that go through?" is almost always about the sale just rung up, and
+everyone else's invoices bury it. Tapping a row reprints its receipt.
+
+### 15. An intermittent checkout failure, and how to see it coming
+
+One smoke run failed inside `submit_sale` with:
+
+    'SalesInvoice' object has no attribute 'posa_delivery_charges'
+
+Nothing in this app was wrong. posawesome reads that custom field on every Sales
+Invoice, and the field existed in the database while the **cached DocType meta**
+did not yet contain it — so the controller's attribute access died on submit,
+after the customer had paid. A later run passed.
+
+`smoke.py::_custom_fields_visible` now compares declared Custom Fields against
+the cached meta for the sales doctypes, so this shows up as a named failure
+instead of a mystery at the counter. **The fix when it happens is
+`bench --site <site> clear-cache`.** This is the most likely explanation for the
+reported "error when I complete the sale".
+
+### 16. The M-Pesa channels are real Modes of Payment
+
+`M-Pesa Send Money`, `M-Pesa Paybill` and `M-Pesa Withdraw` are now created by
+the installer as separate Mode of Payment records, each mapped to a company
+account and added to every POS Profile's payment methods. Three settings fields
+point at them, so a shop can retarget any channel at an account it already
+reconciles against.
+
+They are separate records, not three labels on one, because a shift that cannot
+tell them apart cannot be reconciled — the money is in three different places
+and the closing entry would see one number. The opening-float screen now lists
+each channel, deduplicated, so a cashier is never asked to count the same drawer
+twice.
+
+`after_migrate` runs `setup_prerequisites()`, so existing sites get them on the
+next `bench migrate` — no patch needed.
+
+**One thing to finish by hand:** all three are mapped to the company's default
+bank account, because that is the only safe automatic choice. Point each at its
+own account (the till wallet, the paybill account, the agent float) and the
+shift will reconcile them separately, which is the whole point of splitting
+them.
+
+### 17. Buying from a neighbour can no longer fail
+
+Two changes, because the old behaviour refused the purchase — and therefore the
+sale — when the shop next door was not already a Supplier:
+
+- The installer seeds one real neighbour (`Neighbour Shop (Walk-in)`) so the
+  list is never empty, but only when the group has no suppliers of its own.
+- `sourcing._ensure_supplier` now **creates** an unknown shop in the neighbour
+  group instead of throwing. The customer is at the counter and the goods have
+  already changed hands; refusing because nobody filled in a master list
+  beforehand blocks a sale that has, in every practical sense, happened. The
+  list fills itself in as the shop actually trades.
+
+### 18. The shift chip updates when the shift does
+
+The header loaded the till context once on mount, so opening a shift left it
+reading "No shift" until a reload. It now comes from `stores/till.js`, which the
+till screen refreshes after opening or closing — the two components that care
+are not related, so shared state was the fix rather than prop-drilling. A failed
+refresh deliberately leaves the last known value on screen rather than blanking
+the chip.
+
+### 19. Creating documents in the app
+
+Sales Order, Purchase Order and Material Request can now be raised with their
+lines, saved as a draft or submitted. It runs off the same registry as
+everything else: a type becomes creatable by gaining a `create` block describing
+its header and its lines, and `components/DocumentFormSheet.vue` renders
+whatever the server declares. **Nothing about any specific doctype is written in
+the front end** — making a fourth type creatable is a registry entry and no
+change to any Vue file.
+
+Decisions worth keeping:
+
+- **Rate is left blank by default.** The server runs ERPNext's own
+  `set_missing_values`, so a line prices itself from the price list. Typing a
+  rate overrides that — which is what you want when a supplier quotes something
+  different, and not what you want by accident.
+- **Draft is the primary button, submit is secondary.** Submitting is the
+  irreversible one; a purchase order raised in a hurry is usually worth a second
+  look before it reaches the supplier.
+- **Material Request lines inherit the destination and date from the header.**
+  ERPNext validates both per row, but asking twice on a form this small is
+  noise. `line_from_header` in the registry expresses that, and smoke asserts
+  the inheritance actually lands on the line.
+- Only fieldnames the form declared are copied onto the document, so a value the
+  browser was never offered cannot be smuggled in. Link options are scoped to
+  the field being filled, as in `master.py`.
+
+Smoke creates all three for real, reads them back, and checks the lines survived
+and were priced. It does **not** assert a rate on Material Request lines: a
+request asks for stock to be moved or bought and carries no rate, so asserting
+one would be testing a fact about ERPNext that is not true. (It did, at first,
+and failed — which is the check working.)
+
 ## Conventions already established
 
 - Colour rules live in `frontend/src/utils/tone.js` — extend, don't duplicate.
@@ -196,7 +358,7 @@ real consideration for customer invoices.
 
     bench --site <site> execute cosmestics.setup.smoke.run
 
-Rolls back, safe against a live site. Currently 164/164. Add checks there for
+Rolls back, safe against a live site. Currently 251/251. Add checks there for
 anything new rather than testing by hand — three separate bugs reached the
 browser because a test exercised a narrower path than the UI does.
 

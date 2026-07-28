@@ -112,8 +112,13 @@ def _default_balances(pos_profile):
 		"POS Payment Method", filters={"parent": pos_profile}, pluck="mode_of_payment"
 	)
 	if not modes:
+		from cosmestics.api.pos import _mode_map
+
 		settings = frappe.get_cached_doc("Cosmestics POS Settings")
-		modes = [m for m in (settings.mode_cash, settings.mode_mpesa, settings.mode_card) if m]
+		# Deduplicated: the M-Pesa channels fall back to the generic mode on a
+		# site that has not split them out, and asking a cashier to count the
+		# same drawer three times is worse than not asking at all.
+		modes = list(dict.fromkeys(m for m in _mode_map(settings).values() if m))
 	return [{"mode_of_payment": m, "opening_amount": 0} for m in modes]
 
 

@@ -15,7 +15,19 @@ import frappe
 from frappe import _
 
 NEIGHBOUR_GROUP = "Neighbour Shop"
+DEFAULT_NEIGHBOUR = "Neighbour Shop (Walk-in)"
 MPESA_MODE = "M-Pesa"
+
+# M-Pesa reaches a Kenyan shop three ways, and each one settles differently: a
+# Send Money lands in the till's own wallet, a Paybill in the business account,
+# and an agent Withdraw takes cash *out* of the drawer. They are three Modes of
+# Payment rather than three labels on one, because a shift that cannot tell them
+# apart cannot be reconciled against what is actually in each account.
+MPESA_CHANNELS = (
+	("mode_mpesa_send", "M-Pesa Send Money"),
+	("mode_mpesa_paybill", "M-Pesa Paybill"),
+	("mode_mpesa_withdraw", "M-Pesa Withdraw"),
+)
 
 
 def after_install():
@@ -34,10 +46,13 @@ def after_migrate():
 
 def setup_prerequisites():
 	group = ensure_neighbour_supplier_group()
+	ensure_default_neighbour(group)
 	ensure_mpesa_mode_of_payment()
+	ensure_mpesa_channel_modes()
 	apply_settings_defaults(group)
-	# Must run after the settings map the till's three buttons onto real modes.
+	# Must run after the settings map the till's buttons onto real modes.
 	ensure_mode_of_payment_accounts()
+	ensure_pos_profile_payment_methods()
 	ensure_pos_settings()
 	ensure_partial_payment_allowed()
 
@@ -87,7 +102,8 @@ def ensure_mode_of_payment_accounts():
 		return
 
 	settings = frappe.get_single("Cosmestics POS Settings")
-	modes = [m for m in (settings.mode_cash, settings.mode_mpesa, settings.mode_card) if m]
+	fields = ["mode_cash", "mode_mpesa", "mode_card", *[f for f, _label in MPESA_CHANNELS]]
+	modes = {settings.get(f) for f in fields if settings.get(f)}
 
 	for mode in modes:
 		_ensure_mode_account(mode, company)
@@ -145,6 +161,69 @@ def ensure_mpesa_mode_of_payment() -> str | None:
 	return doc.name
 
 
+def ensure_mpesa_channel_modes() -> list:
+	"""Create a Mode of Payment per M-Pesa channel.
+
+	All "Bank" type, like the generic M-Pesa mode: that is accurate for mobile
+	money and it stops ERPNext offering change on them, since change is only
+	computed for Cash-type rows.
+
+	Withdraw is the odd one — an agent withdrawal hands physical cash across the
+	counter — but it is still money moving through the M-Pesa float rather than
+	through the drawer's own takings, so it is tracked with the other two and
+	against its own account.
+	"""
+	if not frappe.db.exists("DocType", "Mode of Payment"):
+		return []
+
+	created = []
+	for _field, label in MPESA_CHANNELS:
+		if frappe.db.exists("Mode of Payment", label):
+			continue
+		doc = frappe.new_doc("Mode of Payment")
+		doc.mode_of_payment = label
+		doc.type = "Bank"
+		doc.enabled = 1
+		doc.insert(ignore_permissions=True)
+		created.append(doc.name)
+
+	return created
+
+
+def ensure_pos_profile_payment_methods():
+	"""Offer every till mode on the POS Profile.
+
+	The opening-float screen is seeded from the profile's payment methods, so a
+	channel missing here is a channel the cashier is never asked to count — and
+	its takings then land in the closing entry as an unexplained difference.
+	"""
+	if not frappe.db.exists("DocType", "POS Payment Method"):
+		return
+
+	settings = frappe.get_single("Cosmestics POS Settings")
+	fields = ["mode_cash", "mode_mpesa", "mode_card", *[f for f, _label in MPESA_CHANNELS]]
+	wanted = [settings.get(f) for f in fields if settings.get(f)]
+	if not wanted:
+		return
+
+	for name in frappe.get_all("POS Profile", filters={"disabled": 0}, pluck="name"):
+		profile = frappe.get_doc("POS Profile", name)
+		existing = {row.mode_of_payment for row in profile.payments}
+		missing = [m for m in wanted if m not in existing]
+		if not missing:
+			continue
+
+		for mode in missing:
+			profile.append("payments", {"mode_of_payment": mode, "default": 0})
+
+		# A profile with no default payment refuses to save, and one of ours may
+		# be the first row it has ever had.
+		if not any(row.default for row in profile.payments):
+			profile.payments[0].default = 1
+
+		profile.save(ignore_permissions=True)
+
+
 def ensure_neighbour_supplier_group() -> str | None:
 	"""Create the Supplier Group that neighbouring shops belong to.
 
@@ -166,6 +245,34 @@ def ensure_neighbour_supplier_group() -> str | None:
 	doc.is_group = 0
 	doc.insert(ignore_permissions=True)
 
+	return doc.name
+
+
+def ensure_default_neighbour(group: str | None) -> str | None:
+	"""One real Supplier to attribute a mid-sale purchase to.
+
+	The group on its own is not enough. A cashier who is out of stock with a
+	customer waiting has to pick *a supplier* — and if none exists, the purchase
+	is refused and the sale cannot complete. That is the worst possible moment to
+	discover a setup gap, so a generic shop is created up front and can be
+	renamed, or ignored once real neighbours are added.
+	"""
+	if not group or not frappe.db.exists("DocType", "Supplier"):
+		return None
+
+	if frappe.db.exists("Supplier", DEFAULT_NEIGHBOUR):
+		return DEFAULT_NEIGHBOUR
+
+	# Only seed when the group is genuinely empty: a shop that has already added
+	# its real neighbours does not want a placeholder appearing beside them.
+	if frappe.db.count("Supplier", {"supplier_group": group, "disabled": 0}):
+		return None
+
+	doc = frappe.new_doc("Supplier")
+	doc.supplier_name = DEFAULT_NEIGHBOUR
+	doc.supplier_group = group
+	doc.supplier_type = "Company"
+	doc.insert(ignore_permissions=True)
 	return doc.name
 
 
@@ -213,12 +320,14 @@ def apply_settings_defaults(group: str | None):
 			settings.default_source_warehouse = warehouse
 			dirty = True
 
-	# Map the till's three buttons onto real Modes of Payment. Configurable
-	# rather than hardcoded so a shop can point "Card" at its own acquirer.
+	# Map the till's buttons onto real Modes of Payment. Configurable rather than
+	# hardcoded so a shop can point "Card" at its own acquirer, or aim a channel
+	# at an account it already reconciles against.
 	for field, mode in (
 		("mode_cash", "Cash"),
 		("mode_mpesa", MPESA_MODE),
 		("mode_card", "Credit Card"),
+		*MPESA_CHANNELS,
 	):
 		if not settings.get(field) and frappe.db.exists("Mode of Payment", mode):
 			settings.set(field, mode)

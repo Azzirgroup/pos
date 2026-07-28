@@ -34,6 +34,13 @@ export function submitSale({ items, payment, customer }) {
 /** Whole sellable catalog in one call; searched locally thereafter. */
 export const getCatalog = () => call('cosmestics.api.catalog.get_catalog')
 
+/** Tenders this till accepts, and the M-Pesa channels behind the M-Pesa button. */
+export const getPaymentMethods = () => call('cosmestics.api.pos.get_payment_methods')
+
+/** Printable receipt for a completed sale. */
+export const getReceiptUrl = ({ invoice, printFormat } = {}) =>
+	call('cosmestics.api.pos.receipt_url', { invoice, print_format: printFormat || null })
+
 /* ---------- shift ---------- */
 
 export const getProfiles = () => call('cosmestics.api.shift.get_profiles')
@@ -177,6 +184,22 @@ export const sendDocumentWhatsapp = ({ key, name, to, sender, asPdf }) =>
 
 export const getWhatsappSenders = () => call('cosmestics.api.documents.whatsapp_senders')
 
+/* creating */
+
+export const getDocumentForm = ({ key }) =>
+	call('cosmestics.api.documents.new_document_form', { key })
+
+export const getDocumentLinkOptions = ({ key, fieldname, search }) =>
+	call('cosmestics.api.documents.link_options', { key, fieldname, search: search || null })
+
+export const createDocument = ({ key, values, items, submit }) =>
+	call('cosmestics.api.documents.create_document', {
+		key,
+		values,
+		items,
+		submit: submit ? 1 : 0,
+	})
+
 export const getDocumentInsights = ({ key, days }) =>
 	call('cosmestics.api.documents.insights', { key, days })
 
@@ -200,6 +223,37 @@ export const generateBarcodes = ({ itemCodes, skipExisting } = {}) =>
 export const getDashboard = ({ days } = {}) =>
 	call('cosmestics.api.dashboard.overview', { days: days || 30 })
 
+export const getDashboardFilters = () => call('cosmestics.api.dashboard.filters')
+
+/**
+ * The tabbed dashboards. All five return {stats, sections}, so one component
+ * renders them all — the tab only decides which endpoint and which filter.
+ */
+export const getDashboardTab = ({ tab, days, branch, warehouse }) =>
+	call(`cosmestics.api.dashboard.${tab}`, {
+		days: days || 30,
+		...(branch ? { branch } : {}),
+		...(warehouse ? { warehouse } : {}),
+	})
+
+/* ---------- master data ---------- */
+
+export const listMasterTypes = () => call('cosmestics.api.master.list_types')
+
+export const getMasterOptions = ({ key, fieldname, search }) =>
+	call('cosmestics.api.master.options', { key, fieldname, search: search || null })
+
+export const createMaster = ({ key, values }) =>
+	call('cosmestics.api.master.create', { key, values })
+
+/* ---------- recent sales ---------- */
+
+export const getRecentSales = ({ limit, mine } = {}) =>
+	call('cosmestics.api.pos.recent_sales', { limit: limit || 20, mine: mine === false ? 0 : 1 })
+
 /* ---------- session ---------- */
 
 export const getMe = () => call('cosmestics.api.session.me')
+
+/** Which till, shop and warehouse this session is selling from. */
+export const getTillContext = () => call('cosmestics.api.session.context')

@@ -11,7 +11,7 @@ and the submit fails on negative stock.
 
 import frappe
 from frappe import _
-from frappe.utils import flt, nowdate, nowtime
+from frappe.utils import cint, flt, nowdate, nowtime
 
 WALK_IN_CUSTOMER = "Walk-in Customer"
 
@@ -256,13 +256,31 @@ def _validate_partial(si, customer, total, paid):
 		)
 
 
-def _mode_of_payment(method, settings) -> str:
-	mapping = {
+def _mode_map(settings) -> dict:
+	"""Till method key -> Mode of Payment.
+
+	M-Pesa arrives three ways in a Kenyan shop — sent to a phone number, paid to
+	a paybill, or handed over the agent counter as a withdrawal — and they settle
+	into different accounts, so they cannot all book against one Mode of Payment
+	if the shift is to reconcile.
+
+	Each channel falls back to the generic M-Pesa mode when it has not been
+	configured separately. That fallback is deliberate: a shop that has not filled
+	the new fields in yet must still be able to sell.
+	"""
+	mpesa = settings.mode_mpesa
+	return {
 		"cash": settings.mode_cash,
-		"mpesa": settings.mode_mpesa,
+		"mpesa": mpesa,
+		"mpesa_send": settings.get("mode_mpesa_send") or mpesa,
+		"mpesa_paybill": settings.get("mode_mpesa_paybill") or mpesa,
+		"mpesa_withdraw": settings.get("mode_mpesa_withdraw") or mpesa,
 		"card": settings.mode_card,
 	}
-	mode = mapping.get(method)
+
+
+def _mode_of_payment(method, settings) -> str:
+	mode = _mode_map(settings).get(method)
 	if not mode:
 		frappe.throw(
 			_("No Mode of Payment mapped for {0}. Set it in Cosmestics POS Settings.").format(
@@ -270,6 +288,129 @@ def _mode_of_payment(method, settings) -> str:
 			)
 		)
 	return mode
+
+
+# Order is the order they are offered at the till. `kind` drives the input the
+# cashier gets: cash needs a tendered amount, mobile and card need a reference,
+# credit needs a customer.
+TENDERS = [
+	{"key": "cash", "label": "Cash", "kind": "cash", "icon": "banknote"},
+	{"key": "mpesa_send", "label": "Send Money", "kind": "mobile", "icon": "smartphone"},
+	{"key": "mpesa_paybill", "label": "Paybill", "kind": "mobile", "icon": "building"},
+	{"key": "mpesa_withdraw", "label": "Withdraw", "kind": "mobile", "icon": "hand-coins"},
+	{"key": "card", "label": "Card", "kind": "card", "icon": "credit-card"},
+]
+
+
+@frappe.whitelist()
+def get_payment_methods() -> dict:
+	"""The tenders this till can actually accept.
+
+	Driven by what is configured rather than hard-coded in the browser: a shop
+	with no card machine should not be offered a Card button that throws when
+	pressed, which is exactly what a fixed list in the front end produces.
+	"""
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	modes = _mode_map(settings)
+
+	methods = [
+		{**tender, "mode_of_payment": modes.get(tender["key"])}
+		for tender in TENDERS
+		if modes.get(tender["key"])
+	]
+
+	# The M-Pesa channels are grouped behind one button; the cashier picks the
+	# channel after choosing M-Pesa, which is how the transaction actually
+	# happens — you know it is M-Pesa before you know which kind.
+	mpesa = [m for m in methods if m["kind"] == "mobile"]
+
+	return {
+		"methods": methods,
+		"mpesa_channels": mpesa,
+		# True when the channels are all the same Mode of Payment, i.e. nobody has
+		# split them out yet. The till still offers them; they just all book alike.
+		"mpesa_split": len({m["mode_of_payment"] for m in mpesa}) > 1,
+	}
+
+
+@frappe.whitelist()
+def recent_sales(limit: int = 20, mine: int = 1) -> dict:
+	"""The last few sales, for reprinting and for answering "did that go through?".
+
+	Defaults to this cashier's own sales: at a counter the question is almost
+	always about the sale just rung up, and a list of everyone's invoices buries
+	it. Windowed on `creation`, not `posting_date`, because posting_date is a
+	date and cannot order two sales on the same day.
+	"""
+	filters = {"docstatus": 1}
+	if cint(mine):
+		filters["owner"] = frappe.session.user
+
+	company = frappe.defaults.get_user_default("Company")
+	if company:
+		filters["company"] = company
+
+	rows = frappe.get_all(
+		"Sales Invoice",
+		filters=filters,
+		fields=[
+			"name",
+			"customer",
+			"posting_date",
+			"creation",
+			"grand_total",
+			"outstanding_amount",
+			"is_pos",
+			"status",
+		],
+		order_by="creation desc",
+		limit_page_length=min(max(cint(limit) or 20, 1), 100),
+	)
+
+	return {
+		"rows": rows,
+		"totals": {
+			"count": len(rows),
+			"revenue": sum(flt(r.grand_total) for r in rows),
+			"outstanding": sum(flt(r.outstanding_amount) for r in rows),
+		},
+		"mine": bool(cint(mine)),
+	}
+
+
+@frappe.whitelist()
+def receipt_url(invoice: str, print_format: str | None = None) -> dict:
+	"""A printable receipt for a completed sale.
+
+	Rendered by ERPNext's own print engine rather than drawn in the browser, so
+	the receipt carries the shop's letterhead and tax lines and matches what the
+	desk would print for the same invoice.
+	"""
+	if not frappe.db.exists("Sales Invoice", invoice):
+		frappe.throw(_("{0} not found").format(invoice), frappe.DoesNotExistError)
+	frappe.get_doc("Sales Invoice", invoice).check_permission("read")
+
+	from frappe.utils import get_url, quoted
+
+	params = [
+		f"doctype={quoted('Sales Invoice')}",
+		f"name={quoted(invoice)}",
+		"trigger_print=1",
+		"no_letterhead=0",
+	]
+	if print_format:
+		params.append(f"format={quoted(print_format)}")
+
+	return {
+		"invoice": invoice,
+		"url": get_url("/printview?" + "&".join(params)),
+		"formats": frappe.get_all(
+			"Print Format",
+			filters={"doc_type": "Sales Invoice", "disabled": 0},
+			pluck="name",
+			order_by="name asc",
+		),
+	}
 
 
 def _payment_account(mode, company) -> str | None:

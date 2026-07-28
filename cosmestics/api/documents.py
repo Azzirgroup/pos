@@ -89,6 +89,35 @@ DOCUMENTS = [
 		"reports": ["sales_summary", "payment_modes", "cashier_sales"],
 	},
 	{
+		"key": "sales-order",
+		"doctype": "Sales Order",
+		"group": "Sales",
+		"icon": "clipboard",
+		"date_field": "transaction_date",
+		"party_field": "customer",
+		"party_doctype": "Customer",
+		"amount_field": "grand_total",
+		"columns": ["name", "transaction_date", "customer", "status", "per_delivered", "per_billed", "grand_total"],
+		"detail": ["delivery_date", "company"],
+		"tables": [
+			("items", ["item_code", "item_name", "delivery_date", "qty", "delivered_qty", "uom", "rate", "amount", "warehouse"]),
+		],
+		"reports": ["sales_summary", "top_items", "receivables"],
+		"create": {
+			"fields": [
+				{"fieldname": "customer", "label": "Customer", "type": "link", "options": "Customer", "required": True},
+				{"fieldname": "transaction_date", "label": "Date", "type": "date", "default": "today", "required": True},
+				{"fieldname": "delivery_date", "label": "Deliver by", "type": "date", "default": "week", "required": True},
+			],
+			"items": [
+				{"fieldname": "item_code", "label": "Item", "type": "item", "required": True},
+				{"fieldname": "qty", "label": "Qty", "type": "number", "required": True, "default": 1},
+				{"fieldname": "rate", "label": "Rate", "type": "currency"},
+				{"fieldname": "warehouse", "label": "From", "type": "link", "options": "Warehouse"},
+			],
+		},
+	},
+	{
 		"key": "payment-entry",
 		"doctype": "Payment Entry",
 		"group": "Sales",
@@ -141,6 +170,51 @@ DOCUMENTS = [
 			("items", ["item_code", "item_name", "schedule_date", "qty", "received_qty", "uom", "rate", "amount"]),
 		],
 		"reports": ["payables", "below_reorder"],
+		"create": {
+			"fields": [
+				{"fieldname": "supplier", "label": "Supplier", "type": "link", "options": "Supplier", "required": True},
+				{"fieldname": "transaction_date", "label": "Date", "type": "date", "default": "today", "required": True},
+				{"fieldname": "schedule_date", "label": "Needed by", "type": "date", "default": "week", "required": True},
+			],
+			"items": [
+				{"fieldname": "item_code", "label": "Item", "type": "item", "required": True},
+				{"fieldname": "qty", "label": "Qty", "type": "number", "required": True, "default": 1},
+				{"fieldname": "rate", "label": "Rate", "type": "currency"},
+				{"fieldname": "warehouse", "label": "Into", "type": "link", "options": "Warehouse"},
+			],
+		},
+	},
+	{
+		"key": "purchase-receipt",
+		"doctype": "Purchase Receipt",
+		"group": "Purchasing",
+		"icon": "package",
+		"date_field": "posting_date",
+		"party_field": "supplier",
+		"party_doctype": "Supplier",
+		"amount_field": "grand_total",
+		"columns": ["name", "posting_date", "supplier", "status", "per_billed", "grand_total"],
+		"detail": ["set_warehouse", "company"],
+		"tables": [
+			("items", ["item_code", "item_name", "qty", "received_qty", "rejected_qty", "uom", "rate", "amount", "warehouse"]),
+		],
+		"reports": ["stock_movement", "payables"],
+	},
+	{
+		"key": "landed-cost-voucher",
+		"doctype": "Landed Cost Voucher",
+		"group": "Purchasing",
+		"icon": "truck",
+		"date_field": "posting_date",
+		"amount_field": "total_taxes_and_charges",
+		"columns": ["name", "posting_date", "distribute_charges_based_on", "total_taxes_and_charges"],
+		"detail": ["company"],
+		"tables": [
+			("purchase_receipts", ["receipt_document_type", "receipt_document", "supplier", "grand_total"]),
+			("items", ["item_code", "receipt_document", "qty", "rate", "amount", "applicable_charges"]),
+			("taxes", ["expense_account", "description", "amount"]),
+		],
+		"reports": ["stock_balance", "payables"],
 	},
 	{
 		"key": "material-request",
@@ -154,6 +228,34 @@ DOCUMENTS = [
 			("items", ["item_code", "item_name", "schedule_date", "qty", "ordered_qty", "uom", "warehouse"]),
 		],
 		"reports": ["below_reorder", "stock_balance"],
+		"create": {
+			"fields": [
+				{
+					"fieldname": "material_request_type",
+					"label": "Type",
+					"type": "select",
+					"options": ["Purchase", "Material Transfer", "Material Issue", "Manufacture"],
+					"default": "Purchase",
+					"required": True,
+				},
+				{"fieldname": "transaction_date", "label": "Date", "type": "date", "default": "today", "required": True},
+				{"fieldname": "schedule_date", "label": "Needed by", "type": "date", "default": "week", "required": True},
+				{
+					"fieldname": "set_warehouse",
+					"label": "Goes to",
+					"type": "link",
+					"options": "Warehouse",
+					"required": True,
+				},
+			],
+			"items": [
+				{"fieldname": "item_code", "label": "Item", "type": "item", "required": True},
+				{"fieldname": "qty", "label": "Qty", "type": "number", "required": True, "default": 1},
+			],
+			# Every line needs a warehouse and a date of its own; ERPNext validates
+			# them per row, and asking for them twice on a form this small is noise.
+			"line_from_header": {"warehouse": "set_warehouse", "schedule_date": "schedule_date"},
+		},
 	},
 	{
 		"key": "stock-entry",
@@ -338,6 +440,9 @@ def list_types() -> list:
 				"reports": d["reports"],
 				"has_party": bool(d.get("party_field")),
 				"party_label": _(d["party_field"]).title() if d.get("party_field") else None,
+				# Only offered when the type declares a form *and* this user may
+				# create it: a "New" button that throws on save is worse than none.
+				"creatable": bool(d.get("create")) and frappe.has_permission(d["doctype"], "create"),
 			}
 		)
 	return out
@@ -576,6 +681,194 @@ def _party_mobile(entry: dict, doc) -> str | None:
 			if value:
 				return value
 	return doc.get("contact_mobile") or None
+
+
+# --------------------------------------------------------------------------
+# Creating
+#
+# The same registry drives creation. A document type becomes creatable by
+# gaining a `create` block describing its header and its lines — there is no
+# per-doctype endpoint, and no form logic in the browser that could disagree
+# with what the server will accept.
+# --------------------------------------------------------------------------
+
+
+def _create_spec(entry: dict) -> dict:
+	spec = entry.get("create")
+	if not spec:
+		frappe.throw(_("{0} cannot be created from here yet").format(_(entry["doctype"])))
+	return spec
+
+
+def _default_value(default):
+	"""Dates a shop actually wants: today, or the end of the week for a promise."""
+	if default == "today":
+		return nowdate()
+	if default == "week":
+		return add_days(nowdate(), 7)
+	return default
+
+
+@frappe.whitelist()
+def new_document_form(key: str) -> dict:
+	"""The form for one creatable document type, with its defaults filled in."""
+	entry = _entry(key)
+	spec = _create_spec(entry)
+	doctype = entry["doctype"]
+
+	if not frappe.has_permission(doctype, "create"):
+		frappe.throw(_("You may not create {0}").format(_(doctype)), frappe.PermissionError)
+
+	def prepare(field):
+		out = {**field}
+		if "default" in out:
+			out["default"] = _default_value(out["default"])
+		return out
+
+	return {
+		"key": key,
+		"doctype": doctype,
+		"label": _(doctype),
+		"fields": [prepare(f) for f in spec["fields"]],
+		"items": [prepare(f) for f in spec["items"]],
+		"can_submit": frappe.has_permission(doctype, "submit")
+		and bool(frappe.get_meta(doctype).is_submittable),
+	}
+
+
+@frappe.whitelist()
+def link_options(key: str, fieldname: str, search: str | None = None, limit: int = 20) -> list:
+	"""Values for one link field on one create form.
+
+	Scoped to the field being filled, exactly as `master.options` is: a generic
+	"search any doctype" endpoint would be a way to read any table in the system
+	through a whitelisted method.
+	"""
+	entry = _entry(key)
+	spec = _create_spec(entry)
+
+	field = next(
+		(f for f in [*spec["fields"], *spec["items"]] if f["fieldname"] == fieldname), None
+	)
+	if not field or field["type"] not in ("link", "item"):
+		frappe.throw(_("{0} is not a link field on this form").format(fieldname))
+
+	target = "Item" if field["type"] == "item" else field["options"]
+	filters = {}
+	meta = frappe.get_meta(target)
+	if meta.has_field("disabled"):
+		filters["disabled"] = 0
+	if meta.has_field("is_group"):
+		filters["is_group"] = 0
+	if target == "Item":
+		filters["is_stock_item"] = 1
+
+	company = _company()
+	if meta.has_field("company") and company:
+		filters["company"] = company
+
+	limit = min(max(cint(limit) or 20, 1), 50)
+
+	if target == "Item":
+		# Searched on both code and name: staff know a product by one or the other,
+		# rarely by whichever the record happens to be named after.
+		or_filters = (
+			{"item_code": ("like", f"%{search}%"), "item_name": ("like", f"%{search}%")}
+			if search
+			else None
+		)
+		rows = frappe.get_all(
+			"Item",
+			filters=filters,
+			or_filters=or_filters,
+			fields=["name", "item_name", "stock_uom"],
+			order_by="item_name asc",
+			limit_page_length=limit,
+		)
+		return [
+			{"label": f"{r.item_name} · {r.name}", "value": r.name, "uom": r.stock_uom} for r in rows
+		]
+
+	if search:
+		filters["name"] = ("like", f"%{search}%")
+
+	return [
+		{"label": r, "value": r}
+		for r in frappe.get_all(
+			target, filters=filters, pluck="name", order_by="name asc", limit_page_length=limit
+		)
+	]
+
+
+@frappe.whitelist(methods=["POST"])
+def create_document(key: str, values: dict | str, items: list | str, submit: int = 0) -> dict:
+	"""Create one document with its lines.
+
+	Built through `frappe.new_doc(...).insert()` with permissions intact, so
+	ERPNext's own validation, pricing and mandatory-field rules apply exactly as
+	they do in the desk. Only fieldnames the form declared are copied across, so
+	a value the browser was never offered cannot be smuggled onto the document.
+
+	Saved as a draft unless `submit` is set: a purchase order raised in a hurry
+	is usually worth a second look before it goes to the supplier.
+	"""
+	if isinstance(values, str):
+		values = frappe.parse_json(values)
+	if isinstance(items, str):
+		items = frappe.parse_json(items)
+	values = values or {}
+	items = items or []
+
+	entry = _entry(key)
+	spec = _create_spec(entry)
+	doctype = entry["doctype"]
+
+	missing = [f["label"] for f in spec["fields"] if f.get("required") and not values.get(f["fieldname"])]
+	if missing:
+		frappe.throw(_("Fill in: {0}").format(", ".join(missing)))
+
+	lines = [row for row in items if row.get("item_code") and flt(row.get("qty")) > 0]
+	if not lines:
+		frappe.throw(_("Add at least one line with a quantity above zero"))
+
+	doc = frappe.new_doc(doctype)
+	company = _company()
+	if company and _has(doctype, "company"):
+		doc.company = company
+
+	allowed = {f["fieldname"] for f in spec["fields"]}
+	for fieldname, value in values.items():
+		if fieldname in allowed and value not in (None, ""):
+			doc.set(fieldname, value)
+
+	line_fields = {f["fieldname"] for f in spec["items"]}
+	inherited = spec.get("line_from_header") or {}
+
+	for row in lines:
+		line = {f: row[f] for f in line_fields if row.get(f) not in (None, "")}
+		# Fields ERPNext validates per row but a small form should only ask once.
+		for line_field, header_field in inherited.items():
+			if values.get(header_field):
+				line.setdefault(line_field, values[header_field])
+		doc.append("items", line)
+
+	# Pulls prices, UOMs and the rest of what the desk would fill in for you.
+	if hasattr(doc, "set_missing_values"):
+		doc.set_missing_values()
+
+	doc.insert()
+	if cint(submit):
+		doc.submit()
+
+	return {
+		"key": key,
+		"doctype": doctype,
+		"name": doc.name,
+		"docstatus": cint(doc.docstatus),
+		"message": _("{0} created").format(doc.name)
+		if not cint(submit)
+		else _("{0} created and submitted").format(doc.name),
+	}
 
 
 # --------------------------------------------------------------------------
