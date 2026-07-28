@@ -1,0 +1,896 @@
+"""The transactional documents, through one generic set of endpoints.
+
+Eleven document types share one list, one detail payload and one set of row
+actions. A module per doctype would be eleven near-identical files, and the
+first bug fixed in ten of them would leave the eleventh quietly wrong — so the
+differences live in `DOCUMENTS` as data and the behaviour is written once.
+
+Labels and render types are read from the DocType itself rather than restated
+here: a field relabelled in the desk shows the new label on this screen without
+an edit. What the registry *does* carry is the editorial choice — which columns
+a shop manager wants to see, and in what order — because `in_list_view` on a
+core ERPNext doctype is tuned for the desk, not for this screen.
+
+Everything is permission-checked by Frappe in the normal way: documents are
+loaded with `frappe.get_doc` and actions run through the real `submit`/`cancel`
+lifecycle. This module never passes `ignore_permissions`. A caller reaches a
+doctype only by its registry key, so an arbitrary doctype name cannot travel
+from the browser into `get_doc`.
+"""
+
+import frappe
+from frappe import _
+from frappe.utils import add_days, cint, flt, get_url, nowdate, quoted
+
+DEFAULT_DAYS = 30
+MAX_LIMIT = 500
+
+# Fields worth a totals block, in the order a reader wants them. Only those the
+# doctype actually has, and only when non-zero, are returned.
+TOTAL_FIELDS = (
+	"total_qty",
+	"total_quantity",
+	"net_total",
+	"total_taxes_and_charges",
+	"grand_total",
+	"rounded_total",
+	"paid_amount",
+	"received_amount",
+	"total_allocated_amount",
+	"outstanding_amount",
+	"change_amount",
+	"total_incoming_value",
+	"total_outgoing_value",
+	"value_difference",
+	"difference_amount",
+)
+
+DOCUMENTS = [
+	{
+		"key": "sales-invoice",
+		"doctype": "Sales Invoice",
+		"group": "Sales",
+		"icon": "receipt",
+		"date_field": "posting_date",
+		"party_field": "customer",
+		"party_doctype": "Customer",
+		"amount_field": "grand_total",
+		"outstanding_field": "outstanding_amount",
+		"due_field": "due_date",
+		"columns": ["name", "posting_date", "customer", "status", "grand_total", "outstanding_amount"],
+		"detail": ["due_date", "is_pos", "pos_profile", "company", "remarks"],
+		"tables": [
+			("items", ["item_code", "item_name", "qty", "uom", "rate", "amount"]),
+			("payments", ["mode_of_payment", "amount"]),
+			("taxes", ["description", "rate", "tax_amount"]),
+		],
+		"reports": ["sales_summary", "top_items", "profit_margin", "payment_modes", "receivables"],
+	},
+	{
+		# ERPNext's own POS Invoice, used by sites running the offline till. This
+		# app posts Sales Invoices with `is_pos` set, so on a Cosmestics-only site
+		# this list is legitimately empty — the Channel column on Sales Invoice is
+		# where till sales show up.
+		"key": "pos-invoice",
+		"doctype": "POS Invoice",
+		"group": "Sales",
+		"icon": "cart",
+		"date_field": "posting_date",
+		"party_field": "customer",
+		"party_doctype": "Customer",
+		"amount_field": "grand_total",
+		"outstanding_field": "outstanding_amount",
+		"columns": ["name", "posting_date", "customer", "status", "grand_total", "outstanding_amount"],
+		"detail": ["pos_profile", "company"],
+		"tables": [
+			("items", ["item_code", "item_name", "qty", "uom", "rate", "amount"]),
+			("payments", ["mode_of_payment", "amount"]),
+		],
+		"reports": ["sales_summary", "payment_modes", "cashier_sales"],
+	},
+	{
+		"key": "payment-entry",
+		"doctype": "Payment Entry",
+		"group": "Sales",
+		"icon": "money",
+		"date_field": "posting_date",
+		"party_field": "party",
+		"amount_field": "paid_amount",
+		"columns": ["name", "posting_date", "payment_type", "party", "mode_of_payment", "paid_amount", "status"],
+		"detail": ["party_type", "party_name", "reference_no", "reference_date", "company"],
+		"tables": [
+			(
+				"references",
+				["reference_doctype", "reference_name", "due_date", "total_amount", "outstanding_amount", "allocated_amount"],
+			),
+			("deductions", ["account", "amount"]),
+		],
+		"reports": ["receivables", "payables"],
+	},
+	{
+		"key": "purchase-invoice",
+		"doctype": "Purchase Invoice",
+		"group": "Purchasing",
+		"icon": "receipt",
+		"date_field": "posting_date",
+		"party_field": "supplier",
+		"party_doctype": "Supplier",
+		"amount_field": "grand_total",
+		"outstanding_field": "outstanding_amount",
+		"due_field": "due_date",
+		"columns": ["name", "posting_date", "supplier", "status", "grand_total", "outstanding_amount"],
+		"detail": ["due_date", "bill_no", "bill_date", "company"],
+		"tables": [
+			("items", ["item_code", "item_name", "qty", "uom", "rate", "amount"]),
+			("taxes", ["description", "rate", "tax_amount"]),
+		],
+		"reports": ["payables"],
+	},
+	{
+		"key": "purchase-order",
+		"doctype": "Purchase Order",
+		"group": "Purchasing",
+		"icon": "truck",
+		"date_field": "transaction_date",
+		"party_field": "supplier",
+		"party_doctype": "Supplier",
+		"amount_field": "grand_total",
+		"columns": ["name", "transaction_date", "supplier", "status", "per_received", "per_billed", "grand_total"],
+		"detail": ["schedule_date", "company"],
+		"tables": [
+			("items", ["item_code", "item_name", "schedule_date", "qty", "received_qty", "uom", "rate", "amount"]),
+		],
+		"reports": ["payables", "below_reorder"],
+	},
+	{
+		"key": "material-request",
+		"doctype": "Material Request",
+		"group": "Purchasing",
+		"icon": "clipboard",
+		"date_field": "transaction_date",
+		"columns": ["name", "transaction_date", "material_request_type", "status", "per_ordered", "per_received"],
+		"detail": ["schedule_date", "set_warehouse", "company"],
+		"tables": [
+			("items", ["item_code", "item_name", "schedule_date", "qty", "ordered_qty", "uom", "warehouse"]),
+		],
+		"reports": ["below_reorder", "stock_balance"],
+	},
+	{
+		"key": "stock-entry",
+		"doctype": "Stock Entry",
+		"group": "Stock",
+		"icon": "boxes",
+		"date_field": "posting_date",
+		"amount_field": "total_amount",
+		"columns": ["name", "posting_date", "stock_entry_type", "from_warehouse", "to_warehouse", "total_amount"],
+		"detail": ["purpose", "company", "remarks"],
+		"tables": [
+			("items", ["item_code", "item_name", "s_warehouse", "t_warehouse", "qty", "uom", "basic_rate", "amount"]),
+		],
+		"reports": ["stock_movement", "stock_balance"],
+	},
+	{
+		"key": "stock-reconciliation",
+		"doctype": "Stock Reconciliation",
+		"group": "Stock",
+		"icon": "scale",
+		"date_field": "posting_date",
+		"amount_field": "difference_amount",
+		"columns": ["name", "posting_date", "purpose", "set_warehouse", "difference_amount"],
+		"detail": ["expense_account", "company"],
+		"tables": [
+			(
+				"items",
+				["item_code", "item_name", "warehouse", "current_qty", "qty", "current_valuation_rate", "valuation_rate", "amount"],
+			),
+		],
+		"reports": ["stock_balance", "stock_movement"],
+	},
+	{
+		"key": "delivery-note",
+		"doctype": "Delivery Note",
+		"group": "Stock",
+		"icon": "package",
+		"date_field": "posting_date",
+		"party_field": "customer",
+		"party_doctype": "Customer",
+		"amount_field": "grand_total",
+		"columns": ["name", "posting_date", "customer", "status", "per_billed", "grand_total"],
+		"detail": ["set_warehouse", "company"],
+		"tables": [
+			("items", ["item_code", "item_name", "qty", "uom", "rate", "amount", "warehouse"]),
+		],
+		"reports": ["stock_movement", "top_items"],
+	},
+	{
+		"key": "pos-opening",
+		"doctype": "POS Opening Entry",
+		"group": "Till",
+		"icon": "unlock",
+		"date_field": "period_start_date",
+		"columns": ["name", "period_start_date", "user", "pos_profile", "status"],
+		"detail": ["posting_date", "company"],
+		"tables": [("balance_details", ["mode_of_payment", "opening_amount"])],
+		"reports": ["shift_history", "cashier_sales"],
+	},
+	{
+		"key": "pos-closing",
+		"doctype": "POS Closing Entry",
+		"group": "Till",
+		"icon": "lock",
+		"date_field": "posting_date",
+		"amount_field": "grand_total",
+		"columns": ["name", "posting_date", "user", "pos_profile", "grand_total", "status"],
+		"detail": ["period_start_date", "period_end_date", "total_quantity", "net_total", "company"],
+		"tables": [
+			(
+				"payment_reconciliation",
+				["mode_of_payment", "opening_amount", "expected_amount", "closing_amount", "difference"],
+			),
+			("sales_invoices", ["sales_invoice", "posting_date", "customer", "grand_total"]),
+		],
+		"reports": ["shift_history", "cashier_sales", "payment_modes"],
+	},
+]
+
+
+# --------------------------------------------------------------------------
+# Registry helpers
+# --------------------------------------------------------------------------
+
+
+def _entry(key: str) -> dict:
+	"""Resolve a registry key, or refuse.
+
+	This is the security boundary of the module: only these eleven doctypes are
+	reachable, so no caller-supplied string ever becomes a doctype name.
+	"""
+	for d in DOCUMENTS:
+		if d["key"] == key:
+			return d
+	frappe.throw(_("Unknown document type: {0}").format(key), frappe.DoesNotExistError)
+
+
+_CURRENCY_TYPES = {"Currency"}
+_NUMBER_TYPES = {"Int", "Float", "Percent"}
+
+
+def _render_type(fieldtype: str) -> str:
+	if fieldtype in _CURRENCY_TYPES:
+		return "currency"
+	if fieldtype in _NUMBER_TYPES:
+		return "number"
+	return "text"
+
+
+def _column(doctype: str, fieldname: str) -> dict | None:
+	"""Column spec taken from the DocType, so labels never drift from the desk."""
+	if fieldname == "name":
+		return {"label": _("No."), "key": "name", "type": "text"}
+
+	df = frappe.get_meta(doctype).get_field(fieldname)
+	if not df:
+		return None
+	return {"label": _(df.label or fieldname), "key": fieldname, "type": _render_type(df.fieldtype)}
+
+
+def _columns(doctype: str, fieldnames: list) -> list:
+	return [c for c in (_column(doctype, f) for f in fieldnames) if c]
+
+
+def _company():
+	return frappe.defaults.get_global_default("company")
+
+
+def _window(days: int):
+	"""`days <= 0` means all time — a manager chasing one old invoice needs that."""
+	days = cint(days)
+	if days <= 0:
+		return None, None
+	return add_days(nowdate(), -days), nowdate()
+
+
+def _has(doctype: str, fieldname: str | None) -> bool:
+	return bool(fieldname) and frappe.get_meta(doctype).has_field(fieldname)
+
+
+DOCSTATUS_LABEL = {0: "Draft", 1: "Submitted", 2: "Cancelled"}
+
+
+def _statuses(doctype: str) -> list:
+	"""Status vocabulary for the filter.
+
+	Stock Entry and Stock Reconciliation have no status field at all, so their
+	only real states are the docstatus ones — showing an empty dropdown there
+	would imply a filter that cannot filter.
+	"""
+	df = frappe.get_meta(doctype).get_field("status")
+	if df and df.options:
+		return [s for s in df.options.split("\n") if s]
+	return list(DOCSTATUS_LABEL.values())
+
+
+# --------------------------------------------------------------------------
+# Reading
+# --------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def list_types() -> list:
+	"""The registry, minus anything this user may not read.
+
+	Filtered by permission rather than shown-and-then-failing: a cashier who
+	cannot open Purchase Invoices should not be given the tab.
+	"""
+	out = []
+	for d in DOCUMENTS:
+		if not frappe.db.exists("DocType", d["doctype"]):
+			continue
+		if not frappe.has_permission(d["doctype"], "read"):
+			continue
+		out.append(
+			{
+				"key": d["key"],
+				"doctype": d["doctype"],
+				"label": _(d["doctype"]),
+				"group": d["group"],
+				"icon": d["icon"],
+				"reports": d["reports"],
+				"has_party": bool(d.get("party_field")),
+				"party_label": _(d["party_field"]).title() if d.get("party_field") else None,
+			}
+		)
+	return out
+
+
+@frappe.whitelist()
+def list_documents(
+	key: str,
+	days: int = DEFAULT_DAYS,
+	status: str | None = None,
+	party: str | None = None,
+	search: str | None = None,
+	limit: int = 100,
+	start: int = 0,
+) -> dict:
+	"""One page of documents, with the columns the front end should render.
+
+	The columns travel with the rows so the table stays a single component: it
+	never needs to know which doctype it is showing.
+	"""
+	entry = _entry(key)
+	doctype = entry["doctype"]
+	limit = min(max(cint(limit) or 100, 1), MAX_LIMIT)
+
+	filters = {}
+	start_date, end_date = _window(days)
+	if start_date:
+		filters[entry["date_field"]] = ("between", [start_date, end_date])
+
+	company = _company()
+	if company and _has(doctype, "company"):
+		filters["company"] = company
+
+	if status:
+		if _has(doctype, "status"):
+			filters["status"] = status
+		else:
+			# No status field: the filter can still mean something via docstatus.
+			by_label = {v: k for k, v in DOCSTATUS_LABEL.items()}
+			if status in by_label:
+				filters["docstatus"] = by_label[status]
+
+	if party and entry.get("party_field"):
+		filters[entry["party_field"]] = ("like", f"%{party}%")
+
+	or_filters = {}
+	if search:
+		or_filters["name"] = ("like", f"%{search}%")
+		if entry.get("party_field"):
+			or_filters[entry["party_field"]] = ("like", f"%{search}%")
+
+	fields = ["name", "docstatus", "owner", "modified", entry["date_field"]]
+	if _has(doctype, "status"):
+		fields.append("status")
+	for f in entry["columns"]:
+		if f == "name" or _has(doctype, f):
+			fields.append(f)
+
+	rows = frappe.get_all(
+		doctype,
+		filters=filters,
+		or_filters=or_filters or None,
+		fields=list(dict.fromkeys(fields)),
+		order_by=f"{entry['date_field']} desc, creation desc",
+		limit_page_length=limit,
+		limit_start=cint(start),
+	)
+
+	# Documents with no status field still need a word in the Status column, or
+	# the reader cannot tell a draft from a posted one at a glance.
+	if not _has(doctype, "status"):
+		for r in rows:
+			r["status"] = DOCSTATUS_LABEL.get(cint(r.docstatus), "")
+
+	# Counted through the same filters — including the search — so "showing 100
+	# of 412" is a statement about the list on screen and not about the doctype.
+	# `frappe.db.count` cannot take or_filters, hence the aggregate here; the
+	# column comes back named after the function, so it is read positionally.
+	count_row = frappe.get_all(
+		doctype,
+		filters=filters,
+		or_filters=or_filters or None,
+		fields=[{"COUNT": "name"}],
+	)
+	total = cint(next(iter(count_row[0].values()))) if count_row else 0
+
+	columns = _columns(doctype, entry["columns"])
+	if not _has(doctype, "status") and not any(c["key"] == "status" for c in columns):
+		columns.append({"label": _("Status"), "key": "status", "type": "text"})
+
+	amount_field = entry.get("amount_field")
+	outstanding_field = entry.get("outstanding_field")
+	perms = _permissions(doctype)
+
+	return {
+		"key": key,
+		"doctype": doctype,
+		"columns": columns,
+		"rows": rows,
+		"total": total,
+		"statuses": _statuses(doctype),
+		"period": {"from": start_date, "to": end_date, "days": cint(days)},
+		"permissions": perms,
+		"submittable": bool(frappe.get_meta(doctype).is_submittable),
+		# Which row actions are live, keyed by docstatus. Sent as a lookup rather
+		# than per row (the answer only varies by docstatus) and rather than
+		# re-derived in the browser, so the list menu and the detail modal cannot
+		# come to different conclusions about what a user may do.
+		"actions_by_docstatus": {str(d): _actions_for(doctype, d, perms) for d in (0, 1, 2)},
+		"totals": {
+			"count": len(rows),
+			"amount": sum(flt(r.get(amount_field)) for r in rows) if amount_field else 0,
+			"outstanding": sum(flt(r.get(outstanding_field)) for r in rows) if outstanding_field else 0,
+		},
+	}
+
+
+def _permissions(doctype: str) -> dict:
+	return {
+		"submit": frappe.has_permission(doctype, "submit"),
+		"cancel": frappe.has_permission(doctype, "cancel"),
+		"create": frappe.has_permission(doctype, "create"),
+		"print": frappe.has_permission(doctype, "print"),
+	}
+
+
+def _actions_for(doctype: str, docstatus: int, perms: dict) -> list:
+	"""Which row actions are live for a document in this state.
+
+	Computed once per response rather than per row: the answer depends only on
+	docstatus, and a permission check per row across 500 rows is a lot of work
+	for an answer that repeats.
+	"""
+	submittable = frappe.get_meta(doctype).is_submittable
+	actions = ["print", "whatsapp"]
+	if perms["create"]:
+		actions.append("duplicate")
+	if submittable:
+		if docstatus == 0 and perms["submit"]:
+			actions.append("submit")
+		if docstatus == 1 and perms["cancel"]:
+			actions.append("cancel")
+		if docstatus == 2 and perms["create"]:
+			actions.append("amend")
+	return actions
+
+
+@frappe.whitelist()
+def get_document(key: str, name: str) -> dict:
+	"""Everything the detail modal shows: header, lines, totals and actions."""
+	entry = _entry(key)
+	doctype = entry["doctype"]
+	doc = frappe.get_doc(doctype, name)
+	doc.check_permission("read")
+
+	meta = frappe.get_meta(doctype)
+	header = []
+	for f in list(dict.fromkeys(entry["columns"] + entry.get("detail", []))):
+		if f == "name":
+			continue
+		col = _column(doctype, f)
+		if not col:
+			continue
+		value = doc.get(f)
+		if value in (None, ""):
+			continue
+		header.append({**col, "value": value})
+
+	tables = []
+	for fieldname, fields in entry.get("tables", []):
+		df = meta.get_field(fieldname)
+		if not df:
+			continue
+		child_rows = doc.get(fieldname) or []
+		if not child_rows:
+			continue
+		columns = _columns(df.options, [f for f in fields if frappe.get_meta(df.options).has_field(f)])
+		tables.append(
+			{
+				"fieldname": fieldname,
+				"label": _(df.label or fieldname),
+				"columns": columns,
+				"rows": [{c["key"]: row.get(c["key"]) for c in columns} for row in child_rows],
+			}
+		)
+
+	totals = []
+	for f in TOTAL_FIELDS:
+		if not meta.has_field(f):
+			continue
+		value = flt(doc.get(f))
+		if not value:
+			continue
+		totals.append({**_column(doctype, f), "value": value})
+
+	status = doc.get("status") if meta.has_field("status") else DOCSTATUS_LABEL.get(cint(doc.docstatus), "")
+	perms = _permissions(doctype)
+
+	return {
+		"key": key,
+		"doctype": doctype,
+		"name": doc.name,
+		"title": f"{_(doctype)} · {doc.name}",
+		"docstatus": cint(doc.docstatus),
+		"status": status,
+		"party": doc.get(entry["party_field"]) if entry.get("party_field") else None,
+		"date": doc.get(entry["date_field"]),
+		"header": header,
+		"tables": tables,
+		"totals": totals,
+		"actions": _actions_for(doctype, cint(doc.docstatus), perms),
+		"print_formats": _print_formats(doctype),
+		"whatsapp_to": _party_mobile(entry, doc),
+	}
+
+
+def _print_formats(doctype: str) -> list:
+	return frappe.get_all(
+		"Print Format",
+		filters={"doc_type": doctype, "disabled": 0},
+		pluck="name",
+		order_by="name asc",
+	)
+
+
+def _party_mobile(entry: dict, doc) -> str | None:
+	"""Best phone number to send this document to."""
+	party_doctype = entry.get("party_doctype")
+	party_field = entry.get("party_field")
+	if not party_doctype or not party_field or not doc.get(party_field):
+		return None
+
+	for field in ("mobile_no", "phone", "contact_mobile"):
+		if frappe.get_meta(party_doctype).has_field(field):
+			value = frappe.db.get_value(party_doctype, doc.get(party_field), field)
+			if value:
+				return value
+	return doc.get("contact_mobile") or None
+
+
+# --------------------------------------------------------------------------
+# Acting
+# --------------------------------------------------------------------------
+
+
+@frappe.whitelist(methods=["POST"])
+def run_action(key: str, name: str, action: str) -> dict:
+	"""Submit, cancel, amend or duplicate — through the real document lifecycle.
+
+	Deliberately thin: ERPNext's own `submit`/`cancel` do the validation, the
+	GL and stock postings and the permission checks. Anything reimplemented
+	here would be a second, worse copy of that.
+
+	There is no explicit commit. Frappe commits a successful whitelisted POST on
+	the way out, and committing here as well would put these actions beyond the
+	reach of a smoke test that rolls back — which is how they get tested.
+	"""
+	entry = _entry(key)
+	doctype = entry["doctype"]
+	doc = frappe.get_doc(doctype, name)
+
+	if action == "submit":
+		doc.submit()
+		return {"name": doc.name, "docstatus": doc.docstatus, "message": _("{0} submitted").format(doc.name)}
+
+	if action == "cancel":
+		doc.cancel()
+		return {"name": doc.name, "docstatus": doc.docstatus, "message": _("{0} cancelled").format(doc.name)}
+
+	if action in ("amend", "duplicate"):
+		if action == "amend" and cint(doc.docstatus) != 2:
+			frappe.throw(_("Only a cancelled document can be amended"))
+
+		new = frappe.copy_doc(doc)
+		if action == "amend":
+			new.amended_from = doc.name
+		new.docstatus = 0
+		new.insert()
+		return {
+			"name": new.name,
+			"docstatus": new.docstatus,
+			"created": True,
+			"message": _("{0} created as a draft").format(new.name),
+		}
+
+	frappe.throw(_("Unknown action: {0}").format(action))
+
+
+@frappe.whitelist()
+def print_url(key: str, name: str, print_format: str | None = None) -> dict:
+	"""A printable view, opened in a new tab rather than rendered in the app.
+
+	Print formats are letterheads, page sizes and Jinja — re-implementing any of
+	that in the front end would produce a document that does not match what the
+	desk prints, which is the one thing a printed invoice must do.
+	"""
+	entry = _entry(key)
+	doctype = entry["doctype"]
+	if not frappe.has_permission(doctype, "print"):
+		frappe.throw(_("Not permitted to print {0}").format(_(doctype)), frappe.PermissionError)
+	if not frappe.db.exists(doctype, name):
+		frappe.throw(_("{0} {1} not found").format(_(doctype), name), frappe.DoesNotExistError)
+
+	params = [
+		f"doctype={quoted(doctype)}",
+		f"name={quoted(name)}",
+		"no_letterhead=0",
+		"trigger_print=1",
+	]
+	if print_format:
+		params.append(f"format={quoted(print_format)}")
+
+	return {"url": get_url("/printview?" + "&".join(params))}
+
+
+@frappe.whitelist(methods=["POST"])
+def send_whatsapp(key: str, name: str, to: str | None = None, sender: str | None = None, as_pdf: int = 1) -> dict:
+	"""Send a document to a phone or a group JID.
+
+	Defaults to the PDF, rendered through the document's own print format, with
+	the text summary as the caption — a customer sent an invoice should receive
+	the invoice, not a paraphrase of it. `as_pdf=0` falls back to the summary
+	alone, which is what a staff group usually wants.
+
+	Best-effort, like every other send in this app: a failed message is reported
+	back but never rolls anything back.
+	"""
+	from cosmestics.api import notifications
+
+	entry = _entry(key)
+	doc = frappe.get_doc(entry["doctype"], name)
+	doc.check_permission("read")
+
+	number = to or _party_mobile(entry, doc)
+	if not number:
+		frappe.throw(_("No phone number on this document. Enter one to send."))
+
+	summary = format_document(entry, doc)
+	if cint(as_pdf):
+		sent = notifications.send_document(doc.doctype, doc.name, number, message=summary, sender=sender)
+	else:
+		sent = notifications.send_text(number, summary, sender)
+
+	return {
+		"sent": sent,
+		"to": number,
+		"message": _("Sent to {0}").format(number) if sent else _("WhatsApp did not accept the message"),
+	}
+
+
+@frappe.whitelist()
+def whatsapp_senders() -> list:
+	"""Sender accounts configured for this user, for the send dialog."""
+	from cosmestics.api import notifications
+
+	return notifications.list_senders()
+
+
+def format_document(entry: dict, doc) -> str:
+	"""Readable on a phone: what it is, who it is for, what it comes to."""
+	from frappe.utils import fmt_money, get_url_to_form
+
+	lines = [f"*{_(doc.doctype)}*", doc.name]
+
+	if entry.get("party_field") and doc.get(entry["party_field"]):
+		lines.append(str(doc.get(entry["party_field"])))
+	if doc.get(entry["date_field"]):
+		lines.append(str(doc.get(entry["date_field"])))
+
+	lines.append("")
+	for fieldname, _fields in entry.get("tables", [])[:1]:
+		for row in (doc.get(fieldname) or [])[:10]:
+			label = row.get("item_name") or row.get("item_code") or row.get("mode_of_payment")
+			if not label:
+				continue
+			qty = row.get("qty")
+			lines.append(f"• {flt(qty):g} × {label}" if qty else f"• {label}")
+
+	currency = doc.get("currency") or None
+	if entry.get("amount_field") and doc.get(entry["amount_field"]) is not None:
+		lines.append("")
+		lines.append(f"Total: {fmt_money(flt(doc.get(entry['amount_field'])), currency=currency)}")
+	if entry.get("outstanding_field") and flt(doc.get(entry["outstanding_field"])):
+		lines.append(f"Outstanding: {fmt_money(flt(doc.get(entry['outstanding_field'])), currency=currency)}")
+
+	lines.append("")
+	lines.append(get_url_to_form(doc.doctype, doc.name))
+	return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# Insights
+# --------------------------------------------------------------------------
+
+
+@frappe.whitelist()
+def insights(key: str, days: int = DEFAULT_DAYS) -> dict:
+	"""The stat tiles and ageing for one document type.
+
+	Counted in SQL rather than over a fetched page: these answer "how much is
+	outstanding", which is a question about every document, not the hundred
+	currently on screen.
+	"""
+	entry = _entry(key)
+	doctype = entry["doctype"]
+	table = f"`tab{doctype}`"
+	date_field = entry["date_field"]
+
+	conditions = ["1 = 1"]
+	values = {}
+	start_date, end_date = _window(days)
+	if start_date:
+		# `date_field` comes from the registry above, never from the caller.
+		conditions.append(f"`{date_field}` between %(start)s and %(end)s")
+		values.update({"start": start_date, "end": end_date})
+	if _has(doctype, "company") and _company():
+		conditions.append("company = %(company)s")
+		values["company"] = _company()
+
+	where = " and ".join(conditions)
+
+	amount_field = entry.get("amount_field")
+	amount_sql = f"sum(ifnull(`{amount_field}`, 0))" if _has(doctype, amount_field) else "0"
+
+	summary = frappe.db.sql(
+		f"""select count(name) as documents,
+		           sum(case when docstatus = 0 then 1 else 0 end) as drafts,
+		           sum(case when docstatus = 1 then 1 else 0 end) as submitted,
+		           sum(case when docstatus = 2 then 1 else 0 end) as cancelled,
+		           {amount_sql} as value
+		    from {table} where {where}""",
+		values,
+		as_dict=True,
+	)[0]
+
+	stats = [
+		{"key": "documents", "label": _("Documents"), "value": cint(summary.documents), "type": "number", "icon": "file"},
+		{
+			"key": "value",
+			"label": _("Value"),
+			"value": flt(summary.value),
+			"type": "currency",
+			"icon": "money",
+		},
+		{
+			"key": "drafts",
+			"label": _("Drafts"),
+			"value": cint(summary.drafts),
+			"type": "number",
+			"icon": "pencil",
+			"tone": "warn" if cint(summary.drafts) else "default",
+		},
+		{
+			"key": "cancelled",
+			"label": _("Cancelled"),
+			"value": cint(summary.cancelled),
+			"type": "number",
+			"icon": "ban",
+			"tone": "bad" if cint(summary.cancelled) else "default",
+		},
+	]
+
+	ageing = {"columns": [], "rows": []}
+	outstanding_field = entry.get("outstanding_field")
+	if _has(doctype, outstanding_field):
+		age_field = entry.get("due_field") if _has(doctype, entry.get("due_field")) else date_field
+		# Deliberately not scoped to the period: what is owed is a fact about
+		# today, not about the last thirty days. The company scope still applies.
+		company_cond = "and company = %(company)s" if "company" in values else ""
+		buckets = frappe.db.sql(
+			f"""select case
+			             when datediff(%(today)s, `{age_field}`) <= 0  then '0 · not yet due'
+			             when datediff(%(today)s, `{age_field}`) <= 30 then '1 · 1-30 days'
+			             when datediff(%(today)s, `{age_field}`) <= 60 then '2 · 31-60 days'
+			             when datediff(%(today)s, `{age_field}`) <= 90 then '3 · 61-90 days'
+			             else '4 · over 90 days' end as bucket,
+			           count(name) as documents,
+			           sum(`{outstanding_field}`) as outstanding
+			    from {table}
+			    where docstatus = 1 and ifnull(`{outstanding_field}`, 0) > 0 {company_cond}
+			    group by bucket order by bucket""",
+			{**values, "today": nowdate()},
+			as_dict=True,
+		)
+		for b in buckets:
+			b["bucket"] = b["bucket"].split(" · ", 1)[1]
+
+		ageing = {
+			"columns": [
+				{"label": _("Age"), "key": "bucket", "type": "text"},
+				{"label": _("Documents"), "key": "documents", "type": "number"},
+				{"label": _("Outstanding"), "key": "outstanding", "type": "currency"},
+			],
+			"rows": buckets,
+		}
+		total_outstanding = sum(flt(b["outstanding"]) for b in buckets)
+		overdue = sum(flt(b["outstanding"]) for b in buckets if b["bucket"] != "not yet due")
+		stats.insert(
+			2,
+			{
+				"key": "outstanding",
+				"label": _("Outstanding"),
+				"value": total_outstanding,
+				"type": "currency",
+				"icon": "hourglass",
+				"tone": "warn" if total_outstanding else "good",
+			},
+		)
+		stats.insert(
+			3,
+			{
+				"key": "overdue",
+				"label": _("Overdue"),
+				"value": overdue,
+				"type": "currency",
+				"icon": "alert",
+				"tone": "bad" if overdue else "good",
+			},
+		)
+
+	by_status = []
+	if _has(doctype, "status"):
+		by_status = frappe.db.sql(
+			f"""select status, count(name) as documents, {amount_sql} as value
+			    from {table} where {where}
+			    group by status order by documents desc""",
+			values,
+			as_dict=True,
+		)
+	else:
+		rows = frappe.db.sql(
+			f"""select docstatus, count(name) as documents, {amount_sql} as value
+			    from {table} where {where} group by docstatus order by docstatus""",
+			values,
+			as_dict=True,
+		)
+		by_status = [
+			{"status": DOCSTATUS_LABEL.get(cint(r.docstatus), ""), "documents": r.documents, "value": r.value}
+			for r in rows
+		]
+
+	return {
+		"key": key,
+		"doctype": doctype,
+		"stats": stats,
+		"ageing": ageing,
+		"by_status": {
+			"columns": [
+				{"label": _("Status"), "key": "status", "type": "text"},
+				{"label": _("Documents"), "key": "documents", "type": "number"},
+				{"label": _("Value"), "key": "value", "type": "currency"},
+			],
+			"rows": by_status,
+		},
+		"period": {"from": start_date, "to": end_date, "days": cint(days)},
+	}

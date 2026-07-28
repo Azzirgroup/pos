@@ -137,6 +137,69 @@ export const previewBulkChange = ({ priceList, itemCodes, mode, value, rounding 
 export const applyBulkChange = ({ priceList, changes }) =>
 	call('cosmestics.api.pricing.apply_bulk_change', { price_list: priceList, changes })
 
+/* ---------- transactional documents ---------- */
+
+/**
+ * One generic set of calls for every document type. `key` is a registry slug
+ * ('sales-invoice', 'stock-entry'), never a raw doctype name — the server maps
+ * it, so the browser can never nominate a doctype of its own.
+ */
+export const listDocumentTypes = () => call('cosmestics.api.documents.list_types')
+
+export const listDocuments = ({ key, days, status, party, search, limit, start }) =>
+	call('cosmestics.api.documents.list_documents', {
+		key,
+		days,
+		status: status || null,
+		party: party || null,
+		search: search || null,
+		limit: limit || 100,
+		start: start || 0,
+	})
+
+export const getDocument = ({ key, name }) =>
+	call('cosmestics.api.documents.get_document', { key, name })
+
+export const runDocumentAction = ({ key, name, action }) =>
+	call('cosmestics.api.documents.run_action', { key, name, action })
+
+export const getPrintUrl = ({ key, name, printFormat }) =>
+	call('cosmestics.api.documents.print_url', { key, name, print_format: printFormat || null })
+
+export const sendDocumentWhatsapp = ({ key, name, to, sender, asPdf }) =>
+	call('cosmestics.api.documents.send_whatsapp', {
+		key,
+		name,
+		to: to || null,
+		sender: sender || null,
+		as_pdf: asPdf === false ? 0 : 1,
+	})
+
+export const getWhatsappSenders = () => call('cosmestics.api.documents.whatsapp_senders')
+
+export const getDocumentInsights = ({ key, days }) =>
+	call('cosmestics.api.documents.insights', { key, days })
+
+/* ---------- barcodes ---------- */
+
+export const listBarcodeItems = ({ search, onlyMissing, limit } = {}) =>
+	call('cosmestics.api.barcodes.list_items', {
+		search: search || null,
+		only_missing: onlyMissing === false ? 0 : 1,
+		limit: limit || 200,
+	})
+
+export const generateBarcodes = ({ itemCodes, skipExisting } = {}) =>
+	call('cosmestics.api.barcodes.generate', {
+		item_codes: itemCodes,
+		skip_existing: skipExisting === false ? 0 : 1,
+	})
+
+/* ---------- dashboard ---------- */
+
+export const getDashboard = ({ days } = {}) =>
+	call('cosmestics.api.dashboard.overview', { days: days || 30 })
+
 /* ---------- session ---------- */
 
 export const getMe = () => call('cosmestics.api.session.me')

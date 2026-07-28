@@ -106,8 +106,29 @@ function toggle(code) {
 	selected.value = s
 }
 
+/**
+ * Why the preview cannot run yet, or null when it can.
+ *
+ * This used to be a bare `disabled` with a label that only ever mentioned the
+ * selection, so an item selected but no value entered produced a button reading
+ * "Preview on 3 items" that did nothing when clicked. The button now says what
+ * is missing.
+ *
+ * The emptiness test is deliberately not `=== ''`: a cleared number input can
+ * hand back null or undefined depending on the control, and any of those
+ * getting through meant a change of zero was applied and reported as success.
+ */
+const blocker = computed(() => {
+	if (!selected.value.size) return 'Select items first'
+	const raw = value.value
+	if (raw === '' || raw === null || raw === undefined) return 'Enter a value'
+	if (Number.isNaN(Number(raw))) return 'Value must be a number'
+	if (Number(raw) === 0 && mode.value !== 'set') return 'A change of zero does nothing'
+	return null
+})
+
 async function openPreview() {
-	if (!selected.value.size || value.value === '') return
+	if (blocker.value) return
 	try {
 		preview.value = await previewBulkChange({
 			priceList: priceList.value,
@@ -134,7 +155,14 @@ async function apply() {
 		})
 		previewOpen.value = false
 		await load()
-		notify(`${res.updated} updated, ${res.created} created`, 'good')
+		// "0 updated" on its own reads as a broken screen. Saying how many were
+		// already at that price is the difference between "it did nothing" and
+		// "there was nothing to do".
+		const parts = []
+		if (res.updated) parts.push(`${res.updated} updated`)
+		if (res.created) parts.push(`${res.created} created`)
+		if (res.unchanged) parts.push(`${res.unchanged} already at that price`)
+		notify(parts.join(', ') || 'No prices needed changing', res.updated || res.created ? 'good' : 'bad')
 	} catch (e) {
 		notify(e.message || 'Could not apply', 'bad')
 	} finally {
@@ -202,8 +230,8 @@ function marginTone(pct) {
 				theme="blue"
 				variant="solid"
 				:icon-left="LucideCalculator"
-				:disabled="!selected.size || value === ''"
-				:label="selected.size ? `Preview on ${selected.size} item${selected.size === 1 ? '' : 's'}` : 'Select items first'"
+				:disabled="!!blocker"
+				:label="blocker || `Preview on ${selected.size} item${selected.size === 1 ? '' : 's'}`"
 				@click="openPreview"
 			/>
 		</div>
@@ -215,7 +243,7 @@ function marginTone(pct) {
 			</div>
 
 			<table v-else class="w-full border-collapse text-p-sm">
-				<thead class="sticky top-0 z-10 bg-surface-gray-1">
+				<thead class="sticky top-0 z-10 bg-surface-gray-2">
 					<tr>
 						<th class="w-10 border-b border-outline-gray-2 px-3 py-2">
 							<input type="checkbox" :checked="allSelected" @change="toggleAll" />
@@ -228,11 +256,20 @@ function marginTone(pct) {
 					</tr>
 				</thead>
 				<tbody>
+					<!-- Banded like every other list in the app, with the selection
+					     resolved here rather than left to stylesheet order — a selected
+					     row must never be repainted by the stripe underneath it. -->
 					<tr
-						v-for="row in rows"
+						v-for="(row, i) in rows"
 						:key="row.item_code"
-						class="cursor-pointer border-b border-outline-gray-1 transition-colors"
-						:class="selected.has(row.item_code) ? 'bg-surface-blue-1' : 'hover:bg-surface-gray-1'"
+						class="cursor-pointer transition-colors"
+						:class="
+							selected.has(row.item_code)
+								? 'bg-surface-blue-1 hover:bg-surface-blue-2'
+								: i % 2
+									? 'bg-surface-gray-1 hover:bg-surface-gray-2'
+									: 'bg-surface-white hover:bg-surface-gray-2'
+						"
 						@click="toggle(row.item_code)"
 					>
 						<td class="px-3 py-1.5" @click.stop>

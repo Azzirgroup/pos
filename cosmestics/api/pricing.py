@@ -25,6 +25,32 @@ def get_price_list_options():
 	}
 
 
+def _current_price_rows(price_list: str, codes: list) -> dict:
+	"""The Item Price row this app treats as current, per item code.
+
+	The single place that decides which row wins. An item can carry several Item
+	Prices on one price list — a different UOM, or a future `valid_from` — and
+	when the screen read one row while the write picked another, a bulk change
+	appeared to do nothing: the price was updated, just not the one being shown.
+	Read and write both come through here so they cannot disagree.
+	"""
+	if not codes:
+		return {}
+
+	out = {}
+	for p in frappe.get_all(
+		"Item Price",
+		filters={"price_list": price_list, "item_code": ("in", codes)},
+		fields=["name", "item_code", "price_list_rate", "valid_from", "uom"],
+		# Newest first, then a stable tiebreak on name so two rows sharing a
+		# date never swap places between two calls.
+		order_by="valid_from desc, modified desc, name asc",
+		limit_page_length=0,
+	):
+		out.setdefault(p.item_code, p)
+	return out
+
+
 @frappe.whitelist()
 def get_prices(
 	price_list: str,
@@ -63,15 +89,7 @@ def get_prices(
 		return {"rows": [], "currency": None}
 
 	codes = [i.item_code for i in items]
-	prices = {}
-	for p in frappe.get_all(
-		"Item Price",
-		filters={"price_list": price_list, "item_code": ("in", codes)},
-		fields=["name", "item_code", "price_list_rate", "valid_from"],
-		order_by="valid_from desc, modified desc",
-		limit_page_length=0,
-	):
-		prices.setdefault(p.item_code, p)
+	prices = _current_price_rows(price_list, codes)
 
 	# Last purchase cost, so a margin can be judged while editing.
 	costs = {}
@@ -200,20 +218,23 @@ def apply_bulk_change(price_list: str, changes: list | str):
 	if not changes:
 		frappe.throw(_("Nothing to apply"))
 
-	updated, created = 0, 0
+	# Resolved through the same rule the screen read them with, so the row that
+	# gets written is the row the user was looking at.
+	current = _current_price_rows(price_list, [c["item_code"] for c in changes])
+
+	updated, created, unchanged = 0, 0, 0
 	for c in changes:
 		code = c["item_code"]
 		rate = flt(c["new_price"])
 		if rate < 0:
 			frappe.throw(_("{0}: price cannot be negative").format(code))
 
-		existing = frappe.db.get_value(
-			"Item Price", {"item_code": code, "price_list": price_list}, "name"
-		)
+		existing = current.get(code)
 		if existing:
-			doc = frappe.get_doc("Item Price", existing)
-			if flt(doc.price_list_rate) == rate:
+			if flt(existing.price_list_rate) == rate:
+				unchanged += 1
 				continue
+			doc = frappe.get_doc("Item Price", existing.name)
 			doc.price_list_rate = rate
 			doc.save(ignore_permissions=True)
 			updated += 1
@@ -227,4 +248,6 @@ def apply_bulk_change(price_list: str, changes: list | str):
 			created += 1
 
 	frappe.db.commit()
-	return {"updated": updated, "created": created}
+	# `unchanged` is reported rather than swallowed: "0 updated" on its own reads
+	# as a broken screen, when usually it means the prices were already right.
+	return {"updated": updated, "created": created, "unchanged": unchanged}

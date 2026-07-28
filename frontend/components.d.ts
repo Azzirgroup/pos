@@ -10,11 +10,14 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppRail: typeof import('./src/components/AppRail.vue')['default']
     AppTopBar: typeof import('./src/components/AppTopBar.vue')['default']
+    BarList: typeof import('./src/components/charts/BarList.vue')['default']
     BottomSheet: typeof import('./src/components/BottomSheet.vue')['default']
     CartLine: typeof import('./src/components/CartLine.vue')['default']
     CartPanel: typeof import('./src/components/CartPanel.vue')['default']
+    ChartCard: typeof import('./src/components/charts/ChartCard.vue')['default']
     CustomerSheet: typeof import('./src/components/CustomerSheet.vue')['default']
     DataTable: typeof import('./src/components/DataTable.vue')['default']
+    DocumentModal: typeof import('./src/components/DocumentModal.vue')['default']
     HeldSheet: typeof import('./src/components/HeldSheet.vue')['default']
     ItemCell: typeof import('./src/components/ItemCell.vue')['default']
     ItemGrid: typeof import('./src/components/ItemGrid.vue')['default']
@@ -25,10 +28,12 @@ declare module 'vue' {
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     ScanSheet: typeof import('./src/components/ScanSheet.vue')['default']
+    ShareBar: typeof import('./src/components/charts/ShareBar.vue')['default']
     ShiftSheet: typeof import('./src/components/ShiftSheet.vue')['default']
     Sidebar: typeof import('./src/components/Sidebar.vue')['default']
     StatTiles: typeof import('./src/components/StatTiles.vue')['default']
     StockActionSheet: typeof import('./src/components/StockActionSheet.vue')['default']
     TopBar: typeof import('./src/components/TopBar.vue')['default']
+    TrendChart: typeof import('./src/components/charts/TrendChart.vue')['default']
   }
 }

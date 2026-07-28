@@ -5,8 +5,25 @@ import { createRouter, createWebHistory } from 'vue-router'
  * on a slow connection, so it must not pay for the back-office code.
  */
 const routes = [
+	// The till stays the landing screen. A cashier opening a bookmarked link on a
+	// slow connection should not first pay for a dashboard's worth of SQL — the
+	// dashboard is one click away on the rail, which is where a manager starts.
 	{ path: '/', redirect: '/pos' },
 	{ path: '/pos', name: 'Sell', meta: { title: 'POS' }, component: () => import('@/views/Sell.vue') },
+	{
+		path: '/dashboard',
+		name: 'Dashboard',
+		meta: { title: 'Dashboard' },
+		component: () => import('@/views/Dashboard.vue'),
+	},
+	{
+		// The document type is a route parameter, not eleven routes: they differ
+		// only in which registry key they carry.
+		path: '/documents/:key?',
+		name: 'Documents',
+		meta: { title: 'Documents' },
+		component: () => import('@/views/Documents.vue'),
+	},
 	{
 		path: '/inventory',
 		name: 'Inventory',
@@ -48,6 +65,12 @@ const routes = [
 		name: 'Pricing',
 		meta: { title: 'Price updates' },
 		component: () => import('@/views/Pricing.vue'),
+	},
+	{
+		path: '/barcodes',
+		name: 'Barcodes',
+		meta: { title: 'Barcodes' },
+		component: () => import('@/views/Barcodes.vue'),
 	},
 	// These are reports with a fixed subject, so they reuse the report view
 	// rather than duplicating a table five times.

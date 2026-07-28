@@ -11,6 +11,7 @@ import LucideTriangleAlert from '~icons/lucide/triangle-alert'
 import LucideUsers from '~icons/lucide/users'
 import LucideSettings from '~icons/lucide/settings-2'
 import LucideChartColumn from '~icons/lucide/chart-column'
+import LucideFiles from '~icons/lucide/files'
 
 const props = defineProps({
 	/** 'icons' | 'labels'. 'hidden' is handled by the shell not rendering us. */
@@ -28,7 +29,7 @@ const expanded = computed(() => props.mode === 'labels')
  */
 const GROUPS = [
 	[
-		{ to: '/', icon: LucideHome, label: 'Dashboard' },
+		{ to: '/dashboard', icon: LucideHome, label: 'Dashboard' },
 		{ to: '/pos', icon: LucideShoppingCart, label: 'Point of sale' },
 	],
 	[
@@ -41,11 +42,14 @@ const GROUPS = [
 		{ to: '/customers', icon: LucideUsers, label: 'Customers' },
 		{ to: '/accounts', icon: LucideLandmark, label: 'Accounts' },
 	],
-	[{ to: '/reports', icon: LucideChartColumn, label: 'Reports' }],
+	[
+		{ to: '/documents', icon: LucideFiles, label: 'Documents' },
+		{ to: '/reports', icon: LucideChartColumn, label: 'Reports' },
+	],
 ]
 
 function isActive(to) {
-	return to === '/' ? route.path === '/' : route.path.startsWith(to)
+	return route.path.startsWith(to)
 }
 </script>
 

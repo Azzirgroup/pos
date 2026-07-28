@@ -167,7 +167,7 @@ function notify(message, tone = 'good') {
 			</div>
 
 			<table v-else class="w-full border-collapse text-p-sm">
-				<thead class="sticky top-0 z-10 bg-surface-gray-1">
+				<thead class="sticky top-0 z-10 bg-surface-gray-2">
 					<tr>
 						<th class="border-b border-outline-gray-2 px-3 py-2 text-left text-p-xs font-medium text-ink-gray-6">Item</th>
 						<th class="border-b border-outline-gray-2 px-3 py-2 text-left text-p-xs font-medium text-ink-gray-6">Group</th>
@@ -177,10 +177,19 @@ function notify(message, tone = 'good') {
 					</tr>
 				</thead>
 				<tbody>
+					<!-- An item with a location below its level is the row worth
+					     finding, so it keeps the attention tint; the rest band. -->
 					<tr
-						v-for="it in items"
+						v-for="(it, i) in items"
 						:key="it.item_code"
-						class="cursor-pointer border-b border-outline-gray-1 transition-colors hover:bg-surface-gray-1"
+						class="cursor-pointer transition-colors"
+						:class="
+							it.below_count
+								? 'bg-surface-red-1 hover:bg-surface-red-2'
+								: i % 2
+									? 'bg-surface-gray-1 hover:bg-surface-gray-2'
+									: 'bg-surface-white hover:bg-surface-gray-2'
+						"
 						@click="configure(it)"
 					>
 						<td class="px-3 py-1.5">

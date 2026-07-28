@@ -9,6 +9,7 @@ export const MODULE_TABS = {
 		{ label: 'Stock levels', to: '/inventory' },
 		{ label: 'Reorder levels', to: '/reorder' },
 		{ label: 'Price updates', to: '/pricing' },
+		{ label: 'Barcodes', to: '/barcodes' },
 		{ label: 'Stock movement', to: '/inventory/movement' },
 	],
 	purchasing: [
@@ -28,7 +29,12 @@ export const MODULE_TABS = {
 
 /** Which module a route belongs to, so the right tab strip renders. */
 export function moduleFor(path) {
-	if (path.startsWith('/inventory') || path.startsWith('/reorder') || path.startsWith('/pricing'))
+	if (
+		path.startsWith('/inventory') ||
+		path.startsWith('/reorder') ||
+		path.startsWith('/pricing') ||
+		path.startsWith('/barcodes')
+	)
 		return 'inventory'
 	if (path.startsWith('/purchasing')) return 'purchasing'
 	if (path.startsWith('/sales') || path.startsWith('/customers')) return 'sales'

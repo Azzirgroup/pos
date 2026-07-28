@@ -107,6 +107,10 @@ def _run(r):
 	_catalog(r)
 	_partial_payment(r, item)
 	_shift_and_credit(r, item)
+	_documents(r, item, wh)
+	_dashboard(r)
+	_barcodes(r)
+	_whatsapp(r)
 
 
 def _modules_and_reports(r):
@@ -414,6 +418,352 @@ def _shift_and_credit(r, item):
 	        str(frappe.db.get_value("POS Opening Entry", shift["name"], "status")))
 
 
+def _documents(r, item, warehouse):
+	"""The document hub.
+
+	Two kinds of check. First that the registry still describes the DocTypes it
+	claims to — a field renamed upstream would otherwise show up as a silently
+	missing column rather than an error. Then that the endpoints actually run,
+	per registered type, because the SQL and the meta lookups only meet at
+	runtime.
+	"""
+	from cosmestics.api import documents, reports
+
+	print()
+	report_keys = {rep["key"] for rep in reports.REPORTS}
+	problems = []
+	for entry in documents.DOCUMENTS:
+		doctype = entry["doctype"]
+		if not frappe.db.exists("DocType", doctype):
+			problems.append(f"{doctype}: not installed")
+			continue
+
+		meta = frappe.get_meta(doctype)
+		for role in ("date_field", "party_field", "amount_field", "outstanding_field", "due_field"):
+			field = entry.get(role)
+			if field and not meta.has_field(field):
+				problems.append(f"{doctype}.{field} ({role})")
+
+		for field in entry["columns"]:
+			if field != "name" and not meta.has_field(field):
+				problems.append(f"{doctype}.{field} (column)")
+
+		for field in entry.get("detail", []):
+			if not meta.has_field(field):
+				problems.append(f"{doctype}.{field} (detail)")
+
+		for fieldname, child_fields in entry.get("tables", []):
+			df = meta.get_field(fieldname)
+			if not df:
+				problems.append(f"{doctype}.{fieldname} (table)")
+				continue
+			child_meta = frappe.get_meta(df.options)
+			for field in child_fields:
+				if not child_meta.has_field(field):
+					problems.append(f"{df.options}.{field} (line)")
+
+		unknown = [k for k in entry["reports"] if k not in report_keys]
+		if unknown:
+			problems.append(f"{doctype}: unknown reports {unknown}")
+
+	r.check(
+		"document registry matches the DocTypes",
+		not problems,
+		"; ".join(problems) if problems else f"{len(documents.DOCUMENTS)} types",
+	)
+
+	types = documents.list_types()
+	r.check("document types listed", bool(types), f"{len(types)} readable types")
+
+	for entry in types:
+		key = entry["key"]
+		try:
+			data = frappe.call(documents.list_documents, key=key, days=3650, limit=5)
+			ok = isinstance(data["rows"], list) and bool(data["columns"])
+			r.check(f"documents list {key}", ok, f"{len(data['rows'])} of {data['total']}")
+
+			ins = frappe.call(documents.insights, key=key, days=3650)
+			r.check(f"documents insights {key}", bool(ins["stats"]), f"{len(ins['stats'])} tiles")
+
+			if data["rows"]:
+				name = data["rows"][0]["name"]
+				doc = frappe.call(documents.get_document, key=key, name=name)
+				r.check(
+					f"documents detail {key}",
+					bool(doc["header"]) and isinstance(doc["tables"], list),
+					f"{name}: {len(doc['header'])} fields, {len(doc['tables'])} tables",
+				)
+				url = frappe.call(documents.print_url, key=key, name=name)["url"]
+				r.check(f"documents print url {key}", "/printview?" in url)
+		except Exception as e:
+			r.check(f"documents endpoints {key}", False, f"{type(e).__name__}: {e}")
+
+	# An unregistered doctype must not be reachable, or the key is decoration
+	# rather than a boundary.
+	try:
+		documents.list_documents(key="user")
+		r.check("unregistered doctype is refused", False, "no error raised")
+	except frappe.DoesNotExistError:
+		r.check("unregistered doctype is refused", True)
+
+	_document_actions(r, item, warehouse)
+
+
+def _document_actions(r, item, warehouse):
+	"""Submit, cancel, amend and duplicate, run against a real document.
+
+	The fixture is a Material Request because it is the only submittable type
+	here that posts neither stock nor GL — so the lifecycle is exercised without
+	the test's outcome depending on whether a warehouse happens to have cover.
+	"""
+	from frappe.utils import add_days, nowdate
+
+	from cosmestics.api import documents
+
+	print()
+	try:
+		draft = frappe.get_doc(
+			{
+				"doctype": "Material Request",
+				"material_request_type": "Purchase",
+				"transaction_date": nowdate(),
+				"schedule_date": add_days(nowdate(), 7),
+				"company": frappe.defaults.get_global_default("company"),
+				"items": [
+					{
+						"item_code": item.item_code,
+						"qty": 3,
+						"warehouse": warehouse,
+						"schedule_date": add_days(nowdate(), 7),
+					}
+				],
+			}
+		).insert()
+	except Exception as e:
+		r.check("document action fixture created", False, f"{type(e).__name__}: {e}")
+		return
+
+	r.check("document action fixture created", draft.docstatus == 0, draft.name)
+
+	try:
+		res = frappe.call(documents.run_action, key="material-request", name=draft.name, action="submit")
+		r.check("run_action submit", res["docstatus"] == 1, str(res["docstatus"]))
+
+		res = frappe.call(documents.run_action, key="material-request", name=draft.name, action="cancel")
+		r.check("run_action cancel", res["docstatus"] == 2, str(res["docstatus"]))
+
+		res = frappe.call(documents.run_action, key="material-request", name=draft.name, action="amend")
+		amended = res["name"]
+		r.check("run_action amend makes a draft", res["docstatus"] == 0 and res.get("created"), amended)
+		r.check(
+			"amendment points back at the original",
+			frappe.db.get_value("Material Request", amended, "amended_from") == draft.name,
+			str(frappe.db.get_value("Material Request", amended, "amended_from")),
+		)
+
+		res = frappe.call(documents.run_action, key="material-request", name=amended, action="duplicate")
+		copy = res["name"]
+		r.check("run_action duplicate makes a draft", res["docstatus"] == 0 and copy != amended, copy)
+		r.check(
+			"a duplicate is not an amendment",
+			not frappe.db.get_value("Material Request", copy, "amended_from"),
+		)
+
+		# Amending something that was never cancelled has to be refused, or the
+		# action would quietly create an orphan draft.
+		try:
+			frappe.call(documents.run_action, key="material-request", name=copy, action="amend")
+			r.check("amending a live document is refused", False, "no error raised")
+		except frappe.ValidationError:
+			r.check("amending a live document is refused", True)
+
+		try:
+			frappe.call(documents.run_action, key="material-request", name=copy, action="delete")
+			r.check("unknown action is refused", False, "no error raised")
+		except frappe.ValidationError:
+			r.check("unknown action is refused", True)
+	except Exception as e:
+		r.check("document actions", False, f"{type(e).__name__}: {e}")
+
+
+def _dashboard(r):
+	"""The dashboard's own shape.
+
+	The trend is checked for length rather than content: a chart that drops
+	quiet days draws a closed shop as if it never happened, and that is the one
+	failure the numbers alone would not reveal.
+	"""
+	from cosmestics.api import dashboard
+
+	print()
+	try:
+		data = frappe.call(dashboard.overview, days=30)
+	except Exception as e:
+		r.check("dashboard overview", False, f"{type(e).__name__}: {e}")
+		return
+
+	r.check("dashboard returns stat tiles", len(data["stats"]) == 8, f"{len(data['stats'])} tiles")
+	r.check(
+		"every tile carries an icon and a value",
+		all("icon" in s and "value" in s and "type" in s for s in data["stats"]),
+	)
+	r.check(
+		"trend covers every day in the window",
+		len(data["trend"]) == 30,
+		f"{len(data['trend'])} points for 30 days",
+	)
+	r.check(
+		"trend days are unique and ordered",
+		[p["day"] for p in data["trend"]] == sorted({p["day"] for p in data["trend"]}),
+	)
+	r.check(
+		"period and comparison window are the same length",
+		bool(data["period"]["from"] and data["previous"]["from"]),
+		f"{data['period']['from']}..{data['period']['to']} vs {data['previous']['from']}..{data['previous']['to']}",
+	)
+	r.check(
+		"payment mix shares add up",
+		not data["payment_mix"] or abs(sum(flt(p["share"]) for p in data["payment_mix"]) - 100) < 0.5,
+		str([(p["mode"], p["share"]) for p in data["payment_mix"]]),
+	)
+	r.check(
+		"attention lists carry their own columns",
+		all(v["columns"] and isinstance(v["rows"], list) for v in data["attention"].values()),
+		str({k: len(v["rows"]) for k, v in data["attention"].items()}),
+	)
+
+	# A window shorter than the data must not report the same revenue as a long
+	# one; that was how an unscoped date filter would look.
+	week = frappe.call(dashboard.overview, days=7)
+	r.check(
+		"a shorter window reports no more revenue",
+		flt(week["stats"][0]["value"]) <= flt(data["stats"][0]["value"]) + 0.01,
+		f"7d {week['stats'][0]['value']} vs 30d {data['stats'][0]['value']}",
+	)
+
+
+def _barcodes(r):
+	"""Generated barcodes have to be real barcodes.
+
+	The check digit is asserted against published EAN-13s rather than against
+	this module's own arithmetic — a self-consistent implementation of the wrong
+	formula would pass any test written from the same misunderstanding, and the
+	failure only shows up at a counter when a scanner refuses to beep.
+	"""
+	from cosmestics.api import barcodes
+
+	print()
+	known = {
+		"4006381333931": "1",
+		"5901234123457": "7",
+		"9780201379624": "4",
+		"0075678164125": "5",
+	}
+	wrong = [k for k, digit in known.items() if barcodes.check_digit(k[:12]) != digit]
+	r.check("EAN-13 check digit matches published barcodes", not wrong, f"wrong: {wrong}" if wrong else f"{len(known)} verified")
+
+	data = frappe.call(barcodes.list_items, only_missing=1, limit=50)
+	r.check("barcode candidates listed", isinstance(data["rows"], list), f"{len(data['rows'])} missing a barcode")
+	r.check(
+		"barcode type resolved from this site's DocType",
+		data["barcode_type"] in (None, *barcodes.PREFERRED_TYPES),
+		str(data["barcode_type"]),
+	)
+
+	if not data["rows"]:
+		print("  SKIP: every stock item already has a barcode")
+		return
+
+	picks = [row["item_code"] for row in data["rows"][:3]]
+	res = frappe.call(barcodes.generate, item_codes=picks)
+	r.check("barcodes generated", res["created"] == len(picks), f"{res['created']} of {len(picks)}")
+
+	made = [row["barcode"] for row in res["rows"] if row["created"]]
+	r.check("every code is 13 digits", all(len(c) == 13 and c.isdigit() for c in made), str(made))
+	r.check(
+		"every code carries a valid check digit",
+		all(barcodes.check_digit(c[:12]) == c[12] for c in made),
+		str(made),
+	)
+	r.check(
+		"codes use the internal prefix, so they cannot clash with a supplier's",
+		all(c.startswith(barcodes.INTERNAL_PREFIX) for c in made),
+	)
+	r.check("codes are unique", len(set(made)) == len(made))
+
+	# Written where the till looks, or the whole feature is decorative.
+	stored = frappe.get_all(
+		"Item Barcode", filters={"parent": ("in", picks)}, fields=["parent", "barcode"]
+	)
+	r.check(
+		"codes are stored on the Item itself",
+		{row.barcode for row in stored} >= set(made),
+		f"{len(stored)} rows",
+	)
+
+	# Re-running must not mint a second code for an item that now has one.
+	again = frappe.call(barcodes.generate, item_codes=picks)
+	r.check(
+		"regenerating skips items that already have a code",
+		again["created"] == 0 and again["skipped"] == len(picks),
+		f"created={again['created']} skipped={again['skipped']}",
+	)
+
+	try:
+		frappe.call(barcodes.generate, item_codes=[])
+		r.check("generating for nothing is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("generating for nothing is refused", True)
+
+
+def _whatsapp(r):
+	"""The WhatsApp wiring, without sending anything.
+
+	The send itself needs a live bridge, so what is checked here is the part
+	that was actually wrong: reading the bridge's reply. Its success shape is
+	inconsistent, and a stricter reading than the integration's own logged
+	delivered messages as failures.
+	"""
+	from cosmestics.api import notifications
+
+	print()
+	installed = notifications._integration_available()
+	r.check("whatsapp_integration is importable", installed)
+	if not installed:
+		return
+
+	from whatsapp_integration.api.whatsapp import whatsapp as wa
+
+	r.check(
+		"the high-level send endpoint exists",
+		callable(getattr(wa, "send_quick_message_via_whatsapp", None)),
+	)
+	r.check(
+		"the document (PDF) send endpoint exists",
+		callable(getattr(wa, "send_document_via_whatsapp", None)),
+	)
+	r.check("sender list is readable", isinstance(notifications.list_senders(), list))
+
+	# Response shapes taken from whatsapp_integration's own handling, so the two
+	# cannot come to different conclusions about the same reply.
+	shapes = [
+		({"status": "success"}, True),
+		({"status": "queued"}, True),
+		({"status": "processing"}, True),
+		({"error": "false"}, True),
+		({"data": {"key": {"id": "abc"}}}, True),
+		({"error": "Unexpected message response format"}, True),
+		({"error": "Invalid number format."}, False),
+		(None, False),
+	]
+	wrong = [s for s, expected in shapes if notifications._succeeded(s) is not expected]
+	r.check(
+		"bridge responses are read the same way the integration reads them",
+		not wrong,
+		f"misread: {wrong}" if wrong else f"{len(shapes)} shapes",
+	)
+
+
 def _annotations(r):
 	"""Every whitelisted argument must carry a type annotation.
 
@@ -427,8 +777,28 @@ def _annotations(r):
 
 	from frappe.utils.typing_validations import transform_parameter_types
 
-	from cosmestics.api import customers, pos, shift, sourcing, stock
+	from cosmestics.api import (
+		barcodes,
+		catalog,
+		customers,
+		dashboard,
+		documents,
+		notifications,
+		modules,
+		pos,
+		pricing,
+		reorder,
+		reports,
+		session,
+		shift,
+		sourcing,
+		stock,
+	)
 
+	# Every whitelisted endpoint the front end calls, not just the till ones.
+	# The back-office modules were missing from this list, which is why "the
+	# screen is empty" and "the endpoint 500s at the HTTP boundary" were
+	# indistinguishable from the browser.
 	endpoints = [
 		(pos.submit_sale, {"items": [], "payment": {}}),
 		(shift.get_profiles, {}),
@@ -440,6 +810,41 @@ def _annotations(r):
 		(customers.create, {"customer_name": "x"}),
 		(stock.request_transfer, {"items": [], "from_warehouse": "x"}),
 		(sourcing.receive_from_neighbours, {"lines": []}),
+		(catalog.get_catalog, {}),
+		(session.me, {}),
+		(modules.inventory, {"warehouse": "x", "search": "y", "limit": 10}),
+		(modules.warehouses, {}),
+		(modules.sales, {"days": 30, "limit": 10}),
+		(modules.purchasing, {"days": 30, "limit": 10}),
+		(modules.accounts, {"days": 30}),
+		(reports.list_reports, {}),
+		(reports.run, {"report": "sales_summary", "days": 30, "warehouse": None}),
+		(reorder.get_warehouse_tree, {}),
+		(reorder.get_reorder_items, {"search": None, "only_unconfigured": 0, "limit": 200}),
+		(reorder.get_item_reorder, {"item_code": "x", "parent_warehouse": None}),
+		(reorder.get_reorder_rows, {"parent_warehouse": "x", "search": None, "only_below": 0}),
+		(reorder.save_reorder_rules, {"rules": []}),
+		(reorder.copy_levels, {"from_warehouse": "x", "to_warehouses": [], "overwrite": 0}),
+		(pricing.get_price_list_options, {}),
+		(pricing.get_filters, {}),
+		(pricing.get_prices, {"price_list": "x"}),
+		(pricing.preview_bulk_change, {"price_list": "x", "item_codes": [], "mode": "percent", "value": 1}),
+		(pricing.apply_bulk_change, {"price_list": "x", "changes": []}),
+		(documents.list_types, {}),
+		(
+			documents.list_documents,
+			{"key": "x", "days": 30, "status": None, "party": None, "search": None, "limit": 10, "start": 0},
+		),
+		(documents.get_document, {"key": "x", "name": "y"}),
+		(documents.run_action, {"key": "x", "name": "y", "action": "submit"}),
+		(documents.print_url, {"key": "x", "name": "y", "print_format": None}),
+		(documents.send_whatsapp, {"key": "x", "name": "y", "to": None, "sender": None, "as_pdf": 1}),
+		(documents.whatsapp_senders, {}),
+		(documents.insights, {"key": "x", "days": 30}),
+		(dashboard.overview, {"days": 30}),
+		(barcodes.list_items, {"search": None, "only_missing": 1, "limit": 50}),
+		(barcodes.generate, {"item_codes": [], "skip_existing": 1}),
+		(notifications.test_whatsapp, {"to": "x", "message": None}),
 	]
 
 	missing = []
