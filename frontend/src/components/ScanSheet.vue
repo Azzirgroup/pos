@@ -1,6 +1,6 @@
 <script setup>
 import { ref, watch, nextTick, onBeforeUnmount } from 'vue'
-import { useCameraScanner, detectorSupported } from '@/composables/useCameraScanner'
+import { useCameraScanner } from '@/composables/useCameraScanner'
 import LucideX from '~icons/lucide/x'
 import LucideZap from '~icons/lucide/zap'
 import LucideScanLine from '~icons/lucide/scan-line'
@@ -15,12 +15,12 @@ const emit = defineEmits(['update:modelValue', 'scan'])
 
 const videoEl = ref(null)
 const scanner = useCameraScanner((code) => emit('scan', code))
-const { active, error, torchOn, torchAvailable } = scanner
+const { active, error, torchOn, torchAvailable, engine } = scanner
 
 const MESSAGES = {
 	unsupported: {
-		title: 'Camera scanning not available',
-		body: 'This browser has no barcode detector. Chrome on Android supports it — or keep using a USB/Bluetooth scanner, which works everywhere.',
+		title: 'Camera scanning could not start',
+		body: 'The barcode decoder failed to load. Check the connection and try again, or use a USB/Bluetooth scanner, which works everywhere.',
 	},
 	insecure: {
 		title: 'Needs a secure connection',
@@ -85,6 +85,11 @@ function close() {
 					</div>
 					<p class="mt-5 px-8 text-center text-p-sm text-white/80">
 						Point at the barcode
+					</p>
+					<!-- The wasm decoder is noticeably slower, so say so rather than
+					     let it read as a broken camera. -->
+					<p v-if="engine === 'wasm'" class="mt-1 px-8 text-center text-p-xs text-white/50">
+						Hold steady — this device uses the slower decoder
 					</p>
 				</div>
 

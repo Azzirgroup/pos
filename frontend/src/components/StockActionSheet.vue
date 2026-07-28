@@ -141,7 +141,7 @@ function submitSource() {
 					</div>
 					<div class="min-w-0 flex-1">
 						<div class="text-p-base font-medium text-ink-gray-9">
-							Request from another branch
+							Request from another store
 						</div>
 						<div class="text-p-sm text-ink-gray-5">
 							Raises a material request · posts to WhatsApp
@@ -251,7 +251,7 @@ function submitSource() {
 				</button>
 			</template>
 
-			<!-- Step 2b: request a transfer from another branch -->
+			<!-- Step 2b: request a transfer from another store -->
 			<template v-else>
 				<div>
 					<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">

@@ -1,0 +1,124 @@
+<script setup>
+import { ref, computed, onMounted, watch } from 'vue'
+import { Button, Badge, TabButtons, FormControl } from 'frappe-ui'
+import { getPurchasing } from '@/data/api'
+import PageHeader from '@/components/PageHeader.vue'
+import StatTiles from '@/components/StatTiles.vue'
+import DataTable from '@/components/DataTable.vue'
+import LucideRefreshCw from '~icons/lucide/refresh-cw'
+
+const data = ref({ invoices: [], orders: [], requests: [], totals: {}, period: {} })
+const days = ref(30)
+const tab = ref('invoices')
+const loading = ref(false)
+
+const PERIODS = [
+	{ label: 'Last 7 days', value: 7 },
+	{ label: 'Last 30 days', value: 30 },
+	{ label: 'Last 90 days', value: 90 },
+]
+
+const TABS = [
+	{ label: 'Invoices', value: 'invoices' },
+	{ label: 'Orders', value: 'orders' },
+	{ label: 'Requests', value: 'requests' },
+]
+
+const COLUMNS = {
+	invoices: [
+		{ label: 'Invoice', key: 'name', type: 'text' },
+		{ label: 'Date', key: 'date', type: 'text' },
+		{ label: 'Supplier', key: 'supplier', type: 'text' },
+		{ label: 'Status', key: 'status', type: 'text' },
+		{ label: 'Total', key: 'grand_total', type: 'currency' },
+		{ label: 'Owed', key: 'outstanding_amount', type: 'currency' },
+	],
+	orders: [
+		{ label: 'Order', key: 'name', type: 'text' },
+		{ label: 'Date', key: 'date', type: 'text' },
+		{ label: 'Supplier', key: 'supplier', type: 'text' },
+		{ label: 'Status', key: 'status', type: 'text' },
+		{ label: 'Received %', key: 'per_received', type: 'number' },
+		{ label: 'Total', key: 'grand_total', type: 'currency' },
+	],
+	requests: [
+		{ label: 'Request', key: 'name', type: 'text' },
+		{ label: 'Date', key: 'date', type: 'text' },
+		{ label: 'Type', key: 'material_request_type', type: 'text' },
+		{ label: 'Status', key: 'status', type: 'text' },
+		{ label: 'Ordered %', key: 'per_ordered', type: 'number' },
+	],
+}
+
+const rows = computed(() => data.value[tab.value] || [])
+const columns = computed(() => COLUMNS[tab.value])
+
+const stats = computed(() => {
+	const t = data.value.totals || {}
+	return [
+		{ label: 'Spend', value: t.spend, type: 'currency' },
+		{
+			label: 'Owed to suppliers',
+			value: t.owed,
+			type: 'currency',
+			tone: t.owed > 0 ? 'warn' : 'good',
+		},
+		{ label: 'Open orders', value: t.open_orders, type: 'number' },
+		{ label: 'Open requests', value: t.open_requests, type: 'number' },
+	]
+})
+
+onMounted(load)
+watch(days, load)
+
+async function load() {
+	loading.value = true
+	try {
+		data.value = await getPurchasing({ days: days.value })
+	} catch (e) {
+		console.error('[purchasing]', e)
+	} finally {
+		loading.value = false
+	}
+}
+</script>
+
+<template>
+	<div class="flex min-h-0 flex-1 flex-col overflow-hidden">
+		<PageHeader
+			title="Purchasing"
+			:subtitle="
+				data.period?.from ? `${data.period.from} to ${data.period.to}` : 'What we bought and still owe'
+			"
+		>
+			<template #actions>
+				<div class="w-[160px]">
+					<FormControl type="select" v-model="days" :options="PERIODS" />
+				</div>
+				<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load" />
+			</template>
+		</PageHeader>
+
+		<StatTiles :stats="stats" />
+
+		<div class="shrink-0 px-4 pb-2">
+			<TabButtons v-model="tab" :buttons="TABS" />
+		</div>
+
+		<DataTable
+			:columns="columns"
+			:rows="rows"
+			row-key="name"
+			:loading="loading"
+			:empty-text="`No ${tab} in this period.`"
+		>
+			<template #cell-status="{ value }">
+				<Badge
+					:theme="['Completed', 'Paid', 'Received'].includes(value) ? 'green' : value === 'Overdue' ? 'red' : 'gray'"
+					variant="subtle"
+					:label="value || '—'"
+				/>
+			</template>
+		</DataTable>
+	</div>
+</template>

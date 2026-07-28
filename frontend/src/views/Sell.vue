@@ -18,8 +18,7 @@ import {
 	closeShift as apiCloseShift,
 } from '@/data/api'
 
-import TopBar from '@/components/TopBar.vue'
-import Sidebar from '@/components/Sidebar.vue'
+import { Button, FormControl, TabButtons } from 'frappe-ui'
 import ItemGrid from '@/components/ItemGrid.vue'
 import CartPanel from '@/components/CartPanel.vue'
 import MobileCartBar from '@/components/MobileCartBar.vue'
@@ -30,8 +29,14 @@ import StockActionSheet from '@/components/StockActionSheet.vue'
 import ShiftSheet from '@/components/ShiftSheet.vue'
 import CustomerSheet from '@/components/CustomerSheet.vue'
 import ScanSheet from '@/components/ScanSheet.vue'
-import { detectorSupported } from '@/composables/useCameraScanner'
+import { cameraScanSupported } from '@/composables/useCameraScanner'
 import LucideTriangleAlert from '~icons/lucide/triangle-alert'
+import LucideRefreshCw from '~icons/lucide/refresh-cw'
+import LucideSunrise from '~icons/lucide/sunrise'
+import LucideSunset from '~icons/lucide/sunset'
+import LucideLayers from '~icons/lucide/layers'
+import LucideScanLine from '~icons/lucide/scan-line'
+import LucideUserRound from '~icons/lucide/user-round'
 
 const catalog = useCatalogStore()
 const cart = useCartStore()
@@ -39,12 +44,28 @@ const { isCompact } = useBreakpoint()
 const { lines, count, total, isEmpty, held } = storeToRefs(cart)
 
 const query = ref('')
-const topBar = ref(null)
+const searchInput = ref(null)
+
+/** Mode tabs from the reference layout. Menu is the till itself; the others
+ *  reuse sheets this view already owns rather than being separate screens. */
+const MODES = [
+	{ label: 'Menu', value: 'menu' },
+	{ label: 'Held', value: 'held' },
+	{ label: 'Customer', value: 'customer' },
+]
+const mode = ref('menu')
+
+watch(mode, (m) => {
+	if (m === 'held') heldSheet.value = true
+	if (m === 'customer') pickCustomer(false)
+	// The tabs are actions, not destinations; snap back so the label never lies
+	// about which view you are on.
+	if (m !== 'menu') setTimeout(() => (mode.value = 'menu'), 150)
+})
 
 const cartSheet = ref(false)
 const paySheet = ref(false)
 const heldSheet = ref(false)
-const menuSheet = ref(false)
 const stockSheet = ref(false)
 const stockItem = ref(null)
 const scanFlash = ref(0)
@@ -176,7 +197,7 @@ function notify(message, tone = 'info') {
 
 function addItem(item) {
 	// Out of stock is a decision point, not an error. The cashier chooses:
-	// buy it from next door, request it from another branch, or sell anyway
+	// buy it from next door, request it from another store, or sell anyway
 	// because it is physically on the shelf but not yet received.
 	if (item.stock <= 0) {
 		stockItem.value = item
@@ -184,6 +205,20 @@ function addItem(item) {
 		return
 	}
 	cart.add(item, 1)
+}
+
+/** Quantity controls live on the cell itself in the dense layout, so the grid
+ *  needs to be able to change the cart, not only append to it. */
+function setItemQty({ item, qty }) {
+	const line = lines.value.find((l) => l.item_code === item.item_code)
+	if (!line) return qty > 0 ? cart.add(item, qty) : undefined
+	if (qty <= 0) return cart.remove(line.id)
+	cart.setQty(line.id, qty)
+}
+
+function removeItem(item) {
+	const line = lines.value.find((l) => l.item_code === item.item_code)
+	if (line) cart.remove(line.id)
 }
 
 function sellAnyway({ item, qty }) {
@@ -232,7 +267,7 @@ const scanSheet = ref(false)
 const scanResult = ref(null)
 // Only offered where the browser can actually do it (Chrome on Android today).
 // A dead button is worse than no button at a busy counter.
-const cameraScanAvailable = detectorSupported()
+const cameraScanAvailable = cameraScanSupported()
 
 let scanResultTimer = null
 watch(scanResult, () => {
@@ -323,7 +358,7 @@ async function completeSale(payment) {
 }
 
 useShortcuts({
-	F2: () => topBar.value?.focus(),
+	F2: () => searchInput.value?.$el?.querySelector('input')?.focus(),
 	F3: holdSale,
 	F4: openPay,
 	escape: () => {
@@ -333,27 +368,26 @@ useShortcuts({
 		if (paySheet.value) return (paySheet.value = false)
 		if (heldSheet.value) return (heldSheet.value = false)
 		if (cartSheet.value) return (cartSheet.value = false)
-		if (query.value) return topBar.value?.clear()
+		if (query.value) return query.value = ''
 	},
 })
 </script>
 
 <template>
-	<!-- Fixed shell: the page itself never scrolls, only the grid and the cart do.
-	     This is what keeps the pay button reachable at all times. -->
-	<div class="flex h-full flex-col overflow-hidden bg-surface-gray-1">
-		<TopBar
-			ref="topBar"
-			v-model="query"
-			:held-count="held.length"
-			:scan-flash="scanFlash"
-			:shift="shift"
-			:camera-scan="cameraScanAvailable"
-			@open-held="heldSheet = true"
-			@open-shift="openShiftSheet"
-			@open-scanner="scanSheet = true"
-			@open-menu="menuSheet = true"
-		/>
+	<!-- Sits inside AppShell, which owns the window chrome and the module rail.
+	     This view only lays out the POS itself. -->
+	<div class="flex min-h-0 flex-1 flex-col overflow-hidden bg-surface-gray-1">
+		<!-- POS sub-header: mode tabs on the left, running total on the right. -->
+		<div
+			class="flex shrink-0 items-center gap-2 border-b border-outline-gray-2 bg-surface-white px-3 py-1.5"
+		>
+			<TabButtons v-model="mode" :buttons="MODES" />
+			<div class="ml-auto flex items-center gap-2">
+				<span class="tabular rounded-md border border-outline-gray-2 px-2 py-1 text-p-xs text-ink-gray-6">
+					{{ count }} {{ count === 1 ? 'item' : 'items' }} · {{ fmtMoney(total) }}
+				</span>
+			</div>
+		</div>
 
 		<!-- Demo catalog is unsellable: no ERPNext Item matches these codes, so
 		     checkout fails at submit. Inline rather than floating — as an overlay
@@ -372,31 +406,66 @@ useShortcuts({
 			</span>
 		</div>
 
-		<div class="flex min-h-0 flex-1 overflow-hidden">
-			<!-- Shortcut rail. Docked from md up; below that it opens as a sheet
-			     from the top bar, since a rail would eat a phone's width. -->
-			<Sidebar
-				variant="rail"
-				class="hidden md:flex"
-				:shift="shift"
-				:held-count="held.length"
-				:customer="customer"
-				:camera-scan="cameraScanAvailable"
-				:refreshing="catalog.loading"
-				:is-demo="catalog.isDemo"
-				@shift="openShiftSheet"
-				@held="heldSheet = true"
-				@scan="scanSheet = true"
-				@customer="pickCustomer(false)"
-				@refresh="refreshCatalog"
+		<!-- Toolbar: shortcuts left, item search right, matching the reference. -->
+		<div
+			class="flex shrink-0 flex-wrap items-center gap-2 border-b border-outline-gray-2 bg-surface-white px-3 py-2"
+		>
+			<Button
+				variant="subtle"
+				:icon-left="LucideRefreshCw"
+				:loading="catalog.loading"
+				tooltip="Refresh prices and stock"
+				@click="refreshCatalog"
+			/>
+			<Button
+				variant="subtle"
+				:icon-left="shift ? LucideSunset : LucideSunrise"
+				:label="shift ? 'Close shift' : 'Open shift'"
+				@click="openShiftSheet"
+			/>
+			<Button
+				variant="subtle"
+				:icon-left="LucideLayers"
+				:label="held.length ? `Held (${held.length})` : 'Held'"
+				@click="heldSheet = true"
+			/>
+			<Button
+				variant="subtle"
+				:icon-left="LucideUserRound"
+				:label="customer ? (customer.customer_name || customer.name) : 'Walk-in'"
+				@click="pickCustomer(false)"
 			/>
 
+			<!-- Scan lives inside the search field: searching and scanning are the
+			     same act to a cashier — find this product — so they share one control. -->
+			<div class="relative ml-auto w-full sm:w-[280px]">
+				<FormControl
+					ref="searchInput"
+					v-model="query"
+					type="text"
+					placeholder="Search or scan items…"
+					:class="cameraScanAvailable ? 'pr-9' : ''"
+				/>
+				<button
+					v-if="cameraScanAvailable"
+					class="absolute right-1 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded text-ink-gray-5 transition-colors hover:bg-surface-gray-3 hover:text-ink-gray-7"
+					aria-label="Scan with camera"
+					@click="scanSheet = true"
+				>
+					<LucideScanLine class="h-4 w-4" />
+				</button>
+			</div>
+		</div>
+
+		<div class="flex min-h-0 flex-1 overflow-hidden">
 			<div class="flex min-w-0 flex-1 flex-col overflow-hidden">
 				<ItemGrid
 					:items="visibleItems"
 					:cart-qtys="cartQtys"
 					:query="query"
 					@add="addItem"
+					@set-qty="setItemQty"
+					@remove="removeItem"
 				/>
 			</div>
 
@@ -450,24 +519,6 @@ useShortcuts({
 		/>
 
 		<ScanSheet v-model="scanSheet" :last-result="scanResult" @scan="onCameraScan" />
-
-		<!-- Phone: the same shortcuts, as a sheet. -->
-		<BottomSheet v-model="menuSheet" title="Shortcuts">
-			<Sidebar
-				variant="sheet"
-				:shift="shift"
-				:held-count="held.length"
-				:customer="customer"
-				:camera-scan="cameraScanAvailable"
-				:refreshing="catalog.loading"
-				:is-demo="catalog.isDemo"
-				@shift="menuSheet = false; openShiftSheet()"
-				@held="menuSheet = false; heldSheet = true"
-				@scan="menuSheet = false; scanSheet = true"
-				@customer="menuSheet = false; pickCustomer(false)"
-				@refresh="refreshCatalog"
-			/>
-		</BottomSheet>
 
 		<!-- Placeholder: the real banner is rendered inline above the grid so it
 		     pushes content rather than covering it. See the strip after TopBar. -->

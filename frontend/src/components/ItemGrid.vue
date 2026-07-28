@@ -1,5 +1,5 @@
 <script setup>
-import ItemCard from './ItemCard.vue'
+import ItemCell from './ItemCell.vue'
 import LucideSearchX from '~icons/lucide/search-x'
 
 defineProps({
@@ -8,25 +8,27 @@ defineProps({
 	query: { type: String, default: '' },
 })
 
-defineEmits(['add'])
+defineEmits(['add', 'setQty', 'remove'])
 </script>
 
 <template>
 	<div class="pos-scroll min-h-0 flex-1 bg-surface-gray-1">
-		<div v-if="items.length" class="p-3 sm:p-4">
-			<!-- auto-fill rather than fixed breakpoint columns: the grid reflows
-			     continuously as the cart panel appears/disappears, so there is no
-			     awkward width where cards are stretched or cramped. -->
+		<div v-if="items.length" class="p-2 sm:p-3">
+			<!-- Dense auto-fill grid of flat cells, per the reference design. It
+			     reflows continuously as the cart panel appears, so there is no
+			     width at which cells are stretched or cramped. -->
 			<div
-				class="grid gap-2.5 sm:gap-3"
-				style="grid-template-columns: repeat(auto-fill, minmax(148px, 1fr))"
+				class="grid gap-1.5"
+				style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr))"
 			>
-				<ItemCard
+				<ItemCell
 					v-for="item in items"
 					:key="item.item_code"
 					:item="item"
 					:in-cart="cartQtys[item.item_code] || 0"
 					@add="$emit('add', $event)"
+					@set-qty="$emit('setQty', $event)"
+					@remove="$emit('remove', $event)"
 				/>
 			</div>
 		</div>

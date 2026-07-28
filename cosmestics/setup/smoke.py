@@ -102,9 +102,125 @@ def _run(r):
 	r.check("M-Pesa reference kept", "SLK7XR2QM4" in (si2.remarks or ""), str(si2.remarks)[:50])
 	r.check("M-Pesa outstanding 0", flt(si2.outstanding_amount) == 0, str(si2.outstanding_amount))
 
+	_modules_and_reports(r)
+	_pricing(r)
 	_catalog(r)
 	_partial_payment(r, item)
 	_shift_and_credit(r, item)
+
+
+def _modules_and_reports(r):
+	"""Back-office endpoints. These run raw SQL against whole periods, so a bad
+	column name only shows up here, not at import time."""
+	from cosmestics.api import modules, reorder, reports
+
+	print()
+	try:
+		tree = reorder.get_warehouse_tree()
+		r.check("warehouse tree returns parents", bool(tree["parents"]),
+		        f"{len(tree['parents'])} parents")
+		parent = tree.get("default_parent")
+		if parent:
+				# Per-item modal: item list, then one item's per-warehouse rows.
+			item_rows = reorder.get_reorder_items()
+			r.check("reorder item list", isinstance(item_rows, list), f"{len(item_rows)} items")
+			if item_rows:
+				d = reorder.get_item_reorder(item_code=item_rows[0]["item_code"])
+				r.check("per-item reorder loads", bool(d["rows"]) or bool(d["parents"]),
+				        f"{len(d['rows'])} locations under {d['parent']}")
+				r.check("per-item exposes parents for cascade", bool(d["parents"]),
+				        f"{len(d['parents'])} parents")
+
+			data = reorder.get_reorder_rows(parent_warehouse=parent)
+			r.check("reorder rows load for parent", isinstance(data["rows"], list),
+			        f"{len(data['rows'])} rows across {len(data['warehouses'])} sub-warehouses")
+			r.check("sub-warehouses resolved from parent", bool(data["warehouses"]),
+			        str([w["label"] for w in data["warehouses"]][:4]))
+	except Exception as e:
+		r.check("reorder endpoints", False, f"{type(e).__name__}: {e}")
+
+	from cosmestics.api import session
+	try:
+		me = session.me()
+		r.check("session identifies the user", bool(me["user"]) and bool(me["initials"]),
+		        f"{me['full_name']} ({me['initials']})")
+	except Exception as e:
+		r.check("session endpoint", False, f"{type(e).__name__}: {e}")
+
+	for name, fn in (
+		("inventory", modules.inventory),
+		("sales", modules.sales),
+		("purchasing", modules.purchasing),
+		("accounts", modules.accounts),
+	):
+		try:
+			out = fn()
+			r.check(f"module {name}", isinstance(out, dict))
+		except Exception as e:
+			r.check(f"module {name}", False, f"{type(e).__name__}: {e}")
+
+	for rep in reports.REPORTS:
+		try:
+			out = reports.run(report=rep["key"], days=90)
+			ok = isinstance(out.get("rows"), list) and isinstance(out.get("columns"), list)
+			r.check(f"report {rep['key']}", ok, f"{len(out.get('rows', []))} rows")
+		except Exception as e:
+			r.check(f"report {rep['key']}", False, f"{type(e).__name__}: {e}")
+
+
+def _pricing(r):
+	"""Bulk price maintenance. Preview must never silently apply."""
+	from cosmestics.api import pricing
+
+	print()
+	try:
+		opts = pricing.get_price_list_options()
+		pl = opts.get("default")
+		r.check("price list resolved", bool(pl), str(pl))
+		if not pl:
+			return
+
+		data = pricing.get_prices(price_list=pl, limit=20)
+		rows = data["rows"]
+		r.check("prices load", isinstance(rows, list), f"{len(rows)} items")
+		priced = [x for x in rows if x["price"]]
+		if not priced:
+			print("  SKIP: no priced items to preview against")
+			return
+
+		# Deliberately pick from the END of the list: the old preview re-fetched
+		# with limit=len(selection), which returned the first N items
+		# alphabetically and silently matched none of these.
+		codes = [x["item_code"] for x in priced[-3:]]
+		before = {x["item_code"]: x["price"] for x in priced[-3:]}
+
+		prev = pricing.preview_bulk_change(
+			price_list=pl, item_codes=codes, mode="percent", value=10, rounding="whole"
+		)
+		r.check("preview returns rows", len(prev["rows"]) == len(codes), f"{len(prev['rows'])}")
+		first = prev["rows"][0]
+		expected = round(before[first["item_code"]] * 1.1)
+		r.check("preview applies +10% and rounds", abs(first["new_price"] - expected) < 0.51,
+		        f"{first['old_price']} -> {first['new_price']}")
+
+		after = pricing.get_prices(price_list=pl, limit=20)
+		unchanged = all(
+			x["price"] == before.get(x["item_code"], x["price"])
+			for x in after["rows"] if x["item_code"] in before
+		)
+		r.check("preview did NOT change prices", unchanged)
+
+		res = pricing.apply_bulk_change(
+			price_list=pl, changes=[{"item_code": r0["item_code"], "new_price": r0["new_price"]} for r0 in prev["rows"]]
+		)
+		r.check("apply writes prices", (res["updated"] + res["created"]) == len(codes),
+		        f"updated={res['updated']} created={res['created']}")
+
+		final = {x["item_code"]: x["price"] for x in pricing.get_prices(price_list=pl, limit=50)["rows"]}
+		r.check("price actually changed", final[first["item_code"]] == first["new_price"],
+		        f"{final[first['item_code']]}")
+	except Exception as e:
+		r.check("pricing endpoints", False, f"{type(e).__name__}: {e}")
 
 
 def _catalog(r):

@@ -8,20 +8,26 @@ export {}
 /* prettier-ignore */
 declare module 'vue' {
   export interface GlobalComponents {
+    AppRail: typeof import('./src/components/AppRail.vue')['default']
+    AppTopBar: typeof import('./src/components/AppTopBar.vue')['default']
     BottomSheet: typeof import('./src/components/BottomSheet.vue')['default']
     CartLine: typeof import('./src/components/CartLine.vue')['default']
     CartPanel: typeof import('./src/components/CartPanel.vue')['default']
     CustomerSheet: typeof import('./src/components/CustomerSheet.vue')['default']
+    DataTable: typeof import('./src/components/DataTable.vue')['default']
     HeldSheet: typeof import('./src/components/HeldSheet.vue')['default']
-    ItemCard: typeof import('./src/components/ItemCard.vue')['default']
+    ItemCell: typeof import('./src/components/ItemCell.vue')['default']
     ItemGrid: typeof import('./src/components/ItemGrid.vue')['default']
     MobileCartBar: typeof import('./src/components/MobileCartBar.vue')['default']
+    ModuleTabs: typeof import('./src/components/ModuleTabs.vue')['default']
+    PageHeader: typeof import('./src/components/PageHeader.vue')['default']
     PaySheet: typeof import('./src/components/PaySheet.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
     ScanSheet: typeof import('./src/components/ScanSheet.vue')['default']
     ShiftSheet: typeof import('./src/components/ShiftSheet.vue')['default']
     Sidebar: typeof import('./src/components/Sidebar.vue')['default']
+    StatTiles: typeof import('./src/components/StatTiles.vue')['default']
     StockActionSheet: typeof import('./src/components/StockActionSheet.vue')['default']
     TopBar: typeof import('./src/components/TopBar.vue')['default']
   }

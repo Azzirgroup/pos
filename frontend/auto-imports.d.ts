@@ -6,5 +6,5 @@
 // biome-ignore lint: disable
 export {}
 declare global {
-
+  const LucideChartColumn: typeof import('~icons/lucide/chart-column')['default']
 }
