@@ -519,6 +519,24 @@ def _shift_and_credit(r, item):
 	        frappe.db.get_value("POS Opening Entry", shift["name"], "status") == "Closed",
 	        str(frappe.db.get_value("POS Opening Entry", shift["name"], "status")))
 
+	# --- The shift just closed shows up in the history ---
+	from cosmestics.api.shift import list_recent_shifts
+
+	history = list_recent_shifts(limit=10)
+	mine = next((h for h in history["rows"] if h["name"] == shift["name"]), None)
+	r.check("the closed shift appears in the history", bool(mine), f"{history['count']} shifts")
+	if mine:
+		r.check("history names who the short is against",
+		        mine["assigned_to"] == ["Smoke Cashier"], str(mine["assigned_to"]))
+		r.check("history carries the short itself", flt(mine["short_total"]) == 100,
+		        str(mine["short_total"]))
+		r.check("history carries the closing difference (-100)", flt(mine["difference"]) == -100,
+		        str(mine["difference"]))
+		r.check("history carries what was paid out (250)", flt(mine["paid_out"]) == 250,
+		        str(mine["paid_out"]))
+		r.check("history links to its closing entry", mine["closing"] == closed["name"],
+		        str(mine["closing"]))
+
 	# --- The short carries a name ---
 	recorded = closed.get("shorts_recorded") or []
 	r.check("the short was attributed to somebody", len(recorded) == 1, str(recorded))
@@ -1467,7 +1485,23 @@ def _master_data(r):
 
 		names = [n["name"] for n in _neighbours()]
 		r.check("a neighbour added here reaches the till", "Quick Add Neighbour Shop" in names, str(names))
-		r.check("sourcing reports available once a shop exists", _sourcing_status()["available"])
+		# The standing list of what has been bought next door, as its own screen.
+	from cosmestics.api.sourcing import list_purchases
+
+	purchases = list_purchases(days=30)
+	r.check(
+		"neighbour purchases list answers, or says why not",
+		isinstance(purchases["rows"], list),
+		purchases["reason"] or f"{purchases['totals']['count']} purchases",
+	)
+	unpaid = list_purchases(days=30, status="unpaid")
+	r.check(
+		"the unpaid filter only returns what is owed",
+		all(p["outstanding"] > 0 for p in unpaid["rows"]),
+		f"{len(unpaid['rows'])} owed",
+	)
+
+	r.check("sourcing reports available once a shop exists", _sourcing_status()["available"])
 
 
 def _recent_sales(r):
@@ -1697,6 +1731,7 @@ def _annotations(r):
 		(customers.create, {"customer_name": "x"}),
 		(stock.request_transfer, {"items": [], "from_warehouse": "x"}),
 		(sourcing.receive_from_neighbours, {"lines": []}),
+		(sourcing.list_purchases, {"days": 30, "status": None, "limit": 200}),
 		(catalog.get_catalog, {}),
 		(session.me, {}),
 		(session.context, {}),
@@ -1759,6 +1794,7 @@ def _annotations(r):
 		),
 		(shift.get_movement_options, {}),
 		(shift.list_movements, {"shift_name": None}),
+		(shift.list_recent_shifts, {"limit": 10, "mine": 1}),
 		(
 			shift.record_movement,
 			{

@@ -5,6 +5,7 @@ import { getDashboard, getDashboardFilters, getDashboardTab } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
+import AttentionList from '@/components/AttentionList.vue'
 import ChartCard from '@/components/charts/ChartCard.vue'
 import TrendChart from '@/components/charts/TrendChart.vue'
 import BarList from '@/components/charts/BarList.vue'
@@ -95,11 +96,22 @@ async function load() {
 }
 
 const period = computed(() => data.value?.period)
-const previous = computed(() => data.value?.previous)
 
+/**
+ * The window in words, not in dates.
+ *
+ * It used to spell out both ranges — "2026-06-30 to 2026-07-29 · compared with
+ * 2026-05-31 to 2026-06-29" — which is four dates to read before learning
+ * anything, and the period control directly above already says which window is
+ * selected. Every delta on the page is against the preceding window of equal
+ * length, so that is stated once, in words.
+ */
 const subtitle = computed(() => {
 	if (!period.value) return 'How the shop is doing'
-	return `${period.value.from} to ${period.value.to} · compared with ${previous.value.from} to ${previous.value.to}`
+	const days = period.value.days
+	const label = PERIODS.find((p) => p.value === days)?.label || `Last ${days} days`
+	const against = days === 365 ? 'the year before' : `the ${days} days before`
+	return `${label}, against ${against}`
 })
 
 /* ---------- table twins ---------- */
@@ -159,6 +171,12 @@ const attention = computed(() => {
 			...a.below_reorder,
 		},
 		{ key: 'overdue', title: 'Overdue invoices', subtitle: 'Oldest first', ...a.overdue },
+		{
+			key: 'slow_moving',
+			title: 'Slow moving',
+			subtitle: 'Has not sold this period',
+			...a.slow_moving,
+		},
 	].filter((section) => section?.rows?.length)
 })
 </script>
@@ -212,10 +230,14 @@ const attention = computed(() => {
 								{{ section.subtitle }}
 							</p>
 						</header>
-						<DataTable
+						<!-- Also a list. Some of these carry seven columns, which in half
+						     a page is a sideways scroll however it is sliced. The
+						     dashboard is a set of shortlists; the full grid for any of
+						     them is the module screen, which is full width and has row
+						     actions. -->
+						<AttentionList
 							:columns="section.columns"
 							:rows="section.rows"
-							:scroll="false"
 							empty-text="Nothing in this period."
 						/>
 					</section>
@@ -292,7 +314,10 @@ const attention = computed(() => {
 						<h2 class="text-p-sm font-semibold text-ink-gray-8">{{ section.title }}</h2>
 						<p class="truncate text-p-xs text-ink-gray-5">{{ section.subtitle }}</p>
 					</header>
-					<DataTable :columns="section.columns" :rows="section.rows" :scroll="false" />
+					<!-- A list, not a table: these sit three across, and five columns in
+					     a third of the page scrolled sideways — which hid the figure the
+					     shortlist exists to show. -->
+					<AttentionList :columns="section.columns" :rows="section.rows" />
 				</section>
 			</div>
 

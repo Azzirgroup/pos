@@ -10,23 +10,107 @@ line into Python to sum it would not survive a busy month.
 import frappe
 from frappe.utils import add_days, flt, nowdate
 
+#: `hint` says what question the report answers, in the words somebody would ask
+#: it. The picker is a set of cards rather than a list of labels, and a label
+#: alone ("Dead stock", "Audit trail") does not tell a shop manager whether it is
+#: the one they want — which is how a report nobody opens ends up unused.
 REPORTS = [
-	{"key": "sales_summary", "label": "Sales summary", "group": "Sales"},
-	{"key": "top_items", "label": "Best sellers", "group": "Sales"},
-	{"key": "payment_modes", "label": "Payment modes", "group": "Sales"},
-	{"key": "profit_margin", "label": "Profit margin", "group": "Sales"},
-	{"key": "cashier_sales", "label": "Sales by cashier", "group": "Sales"},
-	{"key": "stock_balance", "label": "Stock balance", "group": "Inventory"},
-	{"key": "below_reorder", "label": "Below reorder level", "group": "Inventory"},
-	{"key": "dead_stock", "label": "Dead stock", "group": "Inventory"},
-	{"key": "receivables", "label": "Customer balances", "group": "Accounts"},
-	{"key": "payables", "label": "Supplier balances", "group": "Accounts"},
-	{"key": "tax_collected", "label": "Tax collected", "group": "Accounts"},
-	{"key": "shift_history", "label": "Shift history", "group": "Audit"},
-	{"key": "audit_trail", "label": "User audit trail", "group": "Audit"},
-	{"key": "price_changes", "label": "Price changes", "group": "Audit"},
-	{"key": "cancelled_docs", "label": "Cancelled & amended", "group": "Audit"},
-	{"key": "stock_movement", "label": "Stock movement", "group": "Inventory"},
+	{
+		"key": "sales_summary",
+		"label": "Sales summary",
+		"group": "Sales",
+		"hint": "Revenue and invoice count, day by day",
+	},
+	{
+		"key": "top_items",
+		"label": "Best sellers",
+		"group": "Sales",
+		"hint": "What actually moves, by quantity and revenue",
+	},
+	{
+		"key": "payment_modes",
+		"label": "Payment modes",
+		"group": "Sales",
+		"hint": "How customers paid — cash against each M-Pesa channel",
+	},
+	{
+		"key": "profit_margin",
+		"label": "Profit margin",
+		"group": "Sales",
+		"hint": "What each item earns after what it cost",
+	},
+	{
+		"key": "cashier_sales",
+		"label": "Sales by cashier",
+		"group": "Sales",
+		"hint": "Who sold what, over the period",
+	},
+	{
+		"key": "stock_balance",
+		"label": "Stock balance",
+		"group": "Inventory",
+		"hint": "What is on hand and what it is worth",
+	},
+	{
+		"key": "below_reorder",
+		"label": "Below reorder level",
+		"group": "Inventory",
+		"hint": "The buy list — what has fallen under its level",
+	},
+	{
+		"key": "dead_stock",
+		"label": "Dead stock",
+		"group": "Inventory",
+		"hint": "Money sitting on the shelf that has not sold",
+	},
+	{
+		"key": "stock_movement",
+		"label": "Stock movement",
+		"group": "Inventory",
+		"hint": "What came in and what went out, and on which document",
+	},
+	{
+		"key": "receivables",
+		"label": "Customer balances",
+		"group": "Accounts",
+		"hint": "Who owes you, oldest first",
+	},
+	{
+		"key": "payables",
+		"label": "Supplier balances",
+		"group": "Accounts",
+		"hint": "Who you owe, and how much",
+	},
+	{
+		"key": "tax_collected",
+		"label": "Tax collected",
+		"group": "Accounts",
+		"hint": "VAT charged over the period",
+	},
+	{
+		"key": "shift_history",
+		"label": "Shift history",
+		"group": "Audit",
+		"hint": "Every till close, and whether it balanced",
+	},
+	{
+		"key": "audit_trail",
+		"label": "User audit trail",
+		"group": "Audit",
+		"hint": "Who created what, and when",
+	},
+	{
+		"key": "price_changes",
+		"label": "Price changes",
+		"group": "Audit",
+		"hint": "What was repriced, and by whom",
+	},
+	{
+		"key": "cancelled_docs",
+		"label": "Cancelled & amended",
+		"group": "Audit",
+		"hint": "Documents that were undone after submitting",
+	},
 ]
 
 

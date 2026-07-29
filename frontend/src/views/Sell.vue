@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
+import { useRouter } from 'vue-router'
 
 import { useCatalogStore } from '@/stores/catalog'
 import { useCartStore } from '@/stores/cart'
@@ -49,6 +50,7 @@ import LucidePrinter from '~icons/lucide/printer'
 import LucideReceiptText from '~icons/lucide/receipt-text'
 import LucideSend from '~icons/lucide/send'
 
+const router = useRouter()
 const catalog = useCatalogStore()
 const cart = useCartStore()
 const till = useTillStore()
@@ -58,22 +60,33 @@ const { lines, count, total, isEmpty, held } = storeToRefs(cart)
 const query = ref('')
 const searchInput = ref(null)
 
-/** Mode tabs from the reference layout. Menu is the till itself; the others
- *  reuse sheets this view already owns rather than being separate screens.
+/** Mode tabs from the reference layout. Menu is the till itself; the rest are
+ *  the things a cashier does between sales.
  *
- *  Shifts took Held's slot because Held already has a toolbar button carrying
- *  its count, so the tab was a second door to the same sheet — while the money
- *  that moves at a till without being a sale had none at all. */
+ *  Held gave up its slot because it already has a toolbar button carrying its
+ *  count, so the tab was a second door to the same sheet. What replaced it is
+ *  deliberately split in two: **Previous shifts** is history and goes to its own
+ *  page, while **Expenses** is money leaving the drawer right now and opens the
+ *  shift sheet. Closing a shift is neither — it stays on the toolbar, next to
+ *  the button that opened it. */
 const MODES = [
 	{ label: 'Menu', value: 'menu' },
-	{ label: 'Shifts', value: 'shifts' },
+	{ label: 'Previous shifts', value: 'shifts' },
 	{ label: 'Customer', value: 'customer' },
+	{ label: 'Expenses', value: 'expenses' },
 ]
 const mode = ref('menu')
 
 watch(mode, (m) => {
-	if (m === 'shifts') openShiftSheet()
+	// History, not the shift in hand. Closing is done at the till, from the
+	// toolbar button; this is for reading back over closes that already
+	// happened, which wants room and a URL rather than a sheet over the grid.
+	if (m === 'shifts') router.push('/previous-shifts')
 	if (m === 'customer') pickCustomer(false)
+	// The same sheet, opened on the tab that matters. Money out of the drawer is
+	// frequent enough to deserve its own door, but it belongs to the shift, and
+	// a second screen that recorded it would be a second place to reconcile.
+	if (m === 'expenses') openShiftSheet('money')
 	// The tabs are actions, not destinations; snap back so the label never lies
 	// about which view you are on.
 	if (m !== 'menu') setTimeout(() => (mode.value = 'menu'), 150)
@@ -99,6 +112,8 @@ const closingSummary = ref(null)
 /** Expense accounts, modes and neighbours for the money-out form. */
 const movementOptions = ref(null)
 const movementBusy = ref(false)
+/** Which tab the sheet opens on. The Expenses entry lands on 'money'. */
+const shiftTab = ref('count')
 
 /** Modes to collect an opening float for — from the shift, else the till's three. */
 const paymentModes = computed(() =>
@@ -259,7 +274,9 @@ watch(recentMine, () => {
 	if (recentSheet.value) loadRecent()
 })
 
-async function openShiftSheet() {
+async function openShiftSheet(initialTab = 'count') {
+	shiftTab.value = initialTab
+
 	if (shift.value) {
 		shiftMode.value = 'close'
 		closingSummary.value = null
@@ -270,6 +287,7 @@ async function openShiftSheet() {
 	shiftMode.value = 'open'
 	shiftSheet.value = true
 }
+
 
 async function reloadClosingSummary() {
 	try {
@@ -619,7 +637,25 @@ function onCameraScan(code) {
 	onScan(code)
 }
 
-useScanner(onScan)
+/**
+ * A misread is not an unknown product.
+ *
+ * A truncated or corrupted read used to fall through to "No item with barcode
+ * 6291", which sends the cashier looking for something that was never on the
+ * shelf. Saying the scan itself failed tells them to do the one thing that
+ * fixes it.
+ */
+useScanner(onScan, {
+	onMisread: (code, reason) => {
+		scanResult.value = { ok: false, message: 'Bad scan — try again' }
+		notify(
+			reason === 'checksum'
+				? `That scan came through wrong (${code}) — scan it again`
+				: 'That scan came through incomplete — scan it again',
+			'warn',
+		)
+	},
+})
 
 function openPay() {
 	if (isEmpty.value) return
@@ -1077,6 +1113,7 @@ useShortcuts({
 			:busy="shiftBusy"
 			:options="movementOptions"
 			:movement-busy="movementBusy"
+			:initial-tab="shiftTab"
 			@open-shift="doOpenShift"
 			@close-shift="doCloseShift"
 			@record-movement="doRecordMovement"

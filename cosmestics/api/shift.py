@@ -471,6 +471,105 @@ def _record_shorts(shift, closing, shorts):
 
 
 @frappe.whitelist()
+def list_recent_shifts(limit: int = 10, mine: int = 1) -> dict:
+	"""Previous shifts — one row per submitted POS Closing Entry, newest first.
+
+	The shift screen could only ever show the one in front of you, so "what did
+	I close at yesterday?" — asked at the start of most days — meant leaving the
+	till for the desk.
+
+	**Driven from the closing entry, not the opening one.** An opening marked
+	Closed whose closing entry was later cancelled would otherwise appear here as
+	a shift that took nothing and balanced perfectly, which is a fabricated row.
+	Starting from the closing entry means every row on this screen is a real
+	close that still stands.
+
+	The shift currently open is absent by construction: it has no closing entry
+	yet. That is the point — this is history, and the open shift is read and
+	settled at the till.
+
+	Defaults to this cashier's own, as `pos.recent_sales` does: a shift belongs
+	to a person, and everyone else's closings bury the one being looked for.
+	"""
+	filters = {"docstatus": 1}
+	if int(mine or 0):
+		filters["user"] = frappe.session.user
+
+	closings = frappe.get_all(
+		"POS Closing Entry",
+		filters=filters,
+		fields=[
+			"name",
+			"pos_opening_entry",
+			"user",
+			"pos_profile",
+			"period_start_date",
+			"period_end_date",
+			"grand_total",
+			"net_total",
+			"total_quantity",
+		],
+		order_by="period_end_date desc, creation desc",
+		limit=min(int(limit or 10), 50),
+	)
+	if not closings:
+		return {
+			"rows": [],
+			"count": 0,
+			"totals": {"shifts": 0, "taken": 0, "paid_out": 0, "short": 0, "unbalanced": 0},
+		}
+
+	# Summed in Python rather than SQL: Frappe rejects function strings like
+	# `sum(difference)` in `get_all` fields, and this is at most fifty rows.
+	differences = {}
+	for d in frappe.get_all(
+		"POS Closing Entry Detail",
+		filters={"parent": ("in", [c.name for c in closings])},
+		fields=["parent", "difference"],
+	):
+		differences[d.parent] = differences.get(d.parent, 0) + flt(d.difference)
+
+	rows = []
+	for c in closings:
+		summary = _movement_summary(_movements(c.pos_opening_entry))
+
+		rows.append(
+			{
+				"name": c.pos_opening_entry,
+				"closing": c.name,
+				"user": c.user,
+				"pos_profile": c.pos_profile,
+				"opened": str(c.period_start_date) if c.period_start_date else None,
+				"closed": str(c.period_end_date) if c.period_end_date else None,
+				"grand_total": flt(c.grand_total),
+				"total_quantity": flt(c.total_quantity),
+				"difference": flt(differences.get(c.name)),
+				# What left the drawer that shift, so a closing that looks short
+				# can be read against what was legitimately spent.
+				"paid_out": summary["paid_out_total"],
+				"expenses": summary["expense_total"],
+				# The whole reason a short is recorded here rather than left on the
+				# closing entry: it carries a name.
+				"shorts": summary["shorts"],
+				"short_total": summary["short_total"],
+				"assigned_to": sorted({s["person"] for s in summary["shorts"] if s["person"]}),
+			}
+		)
+
+	return {
+		"rows": rows,
+		"count": len(rows),
+		"totals": {
+			"shifts": len(rows),
+			"taken": flt(sum(r["grand_total"] for r in rows)),
+			"paid_out": flt(sum(r["paid_out"] for r in rows)),
+			"short": flt(sum(r["short_total"] for r in rows)),
+			"unbalanced": len([r for r in rows if abs(r["difference"]) >= 0.005]),
+		},
+	}
+
+
+@frappe.whitelist()
 def get_movement_options() -> dict:
 	"""What the "money out" form needs to draw itself.
 

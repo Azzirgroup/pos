@@ -4,7 +4,6 @@ import { useRoute } from 'vue-router'
 import { getMe } from '@/data/api'
 import { useTillStore } from '@/stores/till'
 import LucidePanelLeft from '~icons/lucide/panel-left'
-import LucideZap from '~icons/lucide/zap'
 import LucideChevronsUpDown from '~icons/lucide/chevrons-up-down'
 import LucideStore from '~icons/lucide/store'
 import LucideWarehouse from '~icons/lucide/warehouse'
@@ -103,12 +102,6 @@ onMounted(async () => {
 		>
 			<LucidePanelLeft class="h-[17px] w-[17px]" />
 		</button>
-
-		<div
-			class="grid h-6 w-6 place-items-center rounded-full border border-outline-gray-2 text-ink-gray-7"
-		>
-			<LucideZap class="h-3 w-3" />
-		</div>
 
 		<span class="text-p-sm font-medium text-ink-gray-8">{{ title }}</span>
 

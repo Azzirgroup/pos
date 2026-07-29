@@ -30,6 +30,8 @@ const props = defineProps({
 	/** Expense accounts, modes and neighbours for the money-out form. */
 	options: { type: Object, default: null },
 	movementBusy: { type: Boolean, default: false },
+	/** Which tab to land on. The Expenses entry in the till opens 'money'. */
+	initialTab: { type: String, default: 'count' },
 })
 
 const emit = defineEmits([
@@ -57,7 +59,7 @@ watch(
 	() => props.modelValue,
 	(isOpen) => {
 		if (!isOpen) return
-		tab.value = 'count'
+		tab.value = props.initialTab || 'count'
 		profile.value = props.profiles[0]?.name || null
 		floats.value = Object.fromEntries(props.paymentModes.map((m) => [m, '']))
 		shortPerson.value = {}
@@ -183,6 +185,7 @@ const MOVEMENT_ICONS = {
 	Expense: LucideBanknote,
 	'Neighbour Purchase': LucideStore,
 }
+
 </script>
 
 <template>
@@ -244,6 +247,7 @@ const MOVEMENT_ICONS = {
 			>
 				{{ busy ? 'Opening…' : 'Open shift' }}
 			</button>
+
 		</div>
 
 		<!-- ---------- Close ---------- -->
@@ -599,7 +603,7 @@ const MOVEMENT_ICONS = {
 			</template>
 
 			<!-- ---------- Neighbours ---------- -->
-			<template v-else>
+			<template v-else-if="tab === 'neighbours'">
 				<div v-if="neighbour?.count" class="flex flex-col gap-3">
 					<div class="grid grid-cols-2 gap-3">
 						<div class="rounded-xl bg-surface-amber-2 px-3 py-2.5">
@@ -654,6 +658,7 @@ const MOVEMENT_ICONS = {
 					Nothing was sourced from a neighbour this shift.
 				</p>
 			</template>
+
 		</div>
 	</BottomSheet>
 </template>

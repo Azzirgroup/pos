@@ -109,6 +109,18 @@ const routes = [
 		component: () => import('@/views/Reports.vue'),
 	},
 	{
+		path: '/previous-shifts',
+		name: 'PreviousShifts',
+		meta: { title: 'Previous shifts' },
+		component: () => import('@/views/PreviousShifts.vue'),
+	},
+	{
+		path: '/neighbours',
+		name: 'Neighbours',
+		meta: { title: 'Neighbour purchases' },
+		component: () => import('@/views/Neighbours.vue'),
+	},
+	{
 		path: '/settings',
 		name: 'Settings',
 		meta: { title: 'Settings' },

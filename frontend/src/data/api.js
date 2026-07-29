@@ -61,6 +61,21 @@ export const closeShift = ({ counted, shorts }) =>
 
 /* ---------- money out of the till ---------- */
 
+/** Stock bought from neighbouring shops, and what is still owed for it. */
+export const listNeighbourPurchases = ({ days, status, limit } = {}) =>
+	call('cosmestics.api.sourcing.list_purchases', {
+		days: days || 30,
+		status: status || null,
+		limit: limit || 200,
+	})
+
+/** Shifts already closed, newest first. */
+export const listRecentShifts = ({ limit, mine } = {}) =>
+	call('cosmestics.api.shift.list_recent_shifts', {
+		limit: limit || 10,
+		mine: mine === false ? 0 : 1,
+	})
+
 /** Expense accounts, modes and neighbours the money-out form needs. */
 export const getMovementOptions = () => call('cosmestics.api.shift.get_movement_options')
 

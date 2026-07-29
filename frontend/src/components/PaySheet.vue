@@ -262,7 +262,7 @@ function goBack() {
 		tall
 		@update:model-value="emit('update:modelValue', $event)"
 	>
-		<div class="flex flex-col gap-4 px-4 pb-5 pt-1">
+		<div class="flex flex-col gap-2.5 px-4 pb-4 pt-1">
 			<!-- Back sits beside the amount rather than above it: the amount due is
 			     still the thing being looked at, and a header row of its own would
 			     push it below the fold on a phone. -->
@@ -278,7 +278,7 @@ function goBack() {
 					<div class="text-p-sm text-ink-gray-5">
 						{{ splitMode ? 'Split payment · amount due' : 'Amount due' }}
 					</div>
-					<div class="tabular mt-0.5 text-4xl font-semibold tracking-tight text-ink-gray-9">
+					<div class="tabular text-3xl font-semibold leading-tight tracking-tight text-ink-gray-9">
 						{{ fmtMoney(total) }}
 					</div>
 				</div>
@@ -287,7 +287,7 @@ function goBack() {
 			</div>
 
 			<!-- Split tender / part payment -->
-			<div v-if="splitMode" class="flex flex-col gap-3">
+			<div v-if="splitMode" class="flex flex-col gap-2">
 				<div v-for="(p, i) in parts" :key="i" class="rounded-xl border border-outline-gray-2 p-3">
 					<div class="flex items-center gap-2">
 						<select
@@ -340,7 +340,7 @@ function goBack() {
 
 				<!-- The balance is the number the cashier is deciding on. -->
 				<div
-					class="flex items-center justify-between rounded-xl px-4 py-3"
+					class="flex items-center justify-between rounded-xl px-4 py-2.5"
 					:class="
 						Math.abs(remaining) < 0.005
 							? 'bg-surface-green-2'
@@ -384,7 +384,7 @@ function goBack() {
 				<!-- A part-paid sale creates a debt, so it needs a named customer. -->
 				<button
 					v-if="isPartial"
-					class="flex min-h-touch items-center gap-3 rounded-xl border p-3.5 text-left transition-colors"
+					class="flex min-h-touch items-center gap-3 rounded-xl border p-2.5 text-left transition-colors"
 					:class="
 						customer
 							? 'border-outline-gray-2 bg-surface-white hover:bg-surface-gray-2'
@@ -418,7 +418,7 @@ function goBack() {
 			     exception, and it must not crowd the four one-tap methods. -->
 			<button
 				v-if="!splitMode && !isCredit"
-				class="flex min-h-touch items-center justify-center gap-2 rounded-xl border border-outline-gray-2 py-2.5 text-p-base font-medium text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
+				class="flex min-h-touch items-center justify-center gap-2 rounded-xl border border-outline-gray-2 py-2 text-p-base font-medium text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
 				@click="startSplit"
 			>
 				<LucideSplit class="h-4 w-4" />
@@ -430,7 +430,7 @@ function goBack() {
 				<button
 					v-for="m in METHODS"
 					:key="m.key"
-					class="flex min-h-touch flex-col items-center gap-1.5 rounded-xl border py-3 transition-colors"
+					class="flex min-h-touch flex-col items-center gap-1 rounded-xl border py-2 transition-colors"
 					:class="
 						method === m.key
 							? 'border-outline-gray-4 bg-surface-gray-3 text-ink-gray-9'
@@ -468,9 +468,9 @@ function goBack() {
 			</div>
 
 			<!-- Credit: the customer IS the transaction, so it leads. -->
-			<div v-if="!splitMode && isCredit" class="flex flex-col gap-3">
+			<div v-if="!splitMode && isCredit" class="flex flex-col gap-2">
 				<button
-					class="flex min-h-touch items-center gap-3 rounded-xl border p-3.5 text-left transition-colors"
+					class="flex min-h-touch items-center gap-3 rounded-xl border p-2.5 text-left transition-colors"
 					:class="
 						customer
 							? 'border-outline-gray-2 bg-surface-white hover:bg-surface-gray-2'
@@ -498,7 +498,7 @@ function goBack() {
 				<!-- Existing debt shown before adding more to it. -->
 				<div
 					v-if="customer && customer.outstanding > 0"
-					class="flex items-start gap-2.5 rounded-xl bg-surface-amber-2 px-4 py-3"
+					class="flex items-start gap-2.5 rounded-xl bg-surface-amber-2 px-4 py-2.5"
 				>
 					<LucideAlertTriangle class="mt-0.5 h-4 w-4 shrink-0 text-ink-amber-3" />
 					<div class="text-p-sm">
@@ -511,14 +511,14 @@ function goBack() {
 					</div>
 				</div>
 
-				<div class="rounded-xl bg-surface-gray-2 px-4 py-3 text-p-sm text-ink-gray-6">
+				<div class="rounded-xl bg-surface-gray-2 px-4 py-2.5 text-p-sm text-ink-gray-6">
 					Nothing is collected now. The invoice stays unpaid on the customer's account
 					and is not counted in the drawer at close.
 				</div>
 			</div>
 
 			<!-- Cash -->
-			<div v-else-if="method === 'cash'" class="flex flex-col gap-3">
+			<div v-else-if="method === 'cash'" class="flex flex-col gap-2">
 				<div>
 					<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
 						Cash received
@@ -529,7 +529,7 @@ function goBack() {
 						type="number"
 						inputmode="decimal"
 						placeholder="0.00"
-						class="tabular h-14 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-4 text-2xl font-semibold text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
+						class="tabular h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-4 text-2xl font-semibold text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
 						@focus="$event.target.select()"
 						@keyup.enter="complete"
 					/>
@@ -552,7 +552,7 @@ function goBack() {
 				     puts it, so the two paths ask the same question the same way. -->
 				<button
 					v-if="isPartial"
-					class="flex min-h-touch items-center gap-3 rounded-xl border p-3.5 text-left transition-colors"
+					class="flex min-h-touch items-center gap-3 rounded-xl border p-2.5 text-left transition-colors"
 					:class="
 						customer
 							? 'border-outline-gray-2 bg-surface-white hover:bg-surface-gray-2'
@@ -584,7 +584,7 @@ function goBack() {
 				<!-- Change is the highest-stakes number on this screen, so it gets
 				     colour and size the moment it becomes real. -->
 				<div
-					class="flex items-center justify-between rounded-xl px-4 py-3 transition-colors"
+					class="flex items-center justify-between rounded-xl px-4 py-2.5 transition-colors"
 					:class="
 						change > 0
 							? 'bg-surface-green-2'
@@ -637,7 +637,7 @@ function goBack() {
 			</div>
 
 			<button
-				class="flex min-h-touch w-full items-center justify-center gap-2 rounded-xl bg-surface-gray-7 py-4 text-p-lg font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
+				class="flex min-h-touch w-full items-center justify-center gap-2 rounded-xl bg-surface-gray-7 py-3 text-p-lg font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
 				:disabled="!canComplete"
 				@click="complete"
 			>

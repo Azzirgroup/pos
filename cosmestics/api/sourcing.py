@@ -12,7 +12,7 @@ goods "received but not billed" and the payable invisible.
 
 import frappe
 from frappe import _
-from frappe.utils import flt, nowdate
+from frappe.utils import add_days, flt, nowdate
 
 
 @frappe.whitelist(methods=["POST"])
@@ -87,6 +87,106 @@ def _record_till_payments(invoices):
 			)
 
 	return recorded
+
+
+@frappe.whitelist()
+def list_purchases(days: int = 30, status: str | None = None, limit: int = 200) -> dict:
+	"""Everything bought from a neighbouring shop, and what is still owed.
+
+	The till creates these one at a time with a customer waiting, and nothing
+	afterwards ever showed them together. The closing summary lists the ones from
+	the shift in front of you; this is the standing question — who have we been
+	buying from, and what have we not settled.
+
+	`status` is 'unpaid', 'paid' or None for both. Unpaid is the reason the
+	screen exists, so it is the one worth filtering to.
+	"""
+	group = frappe.db.get_single_value("Cosmestics POS Settings", "neighbour_supplier_group")
+	if not group:
+		return _empty_purchases("No neighbour supplier group is configured.")
+
+	suppliers = frappe.get_all("Supplier", filters={"supplier_group": group}, pluck="name")
+	if not suppliers:
+		return _empty_purchases("No shops are registered in the neighbour group yet.")
+
+	filters = {
+		"supplier": ("in", suppliers),
+		"docstatus": 1,
+		"posting_date": (">=", add_days(nowdate(), -int(days or 30))),
+	}
+	if status == "unpaid":
+		filters["outstanding_amount"] = (">", 0)
+	elif status == "paid":
+		filters["outstanding_amount"] = ("<=", 0)
+
+	rows = frappe.get_all(
+		"Purchase Invoice",
+		filters=filters,
+		fields=[
+			"name",
+			"supplier",
+			"posting_date",
+			"grand_total",
+			"outstanding_amount",
+			"status",
+			"owner",
+		],
+		order_by="posting_date desc, creation desc",
+		limit=min(int(limit or 200), 500),
+	)
+
+	# The items are what makes a row recognisable — "Ksh 400 to the shop next
+	# door" means nothing a week later without knowing what it bought.
+	items = {}
+	if rows:
+		for it in frappe.get_all(
+			"Purchase Invoice Item",
+			filters={"parent": ("in", [r.name for r in rows])},
+			fields=["parent", "item_name", "qty"],
+			order_by="idx asc",
+		):
+			items.setdefault(it.parent, []).append(f"{flt(it.qty):g} × {it.item_name}")
+
+	out = []
+	for r in rows:
+		out.append(
+			{
+				"name": r.name,
+				"supplier": r.supplier,
+				"posting_date": str(r.posting_date),
+				"grand_total": flt(r.grand_total),
+				"outstanding": flt(r.outstanding_amount),
+				"status": r.status,
+				"bought_by": r.owner,
+				"items": ", ".join(items.get(r.name, [])[:4]),
+			}
+		)
+
+	return {
+		"rows": out,
+		"totals": {
+			"count": len(out),
+			"spend": flt(sum(r["grand_total"] for r in out)),
+			"owed": flt(sum(r["outstanding"] for r in out)),
+			"shops": len({r["supplier"] for r in out}),
+		},
+		"suppliers": suppliers,
+		"reason": None,
+	}
+
+
+def _empty_purchases(reason):
+	"""An empty list with the reason it is empty.
+
+	The same distinction `catalog.sourcing` makes: "nothing bought yet" and
+	"this was never set up" look identical on screen and need different actions.
+	"""
+	return {
+		"rows": [],
+		"totals": {"count": 0, "spend": 0, "owed": 0, "shops": 0},
+		"suppliers": [],
+		"reason": reason,
+	}
 
 
 def _make_purchase_invoice(supplier, rows, company, warehouse, paid):

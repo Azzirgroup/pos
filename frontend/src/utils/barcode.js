@@ -47,6 +47,49 @@ export function isValidEan13(code) {
 	return /^\d{13}$/.test(value) && checkDigit(value.slice(0, 12)) === value[12]
 }
 
+/**
+ * Could this string be a barcode at all?
+ *
+ * Deliberately permissive about the alphabet — Code 128 and Code 39 carry
+ * letters, and shops label their own shelf stock with all sorts — but strict
+ * about the characters that never appear in a scan. Whitespace and control
+ * characters mean the read was interrupted rather than short.
+ */
+export function looksLikeBarcode(code) {
+	const value = String(code || '')
+	return /^[A-Za-z0-9\-._$/+%]{6,48}$/.test(value)
+}
+
+/**
+ * Verify the check digit, for the symbologies that carry one.
+ *
+ * EAN-13, EAN-8, UPC-A and UPC-E all end in a modulo-10 check digit computed
+ * over the digits before it, so a misread almost always fails it. That is the
+ * difference between "this scanned wrong, do it again" and sending somebody to
+ * look for a product that was never on the shelf.
+ *
+ * Anything that is not a fixed-length all-numeric code returns true: Code 128
+ * has no check digit a reader exposes, and refusing those would reject every
+ * legitimate shelf label a shop prints for itself.
+ */
+export function checksumOk(code) {
+	const value = String(code || '')
+	if (!/^\d+$/.test(value)) return true
+	// UPC-E uses a different expansion before the check digit is computed, so it
+	// is left alone rather than checked with the wrong formula.
+	if (![8, 12, 13].includes(value.length)) return true
+
+	// UPC-A is EAN-13 with a leading zero, and EAN-8 uses the same alternating
+	// weights — so one calculation covers all three once the weighting is taken
+	// from the right-hand end rather than the left.
+	const digits = [...value].map(Number)
+	const check = digits.pop()
+	const total = digits
+		.reverse()
+		.reduce((sum, d, i) => sum + d * (i % 2 === 0 ? 3 : 1), 0)
+	return (10 - (total % 10)) % 10 === check
+}
+
 /** The 95-module bit string: guard, six left, centre, six right, guard. */
 function modules(code) {
 	const digits = [...code].map(Number)

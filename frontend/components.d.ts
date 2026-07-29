@@ -10,6 +10,7 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppRail: typeof import('./src/components/AppRail.vue')['default']
     AppTopBar: typeof import('./src/components/AppTopBar.vue')['default']
+    AttentionList: typeof import('./src/components/AttentionList.vue')['default']
     BarList: typeof import('./src/components/charts/BarList.vue')['default']
     BottomSheet: typeof import('./src/components/BottomSheet.vue')['default']
     CartLine: typeof import('./src/components/CartLine.vue')['default']

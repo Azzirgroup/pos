@@ -1,4 +1,13 @@
 import { ref, shallowRef } from 'vue'
+import { checksumOk } from '@/utils/barcode'
+
+/**
+ * How many frames must agree before a read is accepted. Two is enough: the
+ * decoders are accurate per-frame, so this is guarding against the occasional
+ * outlier rather than against a decoder that is generally wrong. Three would
+ * make scanning noticeably slower for very little further gain.
+ */
+const CONFIRMING_FRAMES = 2
 
 /**
  * Barcode scanning through the phone camera.
@@ -65,6 +74,19 @@ export function useCameraScanner(onScan) {
 	let busy = false
 	let lastCode = null
 	let lastAt = 0
+	/**
+	 * The value the last frames agreed on, and how many frames have agreed.
+	 *
+	 * A camera decoding a blurred or angled label will occasionally return a
+	 * confident but wrong value for a single frame, and the old code emitted the
+	 * first thing it saw. Requiring consecutive frames to agree costs about a
+	 * tenth of a second and removes that class of misread entirely: two
+	 * independent frames producing the same wrong digits essentially does not
+	 * happen, whereas one frame doing so happens often enough to notice at a
+	 * counter.
+	 */
+	let candidate = null
+	let agreeing = 0
 
 	async function start(videoEl) {
 		error.value = null
@@ -133,7 +155,7 @@ export function useCameraScanner(onScan) {
 			try {
 				const code =
 					engine.value === 'native' ? await detectNative() : await detectWasm()
-				if (code) emit(code)
+				consider(code)
 			} catch {
 				// A transient decode failure is normal between frames; keep scanning.
 			} finally {
@@ -165,6 +187,40 @@ export function useCameraScanner(onScan) {
 			{ tryHarder: true, formats: ZXING_FORMATS, maxNumberOfSymbols: 1 },
 		)
 		return results.length ? results[0].text : null
+	}
+
+	/**
+	 * Hold a read until a second frame confirms it.
+	 *
+	 * A frame that decodes nothing does not reset the tally — the label drifting
+	 * out of focus for one frame is not disagreement, and treating it as such
+	 * meant a hand-held phone rarely got two "consecutive" reads at all. Only a
+	 * *different* value resets it, because that is the case where one of the two
+	 * is genuinely wrong.
+	 */
+	function consider(code) {
+		if (!code) return
+
+		// A code that fails its own check digit was misread by the decoder. There
+		// is nothing to confirm and nothing to look up.
+		if (!checksumOk(code)) {
+			candidate = null
+			agreeing = 0
+			return
+		}
+
+		if (code !== candidate) {
+			candidate = code
+			agreeing = 1
+			return
+		}
+
+		agreeing += 1
+		if (agreeing >= CONFIRMING_FRAMES) {
+			candidate = null
+			agreeing = 0
+			emit(code)
+		}
 	}
 
 	function emit(code) {
@@ -201,6 +257,10 @@ export function useCameraScanner(onScan) {
 		stream = null
 		detector = null
 		busy = false
+		// Cleared with the camera: a half-confirmed read from the last sheet must
+		// not be completed by the first frame of the next one.
+		candidate = null
+		agreeing = 0
 		torchOn.value = false
 		if (video.value) video.value.srcObject = null
 	}

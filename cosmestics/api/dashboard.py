@@ -166,6 +166,7 @@ def overview(days: int = DEFAULT_DAYS) -> dict:
 		"attention": {
 			"below_reorder": _below_reorder_rows(),
 			"overdue": _overdue_rows(),
+			"slow_moving": _slow_moving_rows(days),
 		},
 		"tills": _open_tills(),
 	}
@@ -406,6 +407,46 @@ def _overdue_rows() -> dict:
 			{"label": "Due", "key": "due_date", "type": "text"},
 			{"label": "Days late", "key": "days_overdue", "type": "number"},
 			{"label": "Outstanding", "key": "outstanding", "type": "currency"},
+		],
+		"rows": rows,
+	}
+
+
+def _slow_moving_rows(days: int) -> dict:
+	"""Stock that has not sold in the window, worth most first.
+
+	The counterpart to the buy list, and the one nobody asks for until the money
+	is already tied up: below-reorder says what to buy, this says what not to buy
+	again. Ordered by value rather than by age, because a hundred units of
+	something cheap gathering dust matters less than three of something dear.
+
+	A left join with a null match is what "did not sell" means here — filtering
+	on a sold quantity of zero would only ever find items that appear in the
+	sales table, which by definition sold.
+	"""
+	start, _end, _days = _window(days)
+	rows = frappe.db.sql(
+		"""select i.item_name, b.item_code, b.warehouse,
+		          b.actual_qty, b.actual_qty * b.valuation_rate as value
+		   from tabBin b
+		   join tabItem i on i.name = b.item_code
+		   where b.actual_qty > 0
+		     and not exists (
+		         select 1 from `tabSales Invoice Item` sii
+		         join `tabSales Invoice` si on si.name = sii.parent
+		         where sii.item_code = b.item_code and si.docstatus = 1
+		           and si.posting_date >= %(start)s
+		     )
+		   order by value desc limit %(limit)s""",
+		{"start": start, "limit": SHORTLIST},
+		as_dict=True,
+	)
+	return {
+		"columns": [
+			{"label": "Item", "key": "item_name", "type": "text"},
+			{"label": "Warehouse", "key": "warehouse", "type": "text"},
+			{"label": "On hand", "key": "actual_qty", "type": "number"},
+			{"label": "Tied up", "key": "value", "type": "currency"},
 		],
 		"rows": rows,
 	}
@@ -946,17 +987,6 @@ def accounts(days: int = DEFAULT_DAYS) -> dict:
 		as_dict=True,
 	)
 
-	tax = frappe.db.sql(
-		f"""select t.account_head as account, sum(t.base_tax_amount) as tax
-		    from `tabSales Taxes and Charges` t
-		    join `tabSales Invoice` si on si.name = t.parent
-		    where si.docstatus = 1 and si.posting_date between %(start)s and %(end)s
-		      {_scope('si')}
-		    group by t.account_head order by tax desc""",
-		_args({"start": start, "end": end}),
-		as_dict=True,
-	)
-
 	net = flt(money["receivable"]) - flt(money["payable"])
 	return {
 		"period": {"from": str(start), "to": str(end), "days": days},
@@ -1009,13 +1039,6 @@ def accounts(days: int = DEFAULT_DAYS) -> dict:
 				"Biggest first",
 				[_col("Supplier", "party"), _col("Invoices", "invoices", "number"), _col("We owe", "outstanding", "currency")],
 				payable,
-			),
-			_section(
-				"tax",
-				"Tax collected",
-				"In this period",
-				[_col("Account", "account"), _col("Tax", "tax", "currency")],
-				tax,
 			),
 		],
 	}

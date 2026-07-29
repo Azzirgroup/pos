@@ -10,6 +10,7 @@ import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideDownload from '~icons/lucide/download'
 import LucideSend from '~icons/lucide/send'
+import LucideChevronLeft from '~icons/lucide/chevron-left'
 
 /**
  * Also used inside the documents hub, where the report list is narrowed to the
@@ -64,6 +65,25 @@ const grouped = computed(() => {
 const activeReport = computed(() => reports.value.find((r) => r.key === active.value))
 
 /**
+ * Whether the card index is showing.
+ *
+ * Only the standalone `/reports` route has one. A pinned route (Receivables,
+ * Stock movement) is already the answer to a question, and an embed inside the
+ * documents hub is narrowed to three reports about the type on screen — an
+ * index in either case would be a menu with one thing on it.
+ */
+const showIndex = ref(!props.report && !route.meta?.report && !props.embedded)
+
+function openReport(key) {
+	const same = active.value === key
+	active.value = key
+	showIndex.value = false
+	// The watcher only fires on a change, so opening whichever report happened to
+	// be the default would otherwise show an empty table.
+	if (same) run()
+}
+
+/**
  * Report rows are computed figures, not documents, so there is nothing to
  * attach — the numbers are the message. Columns come through as a getter
  * because every report has its own.
@@ -91,7 +111,9 @@ onMounted(async () => {
 	warehouses.value = whs
 	// An embedded picker may not include whatever the default was.
 	if (props.only?.length && !props.only.includes(active.value)) active.value = props.only[0]
-	run()
+	// Nothing to run while the index is up — the first query is whichever card
+	// gets picked, and running one nobody asked for costs a round trip on load.
+	if (!showIndex.value) run()
 })
 
 // The hub keeps one mounted instance and swaps the doctype under it, so the
@@ -141,38 +163,53 @@ function exportCsv() {
 
 <template>
 	<div class="flex min-h-0 flex-1 overflow-hidden">
-		<!-- Report picker. A permanent list beats a dropdown here: a manager
-		     compares several reports in one sitting. -->
-		<aside
-			v-if="!pinned && !embedded"
-			class="hidden w-[200px] shrink-0 overflow-y-auto border-r border-outline-gray-2 bg-surface-white py-2 lg:block"
-		>
-			<div v-for="(items, group) in grouped" :key="group" class="mb-3">
-				<div class="px-3 pb-1 text-p-xs font-medium uppercase tracking-wide text-ink-gray-5">
-					{{ group }}
-				</div>
-				<button
-					v-for="r in items"
-					:key="r.key"
-					class="block w-full px-3 py-1.5 text-left text-p-sm transition-colors"
-					:class="
-						active === r.key
-							? 'bg-surface-gray-3 font-medium text-ink-gray-9'
-							: 'text-ink-gray-7 hover:bg-surface-gray-2'
-					"
-					@click="active = r.key"
-				>
-					{{ r.label }}
-				</button>
-			</div>
-		</aside>
+		<!-- ---------- The index ----------
+		     Cards rather than a rail. A rail of sixteen bare labels is a column of
+		     nouns — "Dead stock", "Audit trail" — that does not tell a shop manager
+		     which one answers their question, and it costs 200px on every report
+		     they then read. Each card carries what the report is for, and the space
+		     is reclaimed the moment one is opened. -->
+		<div v-if="showIndex" class="flex min-w-0 flex-1 flex-col overflow-hidden">
+			<PageHeader title="Reports" subtitle="What the shop has been doing" />
 
-		<div class="flex min-w-0 flex-1 flex-col overflow-hidden">
+			<div class="min-h-0 flex-1 overflow-auto px-4 py-3">
+				<section v-for="(items, group) in grouped" :key="group" class="mb-5">
+					<h2 class="mb-2 text-p-xs font-medium uppercase tracking-wide text-ink-gray-5">
+						{{ group }}
+					</h2>
+					<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-4">
+						<button
+							v-for="r in items"
+							:key="r.key"
+							class="flex min-w-0 flex-col items-start gap-1 rounded-lg border border-outline-gray-2 bg-surface-white p-3.5 text-left transition-colors hover:border-outline-gray-3 hover:bg-surface-gray-2"
+							@click="openReport(r.key)"
+						>
+							<span class="text-p-base font-medium text-ink-gray-9">{{ r.label }}</span>
+							<span v-if="r.hint" class="text-p-sm leading-snug text-ink-gray-5">
+								{{ r.hint }}
+							</span>
+						</button>
+					</div>
+				</section>
+			</div>
+		</div>
+
+		<div v-else class="flex min-w-0 flex-1 flex-col overflow-hidden">
 			<PageHeader
 				:title="activeReport?.label || 'Reports'"
-				:subtitle="`${result.rows.length} row${result.rows.length === 1 ? '' : 's'}`"
+				:subtitle="activeReport?.hint || `${result.rows.length} rows`"
 			>
 				<template #actions>
+					<!-- The way back to the index, and the reason the rail could go:
+					     switching report is a deliberate act a few times a session,
+					     not something worth a permanent column. -->
+					<Button
+						v-if="!pinned && !embedded"
+						variant="subtle"
+						:icon-left="LucideChevronLeft"
+						label="All reports"
+						@click="showIndex = true"
+					/>
 					<!-- Embedded, the picker is a short row of chips: the list is already
 					     narrowed to this document type, so a rail would be a column of
 					     three items beside a table. -->
@@ -190,13 +227,6 @@ function exportCsv() {
 						>
 							{{ r.label }}
 						</button>
-					</div>
-					<div v-else-if="!pinned && !embedded" class="w-[170px] lg:hidden">
-						<FormControl
-						type="select"
-							v-model="active"
-							:options="available.map((r) => ({ label: r.label, value: r.key }))"
-						/>
 					</div>
 					<div v-if="usesWarehouse" class="w-[180px]">
 						<FormControl type="select" v-model="warehouse" :options="warehouseOptions" />

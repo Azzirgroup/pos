@@ -38,6 +38,10 @@ export const MODULE_TABS = {
 		{ label: 'Invoices', to: '/documents/sales-invoice' },
 		{ label: 'Payments', to: '/documents/payment-entry' },
 		{ label: 'Customers', to: '/customers' },
+		// Filed under Sales rather than Purchasing: these are raised by a cashier
+		// to complete a sale that is happening at that moment, and the person who
+		// looks for them is the one who was standing at the till.
+		{ label: 'Neighbours', to: '/neighbours' },
 	],
 	accounts: [
 		{ label: 'Balances', to: '/accounts' },
@@ -84,7 +88,8 @@ export function moduleFor(path) {
 	)
 		return 'inventory'
 	if (path.startsWith('/purchasing')) return 'purchasing'
-	if (path.startsWith('/sales') || path.startsWith('/customers')) return 'sales'
+	if (path.startsWith('/sales') || path.startsWith('/customers') || path.startsWith('/neighbours'))
+		return 'sales'
 	if (path.startsWith('/accounts')) return 'accounts'
 	return null
 }
