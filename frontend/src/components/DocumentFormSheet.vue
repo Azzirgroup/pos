@@ -151,6 +151,13 @@ function optionsFor(field) {
 			<div v-if="loading" class="grid h-40 place-items-center"><Spinner class="h-5 w-5" /></div>
 
 			<div v-else-if="form" class="flex flex-col gap-4">
+				<!-- What this document is for, where it is not obvious. A stock
+				     reconciliation setting the balance rather than adding to it is
+				     the kind of thing worth saying before, not after. -->
+				<p v-if="form.hint" class="rounded-lg bg-surface-amber-1 px-3 py-2 text-p-xs text-ink-amber-3">
+					{{ form.hint }}
+				</p>
+
 				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
 					<FormControl
 						v-for="field in form.fields"

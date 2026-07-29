@@ -1,9 +1,16 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { fmtMoneyShort } from '@/utils/format'
 import LucideMinus from '~icons/lucide/minus'
 import LucidePlus from '~icons/lucide/plus'
 import LucideTrash2 from '~icons/lucide/trash-2'
+import LucideSprayCan from '~icons/lucide/spray-can'
+import LucideDroplet from '~icons/lucide/droplet'
+import LucideScissors from '~icons/lucide/scissors'
+import LucidePill from '~icons/lucide/pill'
+import LucideShirt from '~icons/lucide/shirt'
+import LucideCookie from '~icons/lucide/cookie'
+import LucidePackage from '~icons/lucide/package'
 
 const props = defineProps({
 	item: { type: Object, required: true },
@@ -41,6 +48,36 @@ const stockTone = computed(() => {
 	if (low.value) return 'text-ink-amber-3'
 	return 'text-ink-gray-5'
 })
+
+/**
+ * A picture where the item has one, an icon where it does not.
+ *
+ * Kept to a 32px square deliberately. This grid earns its speed from density —
+ * a cashier scanning sixty products needs them all on one screen — so the
+ * thumbnail is a recognition aid at the edge of the cell, not a product photo
+ * the layout is built around.
+ */
+const broken = ref(false)
+const thumbnail = computed(() => (props.item.image && !broken.value ? props.item.image : null))
+
+/**
+ * Fallback icon by category. Keyword-matched rather than an exact table of item
+ * groups: every shop names its groups differently, and a wrong-but-plausible
+ * icon is no worse than the generic one it replaces.
+ */
+const CATEGORY_ICONS = [
+	[/perfume|spray|deodorant|fragrance|scent/, LucideSprayCan],
+	[/lotion|oil|cream|moistur|serum|shampoo|gel|liquid/, LucideDroplet],
+	[/hair|salon|razor|shav|comb|brush/, LucideScissors],
+	[/pharma|medicine|drug|tablet|capsule|supplement/, LucidePill],
+	[/cloth|wear|apparel|bag|shoe|acces/, LucideShirt],
+	[/food|snack|cake|bake|drink|beverage/, LucideCookie],
+]
+
+const fallbackIcon = computed(() => {
+	const haystack = `${props.item.category || ''} ${props.item.brand || ''}`.toLowerCase()
+	return CATEGORY_ICONS.find(([pattern]) => pattern.test(haystack))?.[1] || LucidePackage
+})
 </script>
 
 <template>
@@ -58,7 +95,28 @@ const stockTone = computed(() => {
 	>
 		<div class="flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 py-2">
 			<div class="flex items-start gap-1.5">
-				<span class="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full" :class="dot" />
+				<!-- Thumbnail carries the availability dot in its corner, so the two
+				     share one column instead of each taking their own. -->
+				<span class="relative mt-0.5 shrink-0">
+					<img
+						v-if="thumbnail"
+						:src="thumbnail"
+						alt=""
+						class="h-8 w-8 rounded object-cover"
+						loading="lazy"
+						@error="broken = true"
+					/>
+					<span
+						v-else
+						class="grid h-8 w-8 place-items-center rounded bg-surface-gray-2 text-ink-gray-5"
+					>
+						<component :is="fallbackIcon" class="h-4 w-4" aria-hidden="true" />
+					</span>
+					<span
+						class="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-white"
+						:class="dot"
+					/>
+				</span>
 				<span class="line-clamp-2 min-w-0 text-p-sm font-medium leading-snug text-ink-gray-8">
 					{{ item.item_name }}
 				</span>
@@ -66,7 +124,7 @@ const stockTone = computed(() => {
 			<!-- Price and stock on one line. The dot alone said "low" but never how
 			     low, and a cashier deciding whether to promise the last two units
 			     needs the number, not a colour. -->
-			<div class="flex items-baseline justify-between gap-1.5 pl-3">
+			<div class="flex items-baseline justify-between gap-1.5 pl-[38px]">
 				<span class="tabular text-p-xs text-ink-gray-6">
 					KES {{ fmtMoneyShort(item.price).replace(/^\D+/, '') }}
 				</span>

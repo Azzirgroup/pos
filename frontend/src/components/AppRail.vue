@@ -12,6 +12,7 @@ import LucideUsers from '~icons/lucide/users'
 import LucideSettings from '~icons/lucide/settings-2'
 import LucideChartColumn from '~icons/lucide/chart-column'
 import LucideFiles from '~icons/lucide/files'
+import LucideBookUser from '~icons/lucide/book-user'
 
 const props = defineProps({
 	/** 'icons' | 'labels'. 'hidden' is handled by the shell not rendering us. */
@@ -45,6 +46,7 @@ const GROUPS = [
 	[
 		{ to: '/documents', icon: LucideFiles, label: 'Documents' },
 		{ to: '/reports', icon: LucideChartColumn, label: 'Reports' },
+		{ to: '/masters', icon: LucideBookUser, label: 'Records' },
 	],
 ]
 

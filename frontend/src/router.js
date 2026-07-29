@@ -67,6 +67,14 @@ const routes = [
 		component: () => import('@/views/Pricing.vue'),
 	},
 	{
+		// The records a shop maintains itself. Same shape as /documents: the type
+		// is a parameter, not five near-identical routes.
+		path: '/masters/:key?',
+		name: 'Masters',
+		meta: { title: 'Records' },
+		component: () => import('@/views/Masters.vue'),
+	},
+	{
 		path: '/barcodes',
 		name: 'Barcodes',
 		meta: { title: 'Barcodes' },

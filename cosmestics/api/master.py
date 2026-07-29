@@ -130,6 +130,70 @@ def list_types() -> list:
 
 
 @frappe.whitelist()
+def list_records(key: str, search: str | None = None, limit: int = 100) -> dict:
+	"""Existing records of one type, so the screen shows what is already there.
+
+	A create-only screen makes people add duplicates: nobody can see that the
+	customer they are about to add is already on file. The columns are the same
+	fields the form asks for, so the list and the form describe a record the
+	same way.
+	"""
+	entry = _entry(key)
+	doctype = entry["doctype"]
+	if not frappe.has_permission(doctype, "read"):
+		frappe.throw(_("You may not view {0}").format(_(doctype)), frappe.PermissionError)
+
+	meta = frappe.get_meta(doctype)
+	shown = [f for f in entry["fields"] if f["fieldname"] != "opening_price" and meta.has_field(f["fieldname"])]
+
+	fields = ["name"]
+	for f in shown:
+		if f["fieldname"] not in fields:
+			fields.append(f["fieldname"])
+
+	filters = {}
+	if meta.has_field("disabled"):
+		filters["disabled"] = 0
+	if meta.has_field("company") and frappe.defaults.get_global_default("company"):
+		filters["company"] = frappe.defaults.get_global_default("company")
+
+	or_filters = None
+	if search:
+		or_filters = {"name": ("like", f"%{search}%")}
+		title = entry["title_field"]
+		if meta.has_field(title):
+			or_filters[title] = ("like", f"%{search}%")
+
+	rows = frappe.get_all(
+		doctype,
+		filters=filters,
+		or_filters=or_filters,
+		fields=fields,
+		order_by="modified desc",
+		limit_page_length=min(max(cint(limit) or 100, 1), 500),
+	)
+
+	columns = [{"label": _("ID"), "key": "name", "type": "text"}] + [
+		{
+			"label": f["label"],
+			"key": f["fieldname"],
+			"type": "currency" if f["type"] == "currency" else "text",
+		}
+		for f in shown
+	]
+
+	return {
+		"key": key,
+		"doctype": doctype,
+		"label": entry["label"],
+		"columns": columns,
+		"rows": rows,
+		"total": frappe.db.count(doctype, filters),
+		"can_create": frappe.has_permission(doctype, "create"),
+	}
+
+
+@frappe.whitelist()
 def options(key: str, fieldname: str, search: str | None = None, limit: int = 20) -> list:
 	"""Values for one link field on one form.
 

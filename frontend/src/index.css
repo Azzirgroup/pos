@@ -34,6 +34,30 @@
 }
 
 @layer components {
+	/*
+	 * Stacking order, stated once.
+	 *
+	 * frappe-ui portals its Dialog to <body> but gives the overlay no z-index at
+	 * all. `#app` sets no z-index either, so it never becomes a stacking context
+	 * — which means every positioned element inside it competes with the modal in
+	 * the root context, and wins. A sticky table header at `z-10` was painting
+	 * straight over an open dialog.
+	 *
+	 * The scale, low to high:
+	 *   ≤ 40  page chrome (sticky table headers, tab strips)
+	 *     50  bottom sheets and tooltips
+	 *     60  dialogs
+	 *     70  toasts — a toast reports what the dialog just did, so it has to be
+	 *         readable while the dialog is still open
+	 */
+	.dialog-overlay {
+		z-index: 60;
+	}
+
+	.pos-toast {
+		z-index: 70;
+	}
+
 	/* Scroll regions inside the fixed POS shell. */
 	.pos-scroll {
 		@apply overflow-y-auto overscroll-contain;

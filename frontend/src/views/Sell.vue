@@ -22,7 +22,7 @@ import {
 	getRecentSales,
 } from '@/data/api'
 
-import { Button, FormControl, TabButtons } from 'frappe-ui'
+import { Button, Dialog, FormControl, TabButtons } from 'frappe-ui'
 import ItemGrid from '@/components/ItemGrid.vue'
 import CartPanel from '@/components/CartPanel.vue'
 import MobileCartBar from '@/components/MobileCartBar.vue'
@@ -129,6 +129,32 @@ onMounted(async () => {
 		console.warn('[pos] payment methods lookup failed', e)
 	}
 })
+
+/**
+ * The receipt prompt after a sale.
+ *
+ * Optional, and remembered. A shop that prints every receipt wants one tap; a
+ * shop that prints none does not want a dialog in the way of the next customer.
+ * The preference is per browser rather than per user, because it is a property
+ * of the counter — whether there is a printer attached to *this* till.
+ *
+ * It never blocks: the sale is already posted and the cart already cleared by
+ * the time this opens, so dismissing it loses nothing, and the toolbar keeps a
+ * Receipt button for anyone who changes their mind.
+ */
+const PRINT_PREF = 'cosmestics:askPrint'
+const askToPrint = ref(localStorage.getItem(PRINT_PREF) !== 'never')
+const printPrompt = ref(false)
+
+function setAskToPrint(on) {
+	askToPrint.value = on
+	localStorage.setItem(PRINT_PREF, on ? 'always' : 'never')
+}
+
+async function printFromPrompt() {
+	printPrompt.value = false
+	await printReceipt()
+}
 
 async function printReceipt(invoice) {
 	const target = invoice || lastSale.value?.invoice
@@ -416,7 +442,14 @@ async function completeSale(payment) {
 				reference: payment.reference,
 			},
 		})
-		lastSale.value = { invoice: res.invoice, total: paid, at: Date.now() }
+		lastSale.value = {
+			invoice: res.invoice,
+			total: paid,
+			change: payment.change || 0,
+			outstanding: res.outstanding || 0,
+			at: Date.now(),
+		}
+		if (askToPrint.value) printPrompt.value = true
 		notify(
 			res.outstanding > 0
 				? `Invoice ${res.invoice} · ${fmtMoney(res.outstanding)} outstanding`
@@ -588,6 +621,46 @@ useShortcuts({
 				<CartPanel embedded class="min-h-0 flex-1" @pay="openPay" @hold="holdSale" @pick-customer="pickCustomer(false)" />
 			</div>
 		</BottomSheet>
+
+		<!-- Receipt prompt. Deliberately after the cart has cleared: the next
+		     customer can already be served behind it. -->
+		<Dialog v-model="printPrompt" :options="{ title: 'Sale complete', size: 'sm' }">
+			<template #body-content>
+				<div v-if="lastSale" class="flex flex-col gap-3">
+					<div class="rounded-xl bg-surface-gray-2 px-4 py-3">
+						<div class="text-p-xs text-ink-gray-5">{{ lastSale.invoice }}</div>
+						<div class="tabular mt-0.5 text-2xl font-semibold text-ink-gray-9">
+							{{ fmtMoney(lastSale.total) }}
+						</div>
+						<div v-if="lastSale.change > 0" class="tabular mt-0.5 text-p-sm text-ink-green-3">
+							Change {{ fmtMoney(lastSale.change) }}
+						</div>
+						<div v-else-if="lastSale.outstanding > 0" class="tabular mt-0.5 text-p-sm text-ink-amber-3">
+							{{ fmtMoney(lastSale.outstanding) }} still owed
+						</div>
+					</div>
+					<button
+						class="text-left text-p-xs text-ink-gray-5 underline decoration-outline-gray-3 underline-offset-2 hover:text-ink-gray-7"
+						@click="setAskToPrint(false)"
+					>
+						Stop asking on this till — the Receipt button stays in the toolbar
+					</button>
+				</div>
+			</template>
+			<template #actions>
+				<div class="flex gap-2">
+					<Button
+						theme="gray"
+						variant="solid"
+						class="flex-1"
+						:icon-left="LucidePrinter"
+						label="Print receipt"
+						@click="printFromPrompt"
+					/>
+					<Button variant="subtle" label="No receipt" @click="printPrompt = false" />
+				</div>
+			</template>
+		</Dialog>
 
 		<BottomSheet v-model="recentSheet" title="Recent sales" tall>
 			<div class="flex flex-col gap-2 px-4 pb-5">

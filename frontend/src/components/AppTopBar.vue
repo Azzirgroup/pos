@@ -160,7 +160,7 @@ onMounted(async () => {
 		>
 			<div
 				v-if="toast"
-				class="pointer-events-none absolute left-1/2 top-14 z-50 -translate-x-1/2 rounded-lg px-4 py-2.5 text-p-sm font-medium text-ink-white shadow-lg"
+				class="pointer-events-none pos-toast absolute left-1/2 top-14 -translate-x-1/2 rounded-lg px-4 py-2.5 text-p-sm font-medium text-ink-white shadow-lg"
 				:class="toast.tone === 'bad' ? 'bg-surface-red-5' : 'bg-surface-green-3'"
 			>
 				{{ toast.message }}

@@ -32,6 +32,7 @@ def get_catalog():
 			"stock_uom",
 			"has_batch_no",
 			"has_serial_no",
+			"image",
 		],
 		limit_page_length=0,
 		order_by="item_name asc",
@@ -56,6 +57,7 @@ def get_catalog():
 				"price": flt(prices.get(it.item_code)),
 				"stock": flt(stock.get(it.item_code)),
 				"barcodes": barcodes.get(it.item_code, []),
+				"image": it.image,
 				"uom": it.stock_uom,
 				"batched": bool(it.has_batch_no or it.has_serial_no),
 			}
@@ -130,7 +132,15 @@ def _categories(rows) -> list:
 
 
 def _warehouses(exclude) -> list:
-	"""Other branches we can request a transfer from."""
+	"""Other branches we can request a transfer from.
+
+	Only warehouses that actually hold stock. Every non-group warehouse used to
+	qualify, which on a real site meant offering the cashier a per-customer van
+	warehouse and "Work In Progress" as places to source goods from — neither is
+	a branch, both are nonsense to pick, and the real branches were buried among
+	them. A location with nothing in it cannot supply anything, so holding stock
+	is the honest test of whether it is worth offering.
+	"""
 	company = frappe.defaults.get_global_default("company")
 	filters = {"is_group": 0, "disabled": 0}
 	if company:
@@ -139,11 +149,20 @@ def _warehouses(exclude) -> list:
 	rows = frappe.get_all(
 		"Warehouse", filters=filters, fields=["name", "warehouse_name", "warehouse_type"]
 	)
-	return [
-		{"name": w.name, "label": w.warehouse_name}
-		for w in rows
-		if w.name != exclude and w.warehouse_type != "Transit"
-	]
+	candidates = [w for w in rows if w.name != exclude and w.warehouse_type != "Transit"]
+	if not candidates:
+		return []
+
+	stocked = set(
+		frappe.get_all(
+			"Bin",
+			filters={"warehouse": ("in", [w.name for w in candidates]), "actual_qty": (">", 0)},
+			pluck="warehouse",
+			limit_page_length=0,
+		)
+	)
+
+	return [{"name": w.name, "label": w.warehouse_name} for w in candidates if w.name in stocked]
 
 
 def _neighbours() -> list:

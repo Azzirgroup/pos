@@ -290,6 +290,15 @@ function notify(message, tone = 'good') {
 						:label="`New ${activeType.label}`"
 						@click="newOpen = true"
 					/>
+					<!-- No button, and the reason why. A missing control with no
+					     explanation reads as something broken. -->
+					<span
+						v-else-if="activeType?.create_hint"
+						class="max-w-[320px] text-p-xs text-ink-gray-5"
+						:title="activeType.create_hint"
+					>
+						{{ activeType.create_hint }}
+					</span>
 					<div class="w-[190px] lg:hidden">
 						<FormControl
 							type="select"
@@ -457,7 +466,7 @@ function notify(message, tone = 'good') {
 		>
 			<div
 				v-if="toast"
-				class="pointer-events-none absolute bottom-5 left-1/2 z-50 -translate-x-1/2 rounded-lg px-4 py-2.5 text-p-sm font-medium text-ink-white shadow-lg"
+				class="pointer-events-none pos-toast absolute bottom-5 left-1/2 -translate-x-1/2 rounded-lg px-4 py-2.5 text-p-sm font-medium text-ink-white shadow-lg"
 				:class="toast.tone === 'bad' ? 'bg-surface-red-5' : 'bg-surface-green-3'"
 			>
 				{{ toast.message }}

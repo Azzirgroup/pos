@@ -240,6 +240,13 @@ export const getDashboardTab = ({ tab, days, branch, warehouse }) =>
 
 export const listMasterTypes = () => call('cosmestics.api.master.list_types')
 
+export const listMasterRecords = ({ key, search, limit }) =>
+	call('cosmestics.api.master.list_records', {
+		key,
+		search: search || null,
+		limit: limit || 100,
+	})
+
 export const getMasterOptions = ({ key, fieldname, search }) =>
 	call('cosmestics.api.master.options', { key, fieldname, search: search || null })
 

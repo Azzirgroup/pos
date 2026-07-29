@@ -110,6 +110,7 @@ def _run(r):
 	_shift_and_credit(r, item)
 	_till(r, item)
 	_neighbour_sourcing(r, item)
+	_transfer_request(r, item)
 	_documents(r, item, wh)
 	_dashboard(r)
 	_dashboard_tabs(r)
@@ -539,6 +540,77 @@ def _documents(r, item, warehouse):
 	_document_actions(r, item, warehouse)
 
 
+def _transfer_request(r, item):
+	"""Requesting stock from another branch.
+
+	The only path in the app that raises a Material Request, and it had no
+	end-to-end check at all — only that its arguments were annotated. So "no
+	material requests are showing" could not be told apart from "the button that
+	makes them is broken".
+	"""
+	from cosmestics.api.catalog import get_catalog
+	from cosmestics.api.stock import request_transfer
+
+	print()
+	cat = get_catalog()
+	branches = cat["warehouses"]
+	r.check(
+		"other branches are offered to request from",
+		bool(branches),
+		str([w["label"] for w in branches][:5]),
+	)
+
+	# Every offered branch must actually hold something. Offering a per-customer
+	# van warehouse or Work In Progress as a place to source goods from is not a
+	# choice a cashier can act on.
+	empty = [
+		w["label"]
+		for w in branches
+		if not frappe.db.exists("Bin", {"warehouse": w["name"], "actual_qty": (">", 0)})
+	]
+	r.check("every branch offered holds stock", not empty, f"empty: {empty}" if empty else "")
+	r.check(
+		"the till's own warehouse is not offered as a source",
+		cat["warehouse"] not in [w["name"] for w in branches],
+		str(cat["warehouse"]),
+	)
+
+	if not branches:
+		return
+
+	try:
+		res = frappe.call(
+			request_transfer,
+			items=[{"item_code": item.item_code, "qty": 1}],
+			from_warehouse=branches[0]["name"],
+		)
+		mr = frappe.get_doc("Material Request", res["name"])
+		r.check("transfer request raised", mr.docstatus == 1, mr.name)
+		r.check("it is a transfer, not a purchase", mr.material_request_type == "Material Transfer")
+		r.check(
+			"the line moves stock from the branch to the till",
+			mr.items[0].from_warehouse == branches[0]["name"] and mr.items[0].warehouse == cat["warehouse"],
+			f"{mr.items[0].from_warehouse} -> {mr.items[0].warehouse}",
+		)
+		# And it must then be visible on the screen that lists them.
+		from cosmestics.api import documents
+
+		listed = frappe.call(documents.list_documents, key="material-request", days=30)
+		r.check(
+			"the request shows up in the documents hub",
+			any(row["name"] == mr.name for row in listed["rows"]),
+			f"{listed['total']} requests listed",
+		)
+	except Exception as e:
+		r.check("transfer request", False, f"{type(e).__name__}: {e}")
+
+	try:
+		request_transfer(items=[{"item_code": item.item_code, "qty": 1}], from_warehouse=cat["warehouse"])
+		r.check("requesting from our own warehouse is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("requesting from our own warehouse is refused", True)
+
+
 def _document_creation(r, item, warehouse):
 	"""Raising Sales Orders, Purchase Orders and Material Requests in the app.
 
@@ -550,10 +622,35 @@ def _document_creation(r, item, warehouse):
 
 	print()
 	creatable = [d for d in documents.DOCUMENTS if d.get("create")]
+	keys = {d["key"] for d in creatable}
 	r.check(
-		"the three a shop raises itself are creatable",
-		{"sales-order", "purchase-order", "material-request"} <= {d["key"] for d in creatable},
-		str([d["key"] for d in creatable]),
+		"every document a shop raises itself is creatable",
+		{
+			"sales-order",
+			"purchase-order",
+			"material-request",
+			"sales-invoice",
+			"purchase-invoice",
+			"purchase-receipt",
+			"delivery-note",
+			"stock-entry",
+			"stock-reconciliation",
+		}
+		<= keys,
+		str(sorted(keys)),
+	)
+	# Every registered type is either creatable or says why not. A screen with no
+	# New button and no explanation is the thing that looks broken.
+	silent = [
+		d["key"]
+		for d in documents.DOCUMENTS
+		if not d.get("create") and d["key"] not in documents.NOT_CREATABLE
+	]
+	r.check("every type either creates or explains why not", not silent, str(silent))
+	r.check(
+		"the not-creatable list only names registered types",
+		set(documents.NOT_CREATABLE) <= {d["key"] for d in documents.DOCUMENTS},
+		str(set(documents.NOT_CREATABLE) - {d["key"] for d in documents.DOCUMENTS}),
 	)
 
 	# Declared form fields must exist on their DocTypes, or the form silently
@@ -596,6 +693,31 @@ def _document_creation(r, item, warehouse):
 			},
 			[{"item_code": item.item_code, "qty": 4}],
 		),
+		(
+			"sales-invoice",
+			{"customer": customer[0] if customer else None, "due_date": add_days(nowdate(), 7)},
+			[{"item_code": item.item_code, "qty": 1, "warehouse": warehouse}],
+		),
+		(
+			"purchase-invoice",
+			{"supplier": supplier[0] if supplier else None, "due_date": add_days(nowdate(), 7)},
+			[{"item_code": item.item_code, "qty": 2, "rate": 80, "warehouse": warehouse}],
+		),
+		(
+			"purchase-receipt",
+			{"supplier": supplier[0] if supplier else None, "set_warehouse": warehouse},
+			[{"item_code": item.item_code, "qty": 2, "rate": 80}],
+		),
+		(
+			"delivery-note",
+			{"customer": customer[0] if customer else None, "set_warehouse": warehouse},
+			[{"item_code": item.item_code, "qty": 1}],
+		),
+		(
+			"stock-reconciliation",
+			{"purpose": "Stock Reconciliation", "set_warehouse": warehouse},
+			[{"item_code": item.item_code, "qty": 5, "valuation_rate": 60}],
+		),
 	]
 
 	for key, values, lines in cases:
@@ -611,7 +733,14 @@ def _document_creation(r, item, warehouse):
 				all(f.get("default") for f in form["fields"] if f["type"] == "date"),
 			)
 
-			values["transaction_date"] = nowdate()
+			# Seeded from the form's own defaults and then overlaid, which is
+			# exactly what the browser sends. Hardcoding a date field here meant
+			# the test only ever exercised the types that happened to use
+			# `transaction_date`, and every `posting_date` form failed on a
+			# mandatory field the real UI would have filled in.
+			defaults = {f["fieldname"]: f["default"] for f in form["fields"] if f.get("default")}
+			values = {**defaults, **{k: v for k, v in values.items() if v is not None}}
+
 			res = frappe.call(documents.create_document, key=key, values=values, items=lines)
 			r.check(f"{key} created as a draft", res["docstatus"] == 0, res["name"])
 
@@ -620,7 +749,11 @@ def _document_creation(r, item, warehouse):
 			# Only the trading documents are priced. A Material Request asks for
 			# stock to be moved or bought; it carries no rate, and asserting one
 			# would be testing a fact about ERPNext that is not true.
-			if key != "material-request":
+			# Only the trading documents are priced. A Material Request asks for
+			# stock to be moved or bought and a Stock Reconciliation states a
+			# balance; neither carries a rate, so asserting one would be testing a
+			# fact about ERPNext that is not true.
+			if key not in ("material-request", "stock-reconciliation"):
 				r.check(
 					f"{key} priced the line from the price list",
 					flt(doc.items[0].rate) > 0,
@@ -1046,6 +1179,19 @@ def _master_data(r):
 	except frappe.ValidationError:
 		r.check("asking for options on a non-link field is refused", True)
 
+	# The screen lists what already exists, not just a form: a create-only screen
+	# is how a shop ends up with the same customer three times.
+	for entry in master.MASTERS:
+		try:
+			listed = frappe.call(master.list_records, key=entry["key"], limit=5)
+			r.check(
+				f"records list {entry['key']}",
+				bool(listed["columns"]) and isinstance(listed["rows"], list),
+				f"{len(listed['rows'])} of {listed['total']}",
+			)
+		except Exception as e:
+			r.check(f"records list {entry['key']}", False, f"{type(e).__name__}: {e}")
+
 	groups = master.options(key="customer", fieldname="customer_group")
 	r.check("link options resolve", isinstance(groups, list), f"{len(groups)} customer groups")
 
@@ -1329,6 +1475,7 @@ def _annotations(r):
 		(dashboard.procurement, {"days": 30}),
 		(dashboard.accounts, {"days": 30}),
 		(master.list_types, {}),
+		(master.list_records, {"key": "customer", "search": None, "limit": 100}),
 		(master.options, {"key": "customer", "fieldname": "customer_group", "search": None, "limit": 20}),
 		(master.create, {"key": "customer", "values": {}}),
 		(pos.recent_sales, {"limit": 20, "mine": 1}),

@@ -45,6 +45,39 @@ TOTAL_FIELDS = (
 	"difference_amount",
 )
 
+# Types that are deliberately not raised by hand, and where they come from
+# instead. Stated rather than left blank: a screen with no New button and no
+# reason looks broken, when in fact making one here would be the wrong move.
+NOT_CREATABLE = {
+	"pos-invoice": "ERPNext's offline till document. This app posts Sales Invoices, so raise one of those.",
+	"pos-opening": "Created by opening a shift at the till.",
+	"pos-closing": "Created by closing a shift at the till, so it reconciles against what was counted.",
+	"payment-entry": "Raised against an invoice, so the money lands on the right one. Open the invoice and record the payment there.",
+	"landed-cost-voucher": "Spreads freight and duty across receipts that already exist, so start from the Purchase Receipt.",
+}
+
+
+def _lines(rate: bool = True, warehouse: str | None = "Warehouse", extra: list | None = None) -> list:
+	"""The line spec most documents share: an item, a quantity, and usually a
+	price and a place. Written once so ten forms cannot drift apart."""
+	out = [
+		{"fieldname": "item_code", "label": "Item", "type": "item", "required": True},
+		{"fieldname": "qty", "label": "Qty", "type": "number", "required": True, "default": 1},
+	]
+	if rate:
+		out.append({"fieldname": "rate", "label": "Rate", "type": "currency"})
+	if warehouse:
+		out.append({"fieldname": "warehouse", "label": warehouse, "type": "link", "options": "Warehouse"})
+	return out + (extra or [])
+
+
+def _dated(*fields) -> list:
+	return [
+		{"fieldname": f, "label": label, "type": "date", "default": default, "required": required}
+		for f, label, default, required in fields
+	]
+
+
 DOCUMENTS = [
 	{
 		"key": "sales-invoice",
@@ -65,6 +98,17 @@ DOCUMENTS = [
 			("taxes", ["description", "rate", "tax_amount"]),
 		],
 		"reports": ["sales_summary", "top_items", "profit_margin", "payment_modes", "receivables"],
+		"create": {
+			"fields": [
+				{"fieldname": "customer", "label": "Customer", "type": "link", "options": "Customer", "required": True},
+				*_dated(
+					("posting_date", "Date", "today", True),
+					("due_date", "Due", "week", False),
+				),
+			],
+			"items": _lines(),
+			"hint": "For invoices raised off the till. Sales rung up at the counter post themselves.",
+		},
 	},
 	{
 		# ERPNext's own POS Invoice, used by sites running the offline till. This
@@ -154,6 +198,16 @@ DOCUMENTS = [
 			("taxes", ["description", "rate", "tax_amount"]),
 		],
 		"reports": ["payables"],
+		"create": {
+			"fields": [
+				{"fieldname": "supplier", "label": "Supplier", "type": "link", "options": "Supplier", "required": True},
+				*_dated(
+					("posting_date", "Date", "today", True),
+					("due_date", "Due", "week", False),
+				),
+			],
+			"items": _lines(),
+		},
 	},
 	{
 		"key": "purchase-order",
@@ -199,6 +253,16 @@ DOCUMENTS = [
 			("items", ["item_code", "item_name", "qty", "received_qty", "rejected_qty", "uom", "rate", "amount", "warehouse"]),
 		],
 		"reports": ["stock_movement", "payables"],
+		"create": {
+			"fields": [
+				{"fieldname": "supplier", "label": "Supplier", "type": "link", "options": "Supplier", "required": True},
+				*_dated(("posting_date", "Date", "today", True)),
+				{"fieldname": "set_warehouse", "label": "Into", "type": "link", "options": "Warehouse", "required": True},
+			],
+			"items": _lines(warehouse=None),
+			"line_from_header": {"warehouse": "set_warehouse"},
+			"hint": "Receiving goods without a purchase order. Bill it afterwards with a Purchase Invoice.",
+		},
 	},
 	{
 		"key": "landed-cost-voucher",
@@ -270,6 +334,29 @@ DOCUMENTS = [
 			("items", ["item_code", "item_name", "s_warehouse", "t_warehouse", "qty", "uom", "basic_rate", "amount"]),
 		],
 		"reports": ["stock_movement", "stock_balance"],
+		"create": {
+			"fields": [
+				{
+					"fieldname": "stock_entry_type",
+					"label": "Type",
+					"type": "select",
+					"options": ["Material Receipt", "Material Issue", "Material Transfer"],
+					"default": "Material Transfer",
+					"required": True,
+				},
+				*_dated(("posting_date", "Date", "today", True)),
+				{"fieldname": "from_warehouse", "label": "From", "type": "link", "options": "Warehouse"},
+				{"fieldname": "to_warehouse", "label": "To", "type": "link", "options": "Warehouse"},
+			],
+			# ERPNext copies the header warehouses onto each line itself, and which
+			# of the two applies depends on the type — a receipt has no source, an
+			# issue has no target. Leaving the one that does not apply blank is the
+			# correct answer, so the form asks for both and lets the type decide.
+			"items": _lines(rate=False, warehouse=None, extra=[
+				{"fieldname": "basic_rate", "label": "Rate", "type": "currency"},
+			]),
+			"hint": "Moving stock between branches, or writing it in and out. Leave From blank for a receipt, To blank for an issue.",
+		},
 	},
 	{
 		"key": "stock-reconciliation",
@@ -287,6 +374,25 @@ DOCUMENTS = [
 			),
 		],
 		"reports": ["stock_balance", "stock_movement"],
+		"create": {
+			"fields": [
+				{
+					"fieldname": "purpose",
+					"label": "Purpose",
+					"type": "select",
+					"options": ["Stock Reconciliation", "Opening Stock"],
+					"default": "Stock Reconciliation",
+					"required": True,
+				},
+				*_dated(("posting_date", "Date", "today", True)),
+				{"fieldname": "set_warehouse", "label": "Warehouse", "type": "link", "options": "Warehouse", "required": True},
+			],
+			"items": _lines(rate=False, warehouse=None, extra=[
+				{"fieldname": "valuation_rate", "label": "Cost each", "type": "currency"},
+			]),
+			"line_from_header": {"warehouse": "set_warehouse"},
+			"hint": "A stock count. The quantity you enter becomes the balance — it is not added to it.",
+		},
 	},
 	{
 		"key": "delivery-note",
@@ -303,6 +409,15 @@ DOCUMENTS = [
 			("items", ["item_code", "item_name", "qty", "uom", "rate", "amount", "warehouse"]),
 		],
 		"reports": ["stock_movement", "top_items"],
+		"create": {
+			"fields": [
+				{"fieldname": "customer", "label": "Customer", "type": "link", "options": "Customer", "required": True},
+				*_dated(("posting_date", "Date", "today", True)),
+				{"fieldname": "set_warehouse", "label": "Out of", "type": "link", "options": "Warehouse", "required": True},
+			],
+			"items": _lines(warehouse=None),
+			"line_from_header": {"warehouse": "set_warehouse"},
+		},
 	},
 	{
 		"key": "pos-opening",
@@ -443,6 +558,13 @@ def list_types() -> list:
 				# Only offered when the type declares a form *and* this user may
 				# create it: a "New" button that throws on save is worse than none.
 				"creatable": bool(d.get("create")) and frappe.has_permission(d["doctype"], "create"),
+				# Why there is no button, when there is none. A missing control with
+				# no explanation reads as something broken; these are documents that
+				# genuinely come from somewhere else.
+				"create_hint": _(NOT_CREATABLE[d["key"]])
+				if d["key"] in NOT_CREATABLE
+				else (_(d["create"]["hint"]) if d.get("create", {}).get("hint") else None),
+				"cannot_create": d["key"] in NOT_CREATABLE,
 			}
 		)
 	return out
@@ -731,6 +853,7 @@ def new_document_form(key: str) -> dict:
 		"label": _(doctype),
 		"fields": [prepare(f) for f in spec["fields"]],
 		"items": [prepare(f) for f in spec["items"]],
+		"hint": _(spec["hint"]) if spec.get("hint") else None,
 		"can_submit": frappe.has_permission(doctype, "submit")
 		and bool(frappe.get_meta(doctype).is_submittable),
 	}

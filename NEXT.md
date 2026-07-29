@@ -334,6 +334,95 @@ request asks for stock to be moved or bought and carries no rate, so asserting
 one would be testing a fact about ERPNext that is not true. (It did, at first,
 and failed — which is the check working.)
 
+### 20. Modals were painting *under* the page
+
+frappe-ui portals its Dialog to `<body>` but gives the overlay **no z-index at
+all**, and `#app` sets none either — so `#app` never becomes a stacking context
+and every positioned element inside it competes with the modal in the root
+context. A sticky table header at `z-10` therefore painted straight over an open
+dialog.
+
+`index.css` now states the order once:
+
+    ≤ 40  page chrome (sticky table headers, tab strips)
+      50  bottom sheets and tooltips
+      60  dialogs        (.dialog-overlay)
+      70  toasts         (.pos-toast)
+
+Toasts sit *above* dialogs deliberately: a toast reports what the dialog just
+did, so it has to be readable while the dialog is still open. Every ad-hoc
+`z-50` on a toast was replaced with the named `.pos-toast` class, so the scale
+lives in one file rather than being re-guessed per screen.
+
+### 21. Receipt prompt after a sale
+
+An optional modal offering the receipt, with the invoice, the total and the
+change or balance owed. It opens *after* the cart has cleared, so the next
+customer can already be served behind it, and dismissing it loses nothing —
+the sale is posted either way and the toolbar keeps a Receipt button.
+
+"Stop asking on this till" is remembered in `localStorage`, per browser rather
+than per user: whether there is a printer attached is a property of the counter,
+not of the person standing at it.
+
+### 22. Material requests were fetching correctly — nothing was raising them
+
+There were zero Material Requests on the site, at every window and with the
+company scope removed. What had no coverage at all was `stock.request_transfer`,
+the only thing in the app that creates one — only its annotations were checked,
+so "none are showing" and "the button that makes them is broken" looked the same.
+
+It works. What did not was the list of branches to request *from*:
+`catalog._warehouses` offered every non-group warehouse, which on this site meant
+per-customer van warehouses and Work In Progress. It now offers only warehouses
+that hold stock — a location with nothing in it cannot supply anything. Smoke
+raises a real transfer request and asserts it then appears in the documents hub.
+
+### 23. Item cards carry a picture
+
+The item's own image where it has one, and a category-matched icon where it does
+not (keyword-matched on group and brand, since every shop names its groups
+differently). Kept to a 32px square, with the availability dot moved into its
+corner so the two share one column: this grid earns its speed from density, and
+a photo the layout is built around would cost more than it returns.
+
+### 24. Master data has a home — `/masters`
+
+It existed before as a "+ New" button beside the avatar, which is not a place to
+add master data; it is a button you have to already know about. There is now a
+**Records** entry in the rail with a screen per type, listing what already exists
+with search alongside the create form. A create-only screen is how a shop ends up
+with the same customer three times — and this site already has 997 customers.
+
+### 25. Nine document types can be raised in the app
+
+Sales Invoice, Purchase Invoice, Purchase Receipt, Delivery Note, Stock Entry and
+Stock Reconciliation joined Sales Order, Purchase Order and Material Request. The
+shared line spec is `_lines()`, written once so nine forms cannot drift apart.
+
+Some carry a `hint` shown above the form, for the cases where the document does
+something a reasonable person would guess wrong — a Stock Reconciliation *sets*
+the balance rather than adding to it, and a Stock Entry wants From blank for a
+receipt and To blank for an issue.
+
+**Five types deliberately have no New button**, and now say so on screen instead
+of just lacking one:
+
+| Type | Why not |
+|---|---|
+| POS Invoice | ERPNext's offline till document; this app posts Sales Invoices |
+| POS Opening / Closing Entry | Created by opening and closing a shift, so they reconcile against what was counted |
+| Payment Entry | Raised against an invoice, so the money lands on the right one |
+| Landed Cost Voucher | Spreads cost across receipts that already exist |
+
+`smoke.py` asserts every registered type either creates or explains why — a
+screen with no button and no reason is the thing that looks broken.
+
+The test for this initially failed five of nine, because it hardcoded
+`transaction_date` while the new types use `posting_date`. It now seeds each
+payload from the form's own defaults, which is what the browser sends — so the
+test exercises the same path the UI does rather than a narrower one.
+
 ## Conventions already established
 
 - Colour rules live in `frontend/src/utils/tone.js` — extend, don't duplicate.
@@ -358,7 +447,7 @@ and failed — which is the check working.)
 
     bench --site <site> execute cosmestics.setup.smoke.run
 
-Rolls back, safe against a live site. Currently 251/251. Add checks there for
+Rolls back, safe against a live site. Currently 297/297. Add checks there for
 anything new rather than testing by hand — three separate bugs reached the
 browser because a test exercised a narrower path than the UI does.
 
