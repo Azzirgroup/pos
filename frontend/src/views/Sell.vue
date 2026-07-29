@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
 
 import { useCatalogStore } from '@/stores/catalog'
@@ -20,6 +20,10 @@ import {
 	getPaymentMethods,
 	getReceiptUrl,
 	getRecentSales,
+	sendDocumentWhatsapp,
+	getMovementOptions,
+	recordMovement as apiRecordMovement,
+	voidMovement as apiVoidMovement,
 } from '@/data/api'
 
 import { Button, Dialog, FormControl, TabButtons } from 'frappe-ui'
@@ -43,6 +47,7 @@ import LucideScanLine from '~icons/lucide/scan-line'
 import LucideUserRound from '~icons/lucide/user-round'
 import LucidePrinter from '~icons/lucide/printer'
 import LucideReceiptText from '~icons/lucide/receipt-text'
+import LucideSend from '~icons/lucide/send'
 
 const catalog = useCatalogStore()
 const cart = useCartStore()
@@ -54,16 +59,20 @@ const query = ref('')
 const searchInput = ref(null)
 
 /** Mode tabs from the reference layout. Menu is the till itself; the others
- *  reuse sheets this view already owns rather than being separate screens. */
+ *  reuse sheets this view already owns rather than being separate screens.
+ *
+ *  Shifts took Held's slot because Held already has a toolbar button carrying
+ *  its count, so the tab was a second door to the same sheet — while the money
+ *  that moves at a till without being a sale had none at all. */
 const MODES = [
 	{ label: 'Menu', value: 'menu' },
-	{ label: 'Held', value: 'held' },
+	{ label: 'Shifts', value: 'shifts' },
 	{ label: 'Customer', value: 'customer' },
 ]
 const mode = ref('menu')
 
 watch(mode, (m) => {
-	if (m === 'held') heldSheet.value = true
+	if (m === 'shifts') openShiftSheet()
 	if (m === 'customer') pickCustomer(false)
 	// The tabs are actions, not destinations; snap back so the label never lies
 	// about which view you are on.
@@ -75,6 +84,8 @@ const paySheet = ref(false)
 const heldSheet = ref(false)
 const stockSheet = ref(false)
 const stockItem = ref(null)
+/** How many units short the cart is — pre-fills the sourcing form. */
+const stockShortfall = ref(1)
 const scanFlash = ref(0)
 
 /* ---------- shift ---------- */
@@ -85,6 +96,9 @@ const shiftSheet = ref(false)
 const shiftMode = ref('open')
 const shiftBusy = ref(false)
 const closingSummary = ref(null)
+/** Expense accounts, modes and neighbours for the money-out form. */
+const movementOptions = ref(null)
+const movementBusy = ref(false)
 
 /** Modes to collect an opening float for — from the shift, else the till's three. */
 const paymentModes = computed(() =>
@@ -156,6 +170,50 @@ async function printFromPrompt() {
 	await printReceipt()
 }
 
+/* ---------- send the receipt on WhatsApp ---------- */
+
+/**
+ * The same receipt, to the customer's phone.
+ *
+ * Goes through `documents.send_whatsapp`, which attaches the real PDF rendered
+ * from the invoice's print format — so what the customer receives is the
+ * receipt, not a summary of it, and it matches what the printer would produce.
+ *
+ * The number is pre-filled from the customer when there was one, and editable
+ * always: a walk-in has no record to read a number off, and the one on file is
+ * often a landline.
+ */
+const whatsappOpen = ref(false)
+const whatsappTo = ref('')
+const whatsappSending = ref(false)
+
+function openWhatsapp() {
+	whatsappTo.value = lastSale.value?.phone || ''
+	whatsappOpen.value = true
+}
+
+async function sendReceiptWhatsapp() {
+	if (!lastSale.value || !whatsappTo.value) return
+	whatsappSending.value = true
+	try {
+		const res = await sendDocumentWhatsapp({
+			key: 'sales-invoice',
+			name: lastSale.value.invoice,
+			to: whatsappTo.value,
+			asPdf: true,
+		})
+		notify(res.message, res.sent ? 'ok' : 'warn')
+		if (res.sent) {
+			whatsappOpen.value = false
+			printPrompt.value = false
+		}
+	} catch (e) {
+		notify(e.message || 'Could not send the receipt', 'warn')
+	} finally {
+		whatsappSending.value = false
+	}
+}
+
 async function printReceipt(invoice) {
 	const target = invoice || lastSale.value?.invoice
 	if (!target) return
@@ -206,16 +264,68 @@ async function openShiftSheet() {
 		shiftMode.value = 'close'
 		closingSummary.value = null
 		shiftSheet.value = true
-		try {
-			closingSummary.value = await getClosingSummary()
-		} catch (e) {
-			console.error('[pos] closing summary failed', e)
-			notify('Could not load shift totals', 'warn')
-		}
+		await Promise.all([reloadClosingSummary(), loadMovementOptions()])
 		return
 	}
 	shiftMode.value = 'open'
 	shiftSheet.value = true
+}
+
+async function reloadClosingSummary() {
+	try {
+		closingSummary.value = await getClosingSummary()
+	} catch (e) {
+		console.error('[pos] closing summary failed', e)
+		notify('Could not load shift totals', 'warn')
+	}
+}
+
+/** Fetched once per sheet opening — the account list does not change mid-shift. */
+async function loadMovementOptions() {
+	try {
+		movementOptions.value = await getMovementOptions()
+	} catch (e) {
+		// The count still works without them; only the money-out form degrades.
+		console.warn('[pos] movement options failed', e)
+	}
+}
+
+/**
+ * Money out of the drawer, mid-shift.
+ *
+ * The summary is reloaded rather than patched locally: the expected amounts are
+ * the server's arithmetic, and a cashier counting against a figure this screen
+ * worked out for itself is exactly the disagreement the whole flow exists to
+ * prevent.
+ */
+async function doRecordMovement(payload) {
+	movementBusy.value = true
+	try {
+		const res = await apiRecordMovement(payload)
+		await reloadClosingSummary()
+		notify(
+			`${fmtMoney(res.amount)} out of ${res.mode_of_payment}` +
+				(res.reference_name ? ` · ${res.reference_name}` : ''),
+			'ok',
+		)
+	} catch (e) {
+		notify(e.message || 'Could not record that', 'warn')
+	} finally {
+		movementBusy.value = false
+	}
+}
+
+async function doVoidMovement(movement) {
+	movementBusy.value = true
+	try {
+		await apiVoidMovement({ name: movement.name })
+		await reloadClosingSummary()
+		notify(`${fmtMoney(movement.amount)} put back`, 'ok')
+	} catch (e) {
+		notify(e.message || 'Could not void that', 'warn')
+	} finally {
+		movementBusy.value = false
+	}
 }
 
 async function doOpenShift(payload) {
@@ -241,11 +351,16 @@ async function doCloseShift(payload) {
 		const res = await apiCloseShift(payload)
 		shift.value = null
 		shiftSheet.value = false
+		closingSummary.value = null
 		till.refresh()
+		// Naming who a shortfall is against is the point of recording it, so the
+		// confirmation says so rather than reporting an anonymous number.
+		const named = (res.shorts_recorded || []).map((s) => s.person).join(', ')
 		notify(
 			res.difference === 0
 				? `Shift closed — balanced (${res.name})`
-				: `Shift closed — ${res.difference > 0 ? 'over' : 'short'} ${fmtMoney(Math.abs(res.difference))}`,
+				: `Shift closed — ${res.difference > 0 ? 'over' : 'short'} ${fmtMoney(Math.abs(res.difference))}` +
+					(named ? ` · against ${named}` : ''),
 			res.difference === 0 ? 'ok' : 'warn',
 		)
 	} catch (e) {
@@ -297,15 +412,40 @@ function notify(message, tone = 'info') {
 
 /* ---------- actions ---------- */
 
+/**
+ * Running out mid-cart is the same decision as being out at the start.
+ *
+ * The shelf count is checked against what the cart *would* hold, not against
+ * what it holds now: two of the last one is the moment to offer the shop next
+ * door, and finding out at checkout — when the invoice fails on negative stock
+ * and the customer is already paying — is far too late. Lines already sourced
+ * from a neighbour are excluded from the tally, since they are not coming off
+ * this shelf.
+ *
+ * Returns true when the sheet was opened, so callers can leave the cart alone.
+ */
+function promptIfShort(item, wantQty) {
+	const stock = Number(item.stock) || 0
+	const sourcedQty = lines.value
+		.filter((l) => l.item_code === item.item_code && l.sourced)
+		.reduce((n, l) => n + l.qty, 0)
+
+	if (wantQty - sourcedQty <= stock) return false
+
+	stockItem.value = item
+	// Pre-filled with the gap rather than 1: the cashier is short by a specific
+	// number and should not have to work it out under a queue.
+	stockShortfall.value = Math.max(1, Math.ceil(wantQty - sourcedQty - stock))
+	stockSheet.value = true
+	return true
+}
+
 function addItem(item) {
 	// Out of stock is a decision point, not an error. The cashier chooses:
 	// buy it from next door, request it from another store, or sell anyway
 	// because it is physically on the shelf but not yet received.
-	if (item.stock <= 0) {
-		stockItem.value = item
-		stockSheet.value = true
-		return
-	}
+	const inCart = cartQtys.value[item.item_code] || 0
+	if (promptIfShort(item, inCart + 1)) return
 	cart.add(item, 1)
 }
 
@@ -313,8 +453,13 @@ function addItem(item) {
  *  needs to be able to change the cart, not only append to it. */
 function setItemQty({ item, qty }) {
 	const line = lines.value.find((l) => l.item_code === item.item_code)
-	if (!line) return qty > 0 ? cart.add(item, qty) : undefined
+	if (!line) {
+		if (qty <= 0) return
+		if (promptIfShort(item, qty)) return
+		return cart.add(item, qty)
+	}
 	if (qty <= 0) return cart.remove(line.id)
+	if (qty > line.qty && promptIfShort(item, qty)) return
 	cart.setQty(line.id, qty)
 }
 
@@ -323,14 +468,49 @@ function removeItem(item) {
 	if (line) cart.remove(line.id)
 }
 
+/**
+ * The same check from the cart side.
+ *
+ * The cart panel used to change the store directly, which meant the one place a
+ * quantity is most often nudged past the shelf count — the `+` next to a line —
+ * was the one place that never asked. It emits upward now so the decision lives
+ * where the sheet does.
+ */
+function cartInc(id, step = 1) {
+	const line = lines.value.find((l) => l.id === id)
+	if (!line) return
+	// A line already bought from a neighbour has no shelf to run out of.
+	if (!line.sourced) {
+		const item = catalog.byCode.get(line.item_code)
+		const inCart = cartQtys.value[line.item_code] || 0
+		if (item && promptIfShort(item, inCart + step)) return
+	}
+	cart.inc(id, step)
+}
+
+function cartSetQty(id, qty) {
+	const line = lines.value.find((l) => l.id === id)
+	if (!line) return
+	if (qty > line.qty && !line.sourced) {
+		const item = catalog.byCode.get(line.item_code)
+		const inCart = (cartQtys.value[line.item_code] || 0) - line.qty + qty
+		if (item && promptIfShort(item, inCart)) return
+	}
+	cart.setQty(id, qty)
+}
+
 function sellAnyway({ item, qty }) {
 	cart.add(item, qty)
 	notify(`${item.item_name} added — stock will go negative`, 'warn')
 }
 
-function sourceFromNeighbour({ item, qty, supplier, buyRate }) {
-	cart.add(item, qty, { sourced: { supplier, buyRate } })
-	notify(`Sourcing ${qty} × ${item.item_name} from ${supplier}`, 'ok')
+function sourceFromNeighbour({ item, qty, supplier, buyRate, paidNow }) {
+	cart.add(item, qty, { sourced: { supplier, buyRate, paidNow: !!paidNow } })
+	notify(
+		`Sourcing ${qty} × ${item.item_name} from ${supplier}` +
+			(paidNow ? ` · ${fmtMoney(qty * buyRate)} out of the drawer` : ''),
+		'ok',
+	)
 }
 
 async function requestTransfer({ item, qty, warehouse }) {
@@ -346,21 +526,79 @@ async function requestTransfer({ item, qty, warehouse }) {
 	}
 }
 
-function onScan(code) {
+/* ---------- scanning ---------- */
+
+/**
+ * A scan proposes an item; the cashier confirms the quantity.
+ *
+ * It used to add straight to the cart, which was wrong twice over. A camera
+ * holds a barcode in frame for as long as the phone is pointed at it and reads
+ * it many times a second, so one product landed in the cart repeatedly with
+ * nobody touching anything. And even with a handheld scanner, a quantity of one
+ * is a guess — six of the same lipstick is one scan and a number, not six scans.
+ *
+ * So the read opens a confirmation with the quantity focused: Enter accepts,
+ * Escape discards. One extra keypress per scan, and the cart stops filling
+ * itself.
+ */
+const scanned = ref(null)
+const scanQty = ref('1')
+const scanQtyInput = ref(null)
+
+/** The last code accepted, so a camera re-reading it does not reopen the sheet. */
+let lastCode = ''
+let lastCodeAt = 0
+const REPEAT_WINDOW_MS = 2000
+
+async function onScan(code) {
+	const now = performance.now()
+	// A camera fires the same code continuously while it is in frame.
+	if (code === lastCode && now - lastCodeAt < REPEAT_WINDOW_MS) return
+	lastCode = code
+	lastCodeAt = now
+
 	const item = catalog.findByBarcode(code)
-	if (item) {
-		cart.add(item, 1)
-		scanFlash.value++
-		// Feedback stays on the camera overlay so the cashier can keep scanning
-		// without looking away to check the cart.
-		scanResult.value = { ok: true, message: `${item.item_name} · ${fmtMoney(item.price)}` }
+	if (!item) {
+		// Unknown barcode: drop it into search so the cashier can find it by name
+		// rather than being left with a dead end.
+		query.value = code
+		scanResult.value = { ok: false, message: `No item with barcode ${code}` }
+		notify(`No item with barcode ${code}`, 'warn')
 		return
 	}
-	// Unknown barcode: drop it into search so the cashier can find it by name
-	// rather than being left with a dead end.
-	query.value = code
-	scanResult.value = { ok: false, message: `No item with barcode ${code}` }
-	notify(`No item with barcode ${code}`, 'warn')
+
+	scanFlash.value++
+	scanResult.value = { ok: true, message: `${item.item_name} · ${fmtMoney(item.price)}` }
+
+	// Scanning the same item again while its sheet is open just counts up, which
+	// is what repeatedly scanning a pile of identical products should mean.
+	if (scanned.value?.item_code === item.item_code) {
+		scanQty.value = String((Number(scanQty.value) || 0) + 1)
+		return
+	}
+
+	scanned.value = item
+	scanQty.value = '1'
+	await nextTick()
+	scanQtyInput.value?.select?.()
+}
+
+function confirmScan() {
+	const item = scanned.value
+	const qty = Number(scanQty.value)
+	if (!item || !(qty > 0)) return
+
+	cart.add(item, qty)
+	notify(`${qty} × ${item.item_name}`, 'ok')
+	scanned.value = null
+	// Cleared so the same product can be scanned again straight away as a
+	// separate line decision.
+	lastCode = ''
+}
+
+function cancelScan() {
+	scanned.value = null
+	lastCode = ''
 }
 
 /* ---------- camera scanning ---------- */
@@ -413,6 +651,9 @@ async function completeSale(payment) {
 	const paid = total.value
 	const wasCredit = payment.method === 'credit'
 	const customerName = customer.value?.customer_name || customer.value?.name
+	// Captured before the cart clears: by the time the receipt prompt opens there
+	// is no customer on screen to read a number off.
+	const customerPhone = customer.value?.mobile_no || customer.value?.phone || ''
 
 	cart.clear()
 	customer.value = null
@@ -444,6 +685,8 @@ async function completeSale(payment) {
 		})
 		lastSale.value = {
 			invoice: res.invoice,
+			customer: customerName,
+			phone: customerPhone,
 			total: paid,
 			change: payment.change || 0,
 			outstanding: res.outstanding || 0,
@@ -602,7 +845,13 @@ useShortcuts({
 			<div
 				class="hidden w-[360px] shrink-0 border-l border-outline-gray-2 lg:flex 2xl:w-[420px]"
 			>
-				<CartPanel @pay="openPay" @hold="holdSale" @pick-customer="pickCustomer(false)" />
+				<CartPanel @pay="openPay"
+					@hold="holdSale"
+					@pick-customer="pickCustomer(false)"
+					@inc="cartInc"
+					@dec="cart.dec"
+					@set-qty="cartSetQty"
+				/>
 			</div>
 		</div>
 
@@ -618,9 +867,81 @@ useShortcuts({
 		<!-- Mobile cart review -->
 		<BottomSheet v-if="isCompact" v-model="cartSheet" title="Cart" tall>
 			<div class="flex h-[64dvh] flex-col">
-				<CartPanel embedded class="min-h-0 flex-1" @pay="openPay" @hold="holdSale" @pick-customer="pickCustomer(false)" />
+				<CartPanel embedded class="min-h-0 flex-1" @pay="openPay"
+					@hold="holdSale"
+					@pick-customer="pickCustomer(false)"
+					@inc="cartInc"
+					@dec="cart.dec"
+					@set-qty="cartSetQty"
+				/>
 			</div>
 		</BottomSheet>
+
+		<!-- Scan confirmation: what was read, and how many of it. -->
+		<!-- Bound through a boolean: the dialog's open state is a flag, and handing
+		     it the scanned item itself would make "closing" mean "set the item to
+		     false". -->
+		<Dialog
+			:model-value="!!scanned"
+			:options="{ title: 'Scanned', size: 'sm' }"
+			@update:model-value="$event || cancelScan()"
+		>
+			<template #body-content>
+				<div v-if="scanned" class="flex flex-col gap-3">
+					<div class="rounded-xl bg-surface-gray-2 px-4 py-3">
+						<div class="text-p-base font-medium text-ink-gray-9">{{ scanned.item_name }}</div>
+						<div class="tabular text-p-sm text-ink-gray-6">
+							{{ fmtMoney(scanned.price) }}
+							<span :class="scanned.stock > 0 ? 'text-ink-gray-5' : 'text-ink-red-3'">
+								· {{ scanned.stock > 0 ? `${Math.floor(scanned.stock)} in stock` : 'out of stock' }}
+							</span>
+						</div>
+					</div>
+
+					<label class="block text-p-sm font-medium text-ink-gray-7">Quantity</label>
+					<div class="flex items-center gap-2">
+						<button
+							class="grid h-12 w-12 shrink-0 place-items-center rounded-xl border border-outline-gray-2 text-ink-gray-7 hover:bg-surface-gray-2"
+							@click="scanQty = String(Math.max(1, (Number(scanQty) || 1) - 1))"
+						>
+							−
+						</button>
+						<input
+							ref="scanQtyInput"
+							v-model="scanQty"
+							type="number"
+							inputmode="numeric"
+							min="1"
+							class="tabular h-12 min-w-0 flex-1 rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-center text-2xl font-semibold text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+							@keyup.enter="confirmScan"
+							@focus="$event.target.select()"
+						/>
+						<button
+							class="grid h-12 w-12 shrink-0 place-items-center rounded-xl border border-outline-gray-2 text-ink-gray-7 hover:bg-surface-gray-2"
+							@click="scanQty = String((Number(scanQty) || 0) + 1)"
+						>
+							+
+						</button>
+					</div>
+					<p class="text-p-xs text-ink-gray-5">
+						Scanning this item again adds one more. Enter accepts.
+					</p>
+				</div>
+			</template>
+			<template #actions>
+				<div class="flex gap-2">
+					<Button
+						theme="gray"
+						variant="solid"
+						class="flex-1"
+						:label="`Add ${Number(scanQty) || 0} to cart`"
+						:disabled="!(Number(scanQty) > 0)"
+						@click="confirmScan"
+					/>
+					<Button variant="subtle" label="Discard" @click="cancelScan" />
+				</div>
+			</template>
+		</Dialog>
 
 		<!-- Receipt prompt. Deliberately after the cart has cleared: the next
 		     customer can already be served behind it. -->
@@ -639,6 +960,28 @@ useShortcuts({
 							{{ fmtMoney(lastSale.outstanding) }} still owed
 						</div>
 					</div>
+					<!-- Sending it is a second way to hand over the same receipt, so it
+					     opens in place rather than replacing the print choice. -->
+					<div v-if="whatsappOpen" class="flex items-end gap-2 rounded-xl bg-surface-gray-2 p-3">
+						<div class="flex-1">
+							<FormControl
+								v-model="whatsappTo"
+								type="text"
+								label="Send to"
+								placeholder="Phone number"
+							/>
+						</div>
+						<Button
+							theme="green"
+							variant="solid"
+							:icon-left="LucideSend"
+							label="Send"
+							:loading="whatsappSending"
+							:disabled="!whatsappTo"
+							@click="sendReceiptWhatsapp"
+						/>
+					</div>
+
 					<button
 						class="text-left text-p-xs text-ink-gray-5 underline decoration-outline-gray-3 underline-offset-2 hover:text-ink-gray-7"
 						@click="setAskToPrint(false)"
@@ -648,7 +991,7 @@ useShortcuts({
 				</div>
 			</template>
 			<template #actions>
-				<div class="flex gap-2">
+				<div class="flex flex-wrap gap-2">
 					<Button
 						theme="gray"
 						variant="solid"
@@ -656,6 +999,13 @@ useShortcuts({
 						:icon-left="LucidePrinter"
 						label="Print receipt"
 						@click="printFromPrompt"
+					/>
+					<Button
+						v-if="!whatsappOpen"
+						variant="subtle"
+						:icon-left="LucideSend"
+						label="WhatsApp"
+						@click="openWhatsapp"
 					/>
 					<Button variant="subtle" label="No receipt" @click="printPrompt = false" />
 				</div>
@@ -725,8 +1075,12 @@ useShortcuts({
 			:payment-modes="paymentModes"
 			:summary="closingSummary"
 			:busy="shiftBusy"
+			:options="movementOptions"
+			:movement-busy="movementBusy"
 			@open-shift="doOpenShift"
 			@close-shift="doCloseShift"
+			@record-movement="doRecordMovement"
+			@void-movement="doVoidMovement"
 		/>
 
 		<CustomerSheet
@@ -752,6 +1106,7 @@ useShortcuts({
 			:item="stockItem"
 			:warehouses="catalog.warehouses"
 			:neighbours="catalog.neighbours"
+			:suggested-qty="stockShortfall"
 			@source="sourceFromNeighbour"
 			@request-transfer="requestTransfer"
 			@sell-anyway="sellAnyway"

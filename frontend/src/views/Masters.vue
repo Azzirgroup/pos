@@ -5,9 +5,12 @@ import { Button, FormControl } from 'frappe-ui'
 import { listMasterRecords, listMasterTypes } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import DataTable from '@/components/DataTable.vue'
+import ShareSheet from '@/components/ShareSheet.vue'
+import { useRowActions } from '@/composables/useRowActions'
 import MasterSheet from '@/components/MasterSheet.vue'
 import { resolveIcon } from '@/utils/icons'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
+import LucideSend from '~icons/lucide/send'
 import LucidePlus from '~icons/lucide/plus'
 
 /**
@@ -29,9 +32,30 @@ const data = ref({ columns: [], rows: [], total: 0 })
 const search = ref('')
 const loading = ref(false)
 const newOpen = ref(false)
+const editName = ref(null)
+
+function edit(name) {
+	editName.value = name
+	newOpen.value = true
+}
+
+// Cleared on close so the next "New" is a create, not another edit.
+watch(newOpen, (open) => {
+	if (!open) editName.value = null
+})
 
 const activeKey = computed(() => route.params.key || types.value[0]?.key || null)
 const activeType = computed(() => types.value.find((t) => t.key === activeKey.value) || null)
+
+/**
+ * Master records are documents, but not ones anybody wants as a PDF — a
+ * supplier's contact details are read in the message, not opened as an
+ * attachment. So this shares text, and the columns follow the type on screen.
+ */
+const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
+	columns: () => data.value.columns || [],
+	title: (row) => row.name,
+})
 
 const subtitle = computed(() => {
 	if (!data.value.total) return 'Nothing here yet'
@@ -124,6 +148,13 @@ function notify(message, tone = 'good') {
 					<div class="w-[190px]">
 						<FormControl v-model="search" type="text" placeholder="Search…" />
 					</div>
+						<Button
+						variant="subtle"
+						:icon-left="LucideSend"
+						:disabled="!data.rows.length"
+						label="Share"
+						@click="shareList(data.rows, activeType?.label || 'Records')"
+					/>
 					<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load" />
 					<Button
 						v-if="data.can_create !== false"
@@ -145,16 +176,32 @@ function notify(message, tone = 'good') {
 				:rows="data.rows"
 				row-key="name"
 				:loading="loading"
+				:actions="actionsFor"
 				empty-text="Nothing here yet. Use the button above to add the first one."
-			/>
+			>
+				<!-- The ID opens the record for editing: a phone number typed wrong
+				     is corrected where it was entered, not by hunting it down in the
+				     desk. -->
+				<template #cell-name="{ row }">
+					<button
+						class="text-left font-medium text-ink-gray-8 underline decoration-outline-gray-3 underline-offset-2 hover:decoration-ink-gray-8"
+						@click="edit(row.name)"
+					>
+						{{ row.name }}
+					</button>
+				</template>
+			</DataTable>
 		</div>
 
 		<MasterSheet
 			v-model:open="newOpen"
 			:initial-key="activeKey"
+			:edit-name="editName"
 			@created="load"
 			@notify="notify($event.message, $event.tone)"
 		/>
+
+		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
 
 		<Transition
 			enter-active-class="transition-all duration-200"

@@ -16,6 +16,7 @@ import DataTable from '@/components/DataTable.vue'
 import DocumentModal from '@/components/DocumentModal.vue'
 import DocumentFormSheet from '@/components/DocumentFormSheet.vue'
 import Reports from '@/views/Reports.vue'
+import { moduleFor } from '@/data/navigation'
 import { resolveIcon } from '@/utils/icons'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideMore from '~icons/lucide/ellipsis'
@@ -66,6 +67,9 @@ const PERIODS = [
 	{ label: 'Last year', value: 365 },
 	{ label: 'All time', value: 0 },
 ]
+
+/** True when a module's tab strip is already showing above this screen. */
+const inModule = computed(() => !!moduleFor(route.path))
 
 const activeKey = computed(() => route.params.key || types.value[0]?.key || null)
 const activeType = computed(() => types.value.find((t) => t.key === activeKey.value) || null)
@@ -248,7 +252,11 @@ function notify(message, tone = 'good') {
 	<div class="flex min-h-0 flex-1 overflow-hidden">
 		<!-- Eleven document types is too many for a tab strip and too few for a
 		     search box, so they live in a grouped rail like the reports picker. -->
+		<!-- The full index, shown only when this screen is not already reached from
+		     a module's tab strip. Two navigations for the same thing, one above the
+		     other, is what made the old layout feel cluttered. -->
 		<aside
+			v-if="!inModule"
 			class="hidden w-[210px] shrink-0 overflow-y-auto border-r border-outline-gray-2 bg-surface-white py-2 lg:block"
 		>
 			<div v-for="(items, group) in grouped" :key="group" class="mb-3">
@@ -299,7 +307,7 @@ function notify(message, tone = 'good') {
 					>
 						{{ activeType.create_hint }}
 					</span>
-					<div class="w-[190px] lg:hidden">
+					<div v-if="!inModule" class="w-[190px] lg:hidden">
 						<FormControl
 							type="select"
 							:model-value="activeKey"

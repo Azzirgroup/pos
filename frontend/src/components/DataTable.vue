@@ -1,16 +1,49 @@
 <script setup>
+import { computed } from 'vue'
 import { fmtMoney } from '@/utils/format'
-import { Spinner, Badge } from 'frappe-ui'
+import { Spinner, Badge, Button, Dropdown } from 'frappe-ui'
 import { cellTone, rowTone, statusTheme, STATUS_KEYS } from '@/utils/tone'
+import LucideMore from '~icons/lucide/more-horizontal'
 
-defineProps({
+const props = defineProps({
 	/** [{ label, key, type: 'currency'|'number'|'text' }] */
 	columns: { type: Array, default: () => [] },
 	rows: { type: Array, default: () => [] },
 	rowKey: { type: String, default: null },
 	loading: { type: Boolean, default: false },
 	emptyText: { type: String, default: 'Nothing to show' },
+	/**
+	 * Whether the table owns its own scrolling.
+	 *
+	 * True suits a full-page list, where the table is the thing that scrolls.
+	 * False lets it size to its content so an enclosing page can scroll instead
+	 * — a table that scrolls inside a card that scrolls inside a page gives the
+	 * reader three bars and no idea which one moves what.
+	 */
+	scroll: { type: Boolean, default: true },
+	/**
+	 * Row actions, as [{ label, icon, theme, onClick(row) }] or a function of the
+	 * row returning that. A trailing menu column is appended when present, so a
+	 * list gains row actions by passing this and changing nothing else.
+	 */
+	actions: { type: [Array, Function], default: null },
+	/** Row currently mid-action — shows a spinner in its menu button. */
+	busyRow: { type: String, default: '' },
 })
+
+const emit = defineEmits(['row-click'])
+
+/** The declared columns plus the menu, which is ours rather than the caller's. */
+const allColumns = computed(() =>
+	props.actions && props.columns.length
+		? [...props.columns, { label: '', key: '_actions', type: 'text' }]
+		: props.columns,
+)
+
+function actionsFor(row) {
+	const list = typeof props.actions === 'function' ? props.actions(row) : props.actions
+	return (list || []).filter(Boolean).map((a) => ({ ...a, onClick: () => a.onClick?.(row) }))
+}
 
 function cell(row, col) {
 	const v = row[col.key]
@@ -58,7 +91,10 @@ const isVoid = (row) => row.docstatus === 2
 </script>
 
 <template>
-	<div class="min-h-0 flex-1 overflow-auto bg-surface-white">
+	<div
+		class="bg-surface-white"
+		:class="scroll ? 'min-h-0 flex-1 overflow-auto' : 'overflow-x-auto'"
+	>
 		<div v-if="loading" class="grid h-40 place-items-center">
 			<Spinner class="h-5 w-5" />
 		</div>
@@ -71,10 +107,13 @@ const isVoid = (row) => row.docstatus === 2
 			<!-- Sticky header: these tables run to hundreds of rows and the column
 			     meaning has to survive scrolling. A step darker than the zebra so it
 			     stays a header rather than becoming the first stripe. -->
-			<thead class="sticky top-0 z-10 bg-surface-gray-2">
+			<!-- Sticky only when this table is the scroller. Pinned inside a page
+			     that scrolls instead, the header would sit against the top of a
+			     card that has already scrolled past. -->
+			<thead :class="scroll ? 'sticky top-0 z-10 bg-surface-gray-2' : 'bg-surface-gray-2'">
 				<tr>
 					<th
-						v-for="c in columns"
+						v-for="c in allColumns"
 						:key="c.key"
 						class="whitespace-nowrap border-b border-outline-gray-2 px-3 py-2 text-p-xs font-medium text-ink-gray-6"
 						:class="isNumeric(c) ? 'text-right' : 'text-left'"
@@ -91,7 +130,7 @@ const isVoid = (row) => row.docstatus === 2
 					:class="[rowClass(row, i), isVoid(row) ? 'text-ink-gray-5' : '']"
 				>
 					<td
-						v-for="c in columns"
+						v-for="c in allColumns"
 						:key="c.key"
 						class="px-3 py-2 text-ink-gray-8"
 						:class="[
@@ -100,10 +139,24 @@ const isVoid = (row) => row.docstatus === 2
 						]"
 					>
 						<slot :name="`cell-${c.key}`" :row="row" :value="row[c.key]">
+							<!-- The menu column is ours, so it is drawn here rather than
+							     left to every list to reimplement. Right-aligned: it is
+							     the last column, and a left-aligned popover would run off
+							     the table. -->
+							<div v-if="c.key === '_actions'" class="flex justify-end">
+								<Dropdown :options="actionsFor(row)" placement="right">
+									<Button
+										variant="ghost"
+										:icon-left="LucideMore"
+										:loading="busyRow === row.name"
+										:aria-label="`Actions for ${row.name || 'this row'}`"
+									/>
+								</Dropdown>
+							</div>
 							<!-- Status-ish columns read better as a badge than as a word
 							     coloured in place, and the label still carries the meaning. -->
 							<Badge
-								v-if="STATUS_KEYS.has(c.key) && row[c.key]"
+								v-else-if="STATUS_KEYS.has(c.key) && row[c.key]"
 								:theme="statusTheme(row[c.key])"
 								variant="subtle"
 								:label="String(row[c.key])"

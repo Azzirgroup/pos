@@ -391,6 +391,53 @@ def test_whatsapp(to: str, message: str | None = None):
 	}
 
 
+@frappe.whitelist(methods=["POST"])
+def share(
+	to: str,
+	message: str,
+	sender: str | None = None,
+	doctype: str | None = None,
+	name: str | None = None,
+) -> dict:
+	"""Share something from a list view on WhatsApp.
+
+	Two shapes, deliberately one endpoint. Given a `doctype` and `name` the real
+	PDF goes out with the text as its caption, so sharing an invoice from any
+	screen sends the invoice rather than a description of it. Given neither — a
+	reorder line, a stock figure, a row from a report — the text is the message,
+	because there is no document to render.
+
+	Composing the text is the caller's job. The rows on screen are already
+	formatted, labelled and filtered by the user, and rebuilding that server-side
+	would produce a message that does not match what they were looking at.
+
+	`to` is a phone number or a group JID; both go through the same send.
+	"""
+	if not to:
+		frappe.throw(_("Say where to send it"))
+	if not message or not message.strip():
+		frappe.throw(_("There is nothing to send"))
+
+	sender = sender or _settings().whatsapp_sender or None
+
+	if doctype and name:
+		# Read permission is checked on the real document: this endpoint must not
+		# become a way to render a PDF of anything on the site by naming it.
+		if not frappe.has_permission(doctype, "read", doc=name):
+			frappe.throw(_("You do not have permission to share {0} {1}").format(doctype, name))
+		sent = send_document(doctype, name, to, message, sender)
+	else:
+		sent = send_text(to, message, sender)
+
+	return {
+		"sent": bool(sent),
+		"to": to,
+		"message": _("Sent to {0}").format(to)
+		if sent
+		else _("Could not send to {0} — check the WhatsApp settings").format(to),
+	}
+
+
 def format_material_request(doc) -> str:
 	"""Human-readable summary. Staff read this on a phone, so it leads with what
 	is needed and where, not with document metadata."""
@@ -431,12 +478,22 @@ def on_material_request_submit(doc, method=None):
 	except Exception:
 		return
 
-	frappe.enqueue(
-		"cosmestics.api.notifications._enqueued_material_request_notice",
-		queue="short",
-		enqueue_after_commit=True,
-		docname=doc.name,
-	)
+	try:
+		frappe.enqueue(
+			"cosmestics.api.notifications._enqueued_material_request_notice",
+			queue="short",
+			enqueue_after_commit=True,
+			docname=doc.name,
+		)
+	except Exception as e:
+		# Enqueuing itself can fail — Redis down is the common one — and that
+		# exception propagates out of `on_submit` and rolls back the Material
+		# Request. A shop then cannot request stock because a notification queue
+		# is unavailable, which inverts this module's whole premise: the request
+		# matters, the message about it does not.
+		frappe.log_error(
+			f"Could not queue the WhatsApp notice for {doc.name}: {e}", "Cosmestics POS"
+		)
 
 
 def _enqueued_material_request_notice(docname: str):

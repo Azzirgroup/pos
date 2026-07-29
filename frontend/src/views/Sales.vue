@@ -5,7 +5,10 @@ import { getSales } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
+import ShareSheet from '@/components/ShareSheet.vue'
+import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
+import LucideSend from '~icons/lucide/send'
 
 const rows = ref([])
 const totals = ref({})
@@ -42,6 +45,16 @@ const stats = computed(() => [
 	{ label: 'Over the counter', value: totals.value.pos, type: 'number' },
 ])
 
+/**
+ * Rows here are real Sales Invoices, so sharing one sends the invoice PDF
+ * rather than a summary of it — the same thing the documents hub sends.
+ */
+const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
+	columns: COLUMNS,
+	title: (row) => `${row.name} · ${row.customer || 'Walk-in'}`,
+	documentFor: (row) => ({ doctype: 'Sales Invoice', name: row.name }),
+})
+
 onMounted(load)
 watch(days, load)
 
@@ -71,6 +84,15 @@ async function load() {
 				<div class="w-[160px]">
 					<FormControl type="select" v-model="days" :options="PERIODS" />
 				</div>
+				<!-- Sharing the whole list, not only a row: "what is still unpaid"
+				     is a question asked about the filtered set, not one invoice. -->
+				<Button
+					variant="subtle"
+					:icon-left="LucideSend"
+					:disabled="!rows.length"
+					label="Share list"
+					@click="shareList(rows, `Sales · ${period.from} to ${period.to}`)"
+				/>
 				<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load" />
 			</template>
 		</PageHeader>
@@ -81,6 +103,7 @@ async function load() {
 			:rows="rows"
 			row-key="name"
 			:loading="loading"
+			:actions="actionsFor"
 			empty-text="No sales in this period."
 		>
 			<!-- is_pos is a flag in the data but a word to a human. -->
@@ -99,5 +122,7 @@ async function load() {
 				/>
 			</template>
 		</DataTable>
+
+		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
 	</div>
 </template>

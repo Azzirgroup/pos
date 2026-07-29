@@ -5,7 +5,10 @@ import { getPurchasing } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
+import ShareSheet from '@/components/ShareSheet.vue'
+import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
+import LucideSend from '~icons/lucide/send'
 
 const data = ref({ invoices: [], orders: [], requests: [], totals: {}, period: {} })
 const days = ref(30)
@@ -53,6 +56,25 @@ const COLUMNS = {
 const rows = computed(() => data.value[tab.value] || [])
 const columns = computed(() => COLUMNS[tab.value])
 
+/**
+ * Columns are passed as a getter because they change with the tab — sharing a
+ * row from Orders must describe an order, not the invoice columns that happened
+ * to be on screen when the page loaded.
+ *
+ * All three tabs are real documents, so the share carries the PDF.
+ */
+const DOCTYPE_BY_TAB = {
+	invoices: 'Purchase Invoice',
+	orders: 'Purchase Order',
+	requests: 'Material Request',
+}
+
+const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
+	columns: () => columns.value,
+	title: (row) => `${row.name}${row.supplier ? ` · ${row.supplier}` : ''}`,
+	documentFor: (row) => ({ doctype: DOCTYPE_BY_TAB[tab.value], name: row.name }),
+})
+
 const stats = computed(() => {
 	const t = data.value.totals || {}
 	return [
@@ -95,6 +117,13 @@ async function load() {
 				<div class="w-[160px]">
 					<FormControl type="select" v-model="days" :options="PERIODS" />
 				</div>
+				<Button
+					variant="subtle"
+					:icon-left="LucideSend"
+					:disabled="!rows.length"
+					label="Share list"
+					@click="shareList(rows, `Purchasing · ${tab}`)"
+				/>
 				<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load" />
 			</template>
 		</PageHeader>
@@ -110,6 +139,7 @@ async function load() {
 			:rows="rows"
 			row-key="name"
 			:loading="loading"
+			:actions="actionsFor"
 			:empty-text="`No ${tab} in this period.`"
 		>
 			<template #cell-status="{ value }">
@@ -120,5 +150,7 @@ async function load() {
 				/>
 			</template>
 		</DataTable>
+
+		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
 	</div>
 </template>

@@ -14,7 +14,15 @@ defineProps({
 	embedded: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['pay', 'hold', 'pickCustomer'])
+/**
+ * Quantity changes are emitted rather than applied.
+ *
+ * They used to go straight to the store, which meant the `+` beside a line —
+ * the control most likely to push a quantity past what is on the shelf — was
+ * the one that never checked. The view that owns the out-of-stock sheet decides
+ * now; this panel only says what the cashier pressed.
+ */
+const emit = defineEmits(['pay', 'hold', 'pickCustomer', 'inc', 'dec', 'setQty'])
 
 const cart = useCartStore()
 const {
@@ -74,10 +82,10 @@ watch(
 				:line="line"
 				:line-total="cart.lineTotal(line)"
 				:highlight="lastTouched === line.id"
-				@inc="cart.inc"
-				@dec="cart.dec"
+				@inc="emit('inc', $event)"
+				@dec="emit('dec', $event)"
 				@remove="cart.remove"
-				@set-qty="cart.setQty"
+				@set-qty="(id, qty) => emit('setQty', id, qty)"
 			/>
 		</div>
 

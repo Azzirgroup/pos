@@ -118,6 +118,64 @@ def _run(r):
 	_recent_sales(r)
 	_barcodes(r)
 	_whatsapp(r)
+	_settings(r)
+
+
+def _settings(r):
+	"""The settings screen.
+
+	Two things worth asserting. That the fields it declares still exist on their
+	DocTypes — the same guard the documents hub has, for the same reason — and
+	that the allow-list is a real boundary rather than a convention.
+	"""
+	from cosmestics.api import settings as api_settings
+
+	print()
+	data = api_settings.get()
+	r.check("settings load", bool(data.get("pos_meta")), f"{len(data['pos_meta'])} fields")
+
+	# Every declared field must resolve on its DocType, or the screen renders a
+	# labelless box the user cannot interpret.
+	pos_meta = frappe.get_meta("Cosmestics POS Settings")
+	missing = [f for f in api_settings.POS_SETTINGS_FIELDS if not pos_meta.get_field(f)]
+	r.check("every POS setting field exists", not missing, str(missing))
+
+	profile_meta = frappe.get_meta("POS Profile")
+	# Profile fields vary by ERPNext version, so this asserts the ones the screen
+	# actually offers rather than the whole list.
+	offered = ["warehouse", "selling_price_list", "customer"]
+	missing_p = [f for f in offered if not profile_meta.has_field(f)]
+	r.check("core POS Profile fields exist", not missing_p, str(missing_p))
+
+	r.check("settings report whether they are editable", "can_edit_pos" in data,
+	        str(data.get("can_edit_pos")))
+	r.check("profiles come back with their user list",
+	        all("users" in p and "mine" in p for p in data["profiles"]),
+	        f"{len(data['profiles'])} profiles")
+
+	# --- The link boundary ---
+	opts = api_settings.link_options(doctype="Warehouse")
+	r.check("link options resolve for a declared field", isinstance(opts, list),
+	        f"{len(opts)} warehouses")
+
+	try:
+		api_settings.link_options(doctype="User")
+		r.check("an undeclared doctype is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("an undeclared doctype is refused", True)
+
+	# --- Writes are allow-listed, not passed through ---
+	res = api_settings.save_pos_settings(
+		values={"default_expense_account": None, "not_a_real_field": "x"}
+	)
+	r.check("an undeclared field is never written", "not_a_real_field" not in res["saved"],
+	        str(res["saved"]))
+	r.check(
+		"the smuggled field did not reach the doctype",
+		not frappe.db.exists(
+			"DocField", {"parent": "Cosmestics POS Settings", "fieldname": "not_a_real_field"}
+		),
+	)
 
 
 def _modules_and_reports(r):
@@ -438,14 +496,142 @@ def _shift_and_credit(r, item):
 	r.check("credit reported separately", summary["credit"]["count"] >= 1,
 	        f"count={summary['credit']['count']} outstanding={summary['credit']['outstanding']}")
 
+	# --- Money out of the drawer, before closing ---
+	_till_movements(r, shift, summary)
+
 	# --- Close, with a deliberate 100 short in the drawer ---
-	closed = close_shift(counted=[{"mode_of_payment": "Cash", "closing_amount": 5300}])
+	#
+	# 5400 expected, minus the 250 expense left standing by `_till_movements`,
+	# is 5150. Counting 5050 is therefore 100 short — the same shortfall as
+	# before the movements existed, which is the point: the expense is not a
+	# discrepancy, and a till that reported it as one would have the cashier
+	# hunting money that was legitimately spent.
+	closed = close_shift(
+		counted=[{"mode_of_payment": "Cash", "closing_amount": 5050}],
+		shorts=[{"mode_of_payment": "Cash", "person": "Smoke Cashier"}],
+	)
 	r.check("shift closed", bool(closed["name"]), closed["name"])
 	r.check("shortfall detected (-100)", flt(closed["difference"]) == -100,
 	        str(closed["difference"]))
+	r.check("cash paid out reported at close (250)", flt(closed["paid_out"]) == 250,
+	        str(closed["paid_out"]))
 	r.check("opening entry marked Closed",
 	        frappe.db.get_value("POS Opening Entry", shift["name"], "status") == "Closed",
 	        str(frappe.db.get_value("POS Opening Entry", shift["name"], "status")))
+
+	# --- The short carries a name ---
+	recorded = closed.get("shorts_recorded") or []
+	r.check("the short was attributed to somebody", len(recorded) == 1, str(recorded))
+	if recorded:
+		r.check("attributed short names the person",
+		        recorded[0]["person"] == "Smoke Cashier", str(recorded[0]["person"]))
+		r.check("attributed short is the counted difference (100)",
+		        flt(recorded[0]["amount"]) == 100, str(recorded[0]["amount"]))
+		short_doc = frappe.get_doc("Cosmestics Shift Movement", recorded[0]["name"])
+		r.check("short links back to the closing entry",
+		        short_doc.reference_name == closed["name"], str(short_doc.reference_name))
+		r.check("short is submitted", short_doc.docstatus == 1, str(short_doc.docstatus))
+		r.check("a short posts no journal entry of its own",
+		        short_doc.reference_doctype == "POS Closing Entry",
+		        str(short_doc.reference_doctype))
+
+
+def _till_movements(r, shift, before):
+	"""Money leaving the drawer without being a sale.
+
+	The thing worth asserting is not that a record was written — it is that the
+	*expected* amount moved. A movement that files neatly and leaves the closing
+	figure untouched is exactly the bug this is guarding against, because the
+	cashier would then be counting against a number that still includes cash
+	they watched leave.
+	"""
+	from cosmestics.api.shift import (
+		close_shift,
+		get_closing_summary,
+		get_movement_options,
+		list_movements,
+		record_movement,
+		void_movement,
+	)
+
+	print()
+	cash_before = next(
+		(x for x in before["rows"] if x["mode_of_payment"] == "Cash"), {"expected_amount": 0}
+	)
+	expected_before = flt(cash_before["expected_amount"])
+
+	opts = get_movement_options()
+	r.check("movement form has modes to pick from", bool(opts["modes"]), str(opts["modes"]))
+	r.check("movement form offers expense accounts", bool(opts["accounts"]),
+	        f"{len(opts['accounts'])} accounts")
+
+	# --- An expense: cash out, and a real ledger entry ---
+	exp = record_movement(
+		movement_type="Expense",
+		amount=250,
+		mode_of_payment="Cash",
+		reason="Smoke test transport",
+		person="Smoke Cashier",
+	)
+	r.check("expense recorded", bool(exp["name"]), exp["name"])
+	r.check("expense posted a journal entry", exp["reference_doctype"] == "Journal Entry",
+	        f"{exp['reference_doctype']} {exp['reference_name']}")
+
+	if exp["reference_name"]:
+		je = frappe.get_doc("Journal Entry", exp["reference_name"])
+		r.check("journal entry is submitted", je.docstatus == 1, str(je.docstatus))
+		r.check("journal entry balances at 250",
+		        flt(je.total_debit) == 250 and flt(je.total_credit) == 250,
+		        f"dr {je.total_debit} cr {je.total_credit}")
+
+	after = get_closing_summary()
+	cash_after = next(
+		(x for x in after["rows"] if x["mode_of_payment"] == "Cash"), {"expected_amount": 0}
+	)
+	r.check(
+		"expected cash fell by the expense (250)",
+		flt(cash_after["expected_amount"]) == expected_before - 250,
+		f"{expected_before} → {cash_after['expected_amount']}",
+	)
+	r.check("the reduction is reported, not just applied",
+	        flt(cash_after.get("paid_out")) == 250, str(cash_after.get("paid_out")))
+	r.check("expense total surfaced separately",
+	        flt(after["movements"]["expense_total"]) == 250,
+	        str(after["movements"]["expense_total"]))
+
+	# --- Voiding puts it back ---
+	voidable = record_movement(
+		movement_type="Expense", amount=90, mode_of_payment="Cash", reason="Recorded by mistake"
+	)
+	mid = get_closing_summary()
+	mid_cash = next(x for x in mid["rows"] if x["mode_of_payment"] == "Cash")
+	r.check("a second expense stacks (340 out)",
+	        flt(mid_cash["paid_out"]) == 340, str(mid_cash["paid_out"]))
+
+	void_movement(name=voidable["name"])
+	restored = get_closing_summary()
+	restored_cash = next(x for x in restored["rows"] if x["mode_of_payment"] == "Cash")
+	r.check(
+		"voiding restores the expected amount",
+		flt(restored_cash["expected_amount"]) == expected_before - 250,
+		f"{restored_cash['expected_amount']} (expense of 250 still standing)",
+	)
+	r.check("a voided movement leaves the list",
+	        len(list_movements()["rows"]) == 1, str(len(list_movements()["rows"])))
+
+	# --- A short cannot be recorded mid-shift; it is found by counting ---
+	try:
+		record_movement(movement_type="Short", amount=50, mode_of_payment="Cash", person="X")
+		r.check("a short cannot be recorded during a shift", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("a short cannot be recorded during a shift", True)
+
+	# --- A movement with no amount is refused ---
+	try:
+		record_movement(movement_type="Expense", amount=0, mode_of_payment="Cash")
+		r.check("a zero movement is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("a zero movement is refused", True)
 
 
 def _documents(r, item, warehouse):
@@ -1083,6 +1269,14 @@ def _neighbour_sourcing(r, item):
 	pi = frappe.get_doc("Purchase Invoice", res["invoices"][0]["name"])
 	r.check("the purchase is submitted", pi.docstatus == 1, pi.name)
 	r.check("the purchase received stock", pi.update_stock == 1)
+	# Whether the cashier handed money over next door is not something the till
+	# can know, so the payable stands rather than inventing a cash movement that
+	# never appeared in the drawer.
+	r.check(
+		"the neighbour is left owed, not marked paid",
+		pi.is_paid == 0 and flt(pi.outstanding_amount) > 0,
+		f"is_paid={pi.is_paid} outstanding={pi.outstanding_amount}",
+	)
 
 
 def _dashboard_tabs(r):
@@ -1145,7 +1339,7 @@ def _dashboard_tabs(r):
 
 def _master_data(r):
 	"""Quick-add. Creating the record is the whole point, so it is created."""
-	from cosmestics.api import master
+	from cosmestics.api import customers, master
 
 	print()
 	types = master.list_types()
@@ -1191,6 +1385,43 @@ def _master_data(r):
 			)
 		except Exception as e:
 			r.check(f"records list {entry['key']}", False, f"{type(e).__name__}: {e}")
+
+	# Records are editable, so editing is exercised: reading one back and saving
+	# a change is the whole point of the screen.
+	existing = frappe.get_all("Customer", limit=1, pluck="name")
+	if existing:
+		rec = frappe.call(master.get_record, key="customer", name=existing[0])
+		r.check("a record loads for editing", bool(rec["values"]), rec["title"])
+		res = frappe.call(
+			master.update,
+			key="customer",
+			name=existing[0],
+			values={"mobile_no": "254700000123"},
+		)
+		r.check("an edit saves", res["changed"], res["message"])
+		r.check(
+			"the edit reached the record",
+			frappe.db.get_value("Customer", existing[0], "mobile_no") == "254700000123",
+		)
+		try:
+			frappe.call(master.update, key="customer", name=existing[0], values={"customer_name": ""})
+			r.check("a required field cannot be emptied", False, "no error raised")
+		except frappe.ValidationError:
+			r.check("a required field cannot be emptied", True)
+
+		# The ledger is built from GL Entry, so a payment moves it and an
+		# invoice-only statement would not.
+		led = frappe.call(customers.ledger, customer=existing[0], days=3650)
+		r.check("customer ledger loads", isinstance(led["rows"], list), f"{len(led['rows'])} entries")
+		if led["rows"]:
+			running = led["opening"]
+			for row in led["rows"]:
+				running += flt(row["billed"]) - flt(row["paid"])
+			r.check(
+				"the running balance adds up to the closing figure",
+				abs(running - flt(led["closing"])) < 0.01,
+				f"{running} vs {led['closing']}",
+			)
 
 	groups = master.options(key="customer", fieldname="customer_group")
 	r.check("link options resolve", isinstance(groups, list), f"{len(groups)} customer groups")
@@ -1445,6 +1676,7 @@ def _annotations(r):
 		reorder,
 		reports,
 		session,
+		settings,
 		shift,
 		sourcing,
 		stock,
@@ -1511,6 +1743,9 @@ def _annotations(r):
 		(dashboard.accounts, {"days": 30}),
 		(master.list_types, {}),
 		(master.list_records, {"key": "customer", "search": None, "limit": 100}),
+		(master.get_record, {"key": "customer", "name": "x"}),
+		(master.update, {"key": "customer", "name": "x", "values": {}}),
+		(customers.ledger, {"customer": "x", "days": 365}),
 		(master.options, {"key": "customer", "fieldname": "customer_group", "search": None, "limit": 20}),
 		(master.create, {"key": "customer", "values": {}}),
 		(pos.recent_sales, {"limit": 20, "mine": 1}),
@@ -1518,6 +1753,31 @@ def _annotations(r):
 		(barcodes.generate, {"item_codes": [], "skip_existing": 1}),
 		(notifications.test_whatsapp, {"to": "x", "message": None}),
 		(notifications.list_groups, {}),
+		(
+			notifications.share,
+			{"to": "x", "message": "y", "sender": None, "doctype": None, "name": None},
+		),
+		(shift.get_movement_options, {}),
+		(shift.list_movements, {"shift_name": None}),
+		(
+			shift.record_movement,
+			{
+				"movement_type": "Expense",
+				"amount": 1,
+				"mode_of_payment": None,
+				"reason": None,
+				"person": None,
+				"party": None,
+				"expense_account": None,
+			},
+		),
+		(shift.void_movement, {"name": "x"}),
+		(settings.get, {}),
+		(settings.save_pos_settings, {"values": {}}),
+		(settings.save_profile, {"name": "x", "values": {}}),
+		(settings.assign_profile, {"name": "x", "assign": 1}),
+		(settings.save_user, {"values": {}}),
+		(settings.link_options, {"doctype": "Warehouse", "search": None, "limit": 20}),
 	]
 
 	missing = []

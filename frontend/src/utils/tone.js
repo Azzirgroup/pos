@@ -133,12 +133,37 @@ export function cellTone(key, value, row = null) {
 		return 'text-ink-gray-6'
 	}
 
-	// Stock counts: zero and negative are the states worth noticing.
-	if (key === 'actual_qty' || key === 'projected_qty') {
-		if (n < 0) return RED
-		if (n === 0) return AMBER
-	}
+	if (STOCK_KEYS.has(key)) return stockTone(n)
 
+	return ''
+}
+
+/**
+ * Every column that states a stock balance, so a count reads the same on the
+ * inventory screen, the stock report and a warehouse dashboard. Previously only
+ * two of them were coloured and the rest were plain, which made the colour look
+ * arbitrary rather than meaningful.
+ */
+const STOCK_KEYS = new Set([
+	'actual_qty',
+	'projected_qty',
+	'total_stock',
+	'stock_qty',
+	'reserved_qty',
+	'received',
+	'issued',
+	'on_hand',
+	'current_qty',
+])
+
+/**
+ * Negative is impossible and therefore wrong; zero means nothing is on the
+ * shelf. Anything positive is the ordinary case and stays uncoloured — a shop
+ * with stock is not news, and colouring it would drown the two states that are.
+ */
+function stockTone(n) {
+	if (n < 0) return RED
+	if (n === 0) return AMBER
 	return ''
 }
 

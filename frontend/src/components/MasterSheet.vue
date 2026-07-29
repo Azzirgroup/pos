@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { Button, Dialog, FormControl, Spinner } from 'frappe-ui'
-import { createMaster, getMasterOptions, listMasterTypes } from '@/data/api'
+import { createMaster, getMasterOptions, getMasterRecord, listMasterTypes, updateMaster } from '@/data/api'
 import { resolveIcon } from '@/utils/icons'
 import LucidePlus from '~icons/lucide/plus'
 import LucideExternalLink from '~icons/lucide/external-link'
@@ -18,6 +18,12 @@ const props = defineProps({
 	open: { type: Boolean, default: false },
 	/** Preselect a type, e.g. 'supplier' from the neighbour empty state. */
 	initialKey: { type: String, default: null },
+	/**
+	 * An existing record to edit. The same form either way — a phone number
+	 * typed wrong at the counter is corrected in the place it was entered, not
+	 * by sending someone to the desk to find the record again.
+	 */
+	editName: { type: String, default: null },
 })
 
 const emit = defineEmits(['update:open', 'created', 'notify'])
@@ -29,6 +35,12 @@ const linkOptions = ref({})
 const saving = ref(false)
 const loading = ref(false)
 const created = ref(null)
+/**
+ * Editing an existing record rather than adding one. Declared above the watcher
+ * because that watcher is `immediate` and runs during setup — a `const` read
+ * before its own line is a temporal-dead-zone throw, not an undefined.
+ */
+const editing = ref(null)
 
 const active = computed(() => types.value.find((t) => t.key === activeKey.value) || null)
 
@@ -40,7 +52,8 @@ watch(
 		loading.value = true
 		try {
 			if (!types.value.length) types.value = await listMasterTypes()
-			pick(props.initialKey || activeKey.value || types.value[0]?.key)
+			await pick(props.initialKey || activeKey.value || types.value[0]?.key)
+			if (props.editName) await loadRecord()
 		} catch (e) {
 			emit('notify', { message: e.message || 'Could not load the form', tone: 'bad' })
 		} finally {
@@ -53,6 +66,7 @@ watch(
 async function pick(key) {
 	if (!key) return
 	activeKey.value = key
+	editing.value = null
 	values.value = {}
 	created.value = null
 	linkOptions.value = {}
@@ -80,10 +94,31 @@ const canSave = computed(
 			.every((f) => String(values.value[f.fieldname] ?? '').trim()) ?? false,
 )
 
+async function loadRecord() {
+	editing.value = await getMasterRecord({ key: activeKey.value, name: props.editName })
+	// Nulls become empty strings so the controls are actually editable rather
+	// than showing a placeholder that will not clear.
+	values.value = Object.fromEntries(
+		Object.entries(editing.value.values).map(([k, v]) => [k, v ?? '']),
+	)
+}
+
 async function save() {
 	if (!canSave.value) return
 	saving.value = true
 	try {
+		if (editing.value) {
+			const res = await updateMaster({
+				key: activeKey.value,
+				name: editing.value.name,
+				values: values.value,
+			})
+			emit('created', res)
+			emit('notify', { message: res.message, tone: res.changed ? 'good' : 'bad' })
+			emit('update:open', false)
+			return
+		}
+
 		const res = await createMaster({ key: activeKey.value, values: values.value })
 		created.value = res
 		values.value = {}
@@ -105,7 +140,7 @@ function optionsFor(field) {
 <template>
 	<Dialog
 		:model-value="open"
-		:options="{ title: 'Add a record', size: '2xl' }"
+		:options="{ title: editing ? `Edit ${editing.title}` : 'Add a record', size: '2xl' }"
 		@update:model-value="emit('update:open', $event)"
 	>
 		<template #body-content>
@@ -121,7 +156,7 @@ function optionsFor(field) {
 
 			<div v-else class="flex flex-col gap-4">
 				<!-- Type picker. Icons repeat the label rather than replacing it. -->
-				<div class="flex flex-wrap gap-2">
+				<div v-if="!editing" class="flex flex-wrap gap-2">
 					<button
 						v-for="t in types"
 						:key="t.key"
@@ -187,7 +222,13 @@ function optionsFor(field) {
 				:icon-left="LucidePlus"
 				:loading="saving"
 				:disabled="!canSave"
-				:label="canSave ? `Create ${active?.label}` : 'Fill in the required fields'"
+				:label="
+					canSave
+						? editing
+							? 'Save changes'
+							: `Create ${active?.label}`
+						: 'Fill in the required fields'
+				"
 				@click="save"
 			/>
 		</template>

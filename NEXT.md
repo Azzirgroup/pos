@@ -4,6 +4,136 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 27. Money that moves at the till without being a sale
+
+Four of the six outstanding items were one change, because they all say the same
+thing: cash leaves the drawer for reasons `get_invoices` knows nothing about. A
+till expense, cash handed to the shop next door, a shortfall with somebody's name
+against it. Each is another term in "what should be in the drawer", and that
+expression is written in exactly two places — so it was changed in exactly two
+places.
+
+**`Cosmestics Shift Movement`** is the new DocType. One record per movement,
+`movement_type` distinguishing them, because the closing screen has to add them
+all up in one place; three doctypes would have meant three things to forget.
+
+- `get_closing_summary` now computes `expected = opening + taken − paid_out`,
+  and reports `paid_out` per mode rather than only applying it. A cashier asked
+  to produce less than the sales say is owed the reason on the same line.
+- `close_shift` subtracts the same term onto ERPNext's `payment_reconciliation`
+  rows. Both had to move or the closing entry would disagree with the summary
+  the cashier just approved.
+
+**A short is the exception, and deliberately so.** It is excluded from
+`paid_out`: a short is *discovered* by counting, so subtracting it from the
+expectation would make the count agree with itself and the discrepancy would
+vanish at the exact moment it was being recorded. It is attributed after the
+closing entry submits, and only for modes that are genuinely short — a name
+typed against a mode that then balanced is dropped rather than filed as a debt
+that does not exist. An overage is never attributed; a surplus is not somebody's
+debt and asking whose it is invites a guess.
+
+**Only an expense posts its own ledger entry** — a Journal Entry debiting the
+expense account and crediting the drawer, because the cash is genuinely gone and
+a till that reconciles against a figure the general ledger does not know about is
+a difference somebody chases at month end. A neighbour purchase is already a
+Purchase Invoice written by `sourcing.receive_from_neighbours`; posting a second
+document for the same money would double-count it, so that record only tells the
+closing screen the cash left.
+
+The till gained a **Shifts tab** in place of Held (which kept its toolbar button
+and its count — the tab was a second door to the same sheet). Behind it: Count,
+Money out, and Neighbours.
+
+**Unpaid neighbour purchases** are modelled on `_credit_summary`, which already
+solved the identical problem for credit sales — reported as their own block
+rather than folded into the expected amounts, windowed on `creation` and not
+`posting_date`. They are a debt this counter opened and nothing else in the app
+surfaced them again.
+
+**Sourcing now asks whether you paid.** Off by default: neighbouring shops
+usually settle weekly, and a payment recorded that never happened leaves the
+drawer short by exactly that much. `submit_sale` splits sourced lines by that
+flag, because `paid` applies to a whole invoice — booking them together would
+either invent a cash movement or hide one.
+
+### 28. Running short mid-cart is the same decision as being out
+
+The out-of-stock sheet used to open only when stock was already zero, so the
+common case — six of the last two — failed at submit with the customer already
+paying. The check is now against what the cart *would* hold, at every entrance:
+the grid, the cell quantity control, and the `+` beside a cart line.
+
+That last one needed `CartPanel` to stop writing to the store directly. It was
+bound to `cart.inc`, which meant the control most likely to push a quantity past
+the shelf count was the one that never asked. It emits upward now, so the
+decision lives where the sheet does.
+
+The sheet opens pre-filled with the **gap**, not with one — a cashier short by
+four should not have to work that out under a queue — and says which of the two
+situations they are in, since the fix differs.
+
+### 29. A part-payment no longer requires finding the split screen
+
+`canComplete` demanded `tendered >= total` for cash, so taking 400 of a 1000 bill
+— the most ordinary thing that happens at a counter — left the button grey with
+no explanation. The only way through was a split screen the cashier had no reason
+to open.
+
+Partial is now expressed the same way on every path: `owing` is computed for all
+of them, anything left owing needs a named customer, and the customer picker
+appears in the same place with the same wording whether or not a split is
+involved. M-Pesa and card still settle exactly, because the amount is whatever
+the machine took; a shortfall on those is entered as a split.
+
+The backend already handled this correctly — verified directly, 400 cash + 200
+M-Pesa against a 1000 bill leaves 400 outstanding — so nothing there changed.
+
+The pay sheet also gained a **back button**, which steps out of split mode before
+it closes the sheet. Closing outright would discard a tender already keyed in,
+which is the one thing a back button must never do.
+
+### 30. Settings — `/settings`
+
+Three tabs: the shop's till configuration, the POS Profile behind this till, and
+the signed-in user's own details. None of these are new settings; they were in
+the desk, which is a place a shop manager either cannot reach or will not find.
+
+Fields, labels and link targets are read from the DocTypes, so this screen cannot
+describe a field that no longer exists. Writes are **allow-listed** rather than
+passed through — the same boundary as `documents.py` and `master.py` — and
+`link_options` is scoped to the doctypes these fields actually point at, because
+a generic version would be a way to read any table on the site.
+
+`assign_profile` is the one-tap fix for "no POS profile available", which is the
+single most confusing thing the till can say. It refuses to remove the last user
+from a profile: on ERPNext an empty user list means *everyone*, so removing the
+last name silently widens access instead of narrowing it.
+
+### 31. Row actions and WhatsApp share on every list
+
+`DataTable` grew an `actions` prop and draws the trailing menu column itself, so
+a list gains row actions by passing a function and changing nothing else.
+`useRowActions` composes the message from **the columns the list is already
+rendering** — same labels, same formatting, same filters — because a summary
+rebuilt from raw fields would quietly show a different set of numbers than the
+one being pointed at.
+
+Sharing carries the real PDF where the row is a document (Sales, Purchasing) and
+plain text where it is not (stock, accounts, reports, master data). Reorder keeps
+its own table so it gets the list-level share only — which is the one that
+matters there, since that list *is* a buying list. List shares cap at 20 rows and
+say so: a silently truncated list reads as the complete answer.
+
+### 32. Dashboard lists no longer scroll inside a page that scrolls
+
+`DataTable` takes `scroll`, and the dashboard's cards pass `false`. They had a
+`max-h` wrapper around a table that already owned its own scrolling, inside a
+page that scrolled too — three bars and no indication which moved what. The
+sticky header follows the same flag, since pinned inside a page-level scroller it
+would sit against the top of a card that had already scrolled past. `items-start`
+on the grids stops a three-row card being stretched to match a twelve-row one.
+
 ### 1. The reorder list — not a bug
 
 `FAIL reorder lists items` was the dev server's unauthenticated `PermissionError`
@@ -481,7 +611,7 @@ really run — the same failure mode as the reorder investigation.
 
     bench --site <site> execute cosmestics.setup.smoke.run
 
-Rolls back, safe against a live site. Currently 297/297. Add checks there for
+Rolls back, safe against a live site. Currently 332/332. Add checks there for
 anything new rather than testing by hand — three separate bugs reached the
 browser because a test exercised a narrower path than the UI does.
 
@@ -489,7 +619,17 @@ browser because a test exercised a narrower path than the UI does.
 
 - **Nothing here has been seen in a browser.** The backend is covered by the
   smoke test and the bundle builds, but no screen has been loaded on an
-  authenticated site. Do that before trusting the layouts.
+  authenticated site. Do that before trusting the layouts. The shift sheet's
+  three tabs and the settings screen are the two worth looking at first — they
+  are the largest pieces of new markup and neither has been rendered.
+- **The M-Pesa channels are still all mapped to the default bank account** (see
+  item 16). Till expenses credit whichever account the mode resolves to, so
+  splitting them properly matters more now than it did: an expense taken against
+  a mode pointing at the wrong account books the cash out of the wrong place.
+- **A neighbour purchase recorded from "Money out" does not link to its invoice.**
+  It records that cash went to a named supplier, which is what the drawer needs,
+  but settling last week's invoices this way leaves those invoices showing unpaid.
+  Paying against the invoice is a Payment Entry and belongs in the documents hub.
 - **`tone.js` has no automated coverage.** There is no JS test runner in this
   repo and adding one would be a second verification path alongside
   `bench execute`. The status vocabulary was written against the `status`

@@ -21,7 +21,9 @@
   "sourcing_section",
   "neighbour_supplier_group",
   "column_break_src",
-  "default_source_warehouse"
+  "default_source_warehouse",
+  "till_section",
+  "default_expense_account"
  ],
  "fields": [
   {
@@ -47,14 +49,14 @@
    "description": "Customer sends to a phone number. Leave blank to book it against the generic M-Pesa mode above.",
    "fieldname": "mode_mpesa_send",
    "fieldtype": "Link",
-   "label": "M-Pesa · Send Money",
+   "label": "M-Pesa \u00b7 Send Money",
    "options": "Mode of Payment"
   },
   {
    "description": "Customer pays a business paybill and account number. Leave blank to fall back to M-Pesa.",
    "fieldname": "mode_mpesa_paybill",
    "fieldtype": "Link",
-   "label": "M-Pesa · Paybill",
+   "label": "M-Pesa \u00b7 Paybill",
    "options": "Mode of Payment"
   },
   {
@@ -65,7 +67,7 @@
    "description": "Cash taken over the agent counter against an M-Pesa withdrawal. Leave blank to fall back to M-Pesa.",
    "fieldname": "mode_mpesa_withdraw",
    "fieldtype": "Link",
-   "label": "M-Pesa · Withdraw",
+   "label": "M-Pesa \u00b7 Withdraw",
    "options": "Mode of Payment"
   },
   {
@@ -132,6 +134,18 @@
    "fieldtype": "Link",
    "label": "Sourcing Warehouse",
    "options": "Warehouse"
+  },
+  {
+   "fieldname": "till_section",
+   "fieldtype": "Section Break",
+   "label": "Till Movements"
+  },
+  {
+   "description": "Where cash taken out of the drawer for a non-sales expense is booked. Falls back to the company's default expense account.",
+   "fieldname": "default_expense_account",
+   "fieldtype": "Link",
+   "label": "Default Expense Account",
+   "options": "Account"
   }
  ],
  "index_web_pages_for_search": 1,

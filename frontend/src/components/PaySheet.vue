@@ -11,6 +11,7 @@ import LucideUserPlus from '~icons/lucide/user-plus'
 import LucideAlertTriangle from '~icons/lucide/alert-triangle'
 import LucideX from '~icons/lucide/x'
 import LucideSplit from '~icons/lucide/split'
+import LucideChevronLeft from '~icons/lucide/chevron-left'
 
 const props = defineProps({
 	modelValue: { type: Boolean, default: false },
@@ -83,7 +84,27 @@ const partsTotal = computed(() =>
 )
 /** Positive = still owed, negative = over-tendered (change). */
 const remaining = computed(() => props.total - partsTotal.value)
-const isPartial = computed(() => splitMode.value && remaining.value > 0.005)
+
+/**
+ * What the customer still owes after everything entered so far.
+ *
+ * Computed for every method, not only for a split. Taking 400 of a 1000 bill in
+ * cash is the same transaction whether or not a second tender is involved, and
+ * requiring the cashier to find the split screen to express it meant the plain
+ * case — one method, not enough money — could not be recorded at all.
+ *
+ * M-Pesa and card settle exactly by construction: the amount is whatever the
+ * machine took, so a shortfall on them is entered as a split instead.
+ */
+const owing = computed(() => {
+	if (isCredit.value) return props.total
+	if (splitMode.value) return round2(Math.max(0, remaining.value))
+	if (method.value === 'cash') return shortfall.value
+	return 0
+})
+
+/** A part-payment leaves a debt behind; a credit sale is one by definition. */
+const isPartial = computed(() => !isCredit.value && owing.value > 0.005)
 
 function startSplit() {
 	splitMode.value = true
@@ -121,17 +142,29 @@ function fillRemaining(i) {
 	parts.value[i].amount = String(Math.max(0, +(props.total - others).toFixed(2)))
 }
 
-// Cash needs a tendered amount; credit needs a named customer to owe the money;
-// the others settle exactly.
+/**
+ * One rule, applied everywhere: money has to have been entered, and anything
+ * left owing has to have somebody's name on it.
+ *
+ * Cash no longer demands the full amount. It used to, which made a part-payment
+ * impossible on the most common tender in the shop — the button simply stayed
+ * grey with no explanation, and the only way through was a split screen the
+ * cashier had no reason to open.
+ */
 const canComplete = computed(() => {
 	if (props.total <= 0) return false
 	if (isCredit.value) return Boolean(props.customer)
+
 	if (splitMode.value) {
 		if (partsTotal.value <= 0) return false
-		// An unpaid balance is a debt, so it needs a named customer to sit against.
 		return isPartial.value ? Boolean(props.customer) : true
 	}
-	if (method.value === 'cash') return tenderedNum.value >= props.total
+
+	if (method.value === 'cash') {
+		if (tenderedNum.value <= 0) return false
+		return isPartial.value ? Boolean(props.customer) : true
+	}
+
 	return true
 })
 
@@ -198,8 +231,28 @@ function complete() {
 		// A credit sale collects nothing now.
 		tendered: isCredit.value ? 0 : method.value === 'cash' ? tenderedNum.value : props.total,
 		change: method.value === 'cash' ? change.value : 0,
+		// Reported so the confirmation can name the balance. The server derives
+		// the real outstanding from the invoice either way — this is what the
+		// cashier was told, not what is booked.
+		outstanding: isPartial.value ? owing.value : 0,
 		reference: reference.value,
 	})
+}
+
+/**
+ * One step back rather than straight out.
+ *
+ * Split is a mode entered from this sheet, so leaving it should return here —
+ * closing the whole sheet would discard a tender the cashier has already keyed
+ * in, which is the one thing a back button must never do.
+ */
+function goBack() {
+	if (splitMode.value) {
+		splitMode.value = false
+		parts.value = []
+		return
+	}
+	emit('update:modelValue', false)
 }
 </script>
 
@@ -210,12 +263,27 @@ function complete() {
 		@update:model-value="emit('update:modelValue', $event)"
 	>
 		<div class="flex flex-col gap-4 px-4 pb-5 pt-1">
-			<!-- Amount due leads: it is the number both people in the transaction care about. -->
-			<div class="text-center">
-				<div class="text-p-sm text-ink-gray-5">Amount due</div>
-				<div class="tabular mt-0.5 text-4xl font-semibold tracking-tight text-ink-gray-9">
-					{{ fmtMoney(total) }}
+			<!-- Back sits beside the amount rather than above it: the amount due is
+			     still the thing being looked at, and a header row of its own would
+			     push it below the fold on a phone. -->
+			<div class="flex items-center gap-2">
+				<button
+					class="grid h-10 w-10 shrink-0 place-items-center rounded-lg text-ink-gray-6 transition-colors hover:bg-surface-gray-2"
+					:aria-label="splitMode ? 'Back to payment methods' : 'Back to cart'"
+					@click="goBack"
+				>
+					<LucideChevronLeft class="h-5 w-5" />
+				</button>
+				<div class="min-w-0 flex-1 text-center">
+					<div class="text-p-sm text-ink-gray-5">
+						{{ splitMode ? 'Split payment · amount due' : 'Amount due' }}
+					</div>
+					<div class="tabular mt-0.5 text-4xl font-semibold tracking-tight text-ink-gray-9">
+						{{ fmtMoney(total) }}
+					</div>
 				</div>
+				<!-- Balances the back button so the amount stays optically centred. -->
+				<div class="h-10 w-10 shrink-0" aria-hidden="true" />
 			</div>
 
 			<!-- Split tender / part payment -->
@@ -478,6 +546,41 @@ function complete() {
 					</button>
 				</div>
 
+				<!-- A cash sale that does not cover the bill is a part-payment, and
+				     the balance has to sit against somebody. Appears the moment the
+				     amount entered falls short, in the same place the split panel
+				     puts it, so the two paths ask the same question the same way. -->
+				<button
+					v-if="isPartial"
+					class="flex min-h-touch items-center gap-3 rounded-xl border p-3.5 text-left transition-colors"
+					:class="
+						customer
+							? 'border-outline-gray-2 bg-surface-white hover:bg-surface-gray-2'
+							: 'border-outline-amber-2 bg-surface-amber-2'
+					"
+					@click="emit('pick-customer')"
+				>
+					<LucideUserPlus
+						class="h-5 w-5 shrink-0"
+						:class="customer ? 'text-ink-gray-5' : 'text-ink-amber-3'"
+					/>
+					<div class="min-w-0 flex-1">
+						<div
+							class="truncate text-p-base font-medium"
+							:class="customer ? 'text-ink-gray-9' : 'text-ink-amber-3'"
+						>
+							{{ customer ? customer.customer_name || customer.name : 'Choose a customer' }}
+						</div>
+						<div class="text-p-sm text-ink-gray-6">
+							{{
+								customer
+									? `Will owe ${fmtMoney(owing)}`
+									: 'Required — someone must owe the balance'
+							}}
+						</div>
+					</div>
+				</button>
+
 				<!-- Change is the highest-stakes number on this screen, so it gets
 				     colour and size the moment it becomes real. -->
 				<div
@@ -543,7 +646,7 @@ function complete() {
 					isCredit
 						? 'Record credit sale'
 						: isPartial
-							? `Take part-payment · ${fmtMoney(remaining)} owed`
+							? `Take part-payment · ${fmtMoney(owing)} owed`
 							: 'Complete sale'
 				}}
 			</button>

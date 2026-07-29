@@ -16,7 +16,7 @@ from frappe.utils import flt, nowdate
 
 
 @frappe.whitelist(methods=["POST"])
-def receive_from_neighbours(lines: list | str, company: str | None = None, paid: int = 1):
+def receive_from_neighbours(lines: list | str, company: str | None = None, paid: int = 0):
 	"""Receive neighbour-sourced goods so the POS sale can be completed.
 
 	`lines` is a list of {item_code, qty, buy_rate, supplier}. One invoice is
@@ -45,7 +45,48 @@ def receive_from_neighbours(lines: list | str, company: str | None = None, paid:
 	for supplier, rows in by_supplier.items():
 		created.append(_make_purchase_invoice(supplier, rows, company, warehouse, paid))
 
-	return {"invoices": created}
+	# Paying the neighbour in cash empties the drawer by exactly this much, and
+	# nothing in the sales figures says so. Recorded against the shift so the
+	# closing count is measured against what should actually be there.
+	movements = _record_till_payments(created) if int(paid or 0) else []
+
+	return {"invoices": created, "movements": movements}
+
+
+def _record_till_payments(invoices):
+	"""Tell the open shift that cash went out of the drawer for these invoices.
+
+	Silent when no shift is open: sourcing has to work at a counter that has not
+	opened one, and refusing the purchase to protect a reconciliation nobody is
+	doing would block the sale that prompted it.
+	"""
+	from cosmestics.api.shift import get_open_shift, record_movement
+
+	if not get_open_shift():
+		return []
+
+	recorded = []
+	for inv in invoices:
+		if flt(inv.get("total")) <= 0:
+			continue
+		try:
+			recorded.append(
+				record_movement(
+					movement_type="Neighbour Purchase",
+					amount=flt(inv["total"]),
+					party=inv["supplier"],
+					reason=_("Paid {0} for {1}").format(inv["supplier"], inv["name"]),
+				)
+			)
+		except Exception:
+			# The goods and the payable are already posted and the customer is
+			# waiting. A drawer figure that has to be corrected at closing is a
+			# far smaller problem than a sale that fails here.
+			frappe.log_error(
+				f"Could not record the till movement for {inv['name']}", "Cosmestics POS"
+			)
+
+	return recorded
 
 
 def _make_purchase_invoice(supplier, rows, company, warehouse, paid):
@@ -79,8 +120,12 @@ def _make_purchase_invoice(supplier, rows, company, warehouse, paid):
 	if not pi.items:
 		frappe.throw(_("No sourced lines with a quantity above zero"))
 
-	# Cash-and-carry from next door is the normal case, so the invoice is
-	# settled on the spot unless the caller says otherwise.
+	# Left unpaid by default. Sourcing happens with a customer at the counter,
+	# and whether the cashier actually handed money over next door — or the two
+	# shops settle at the end of the week, which is the usual arrangement — is
+	# not something the till can know. Booking it as paid invented a cash
+	# movement that never appeared in the drawer, so the payable now stands until
+	# somebody records the payment against it.
 	if int(paid or 0):
 		pi.is_paid = 1
 		pi.mode_of_payment = _default_mode_of_payment(company)

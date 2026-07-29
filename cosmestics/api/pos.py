@@ -49,19 +49,28 @@ def submit_sale(
 	if sourced:
 		from cosmestics.api.sourcing import receive_from_neighbours
 
-		result = receive_from_neighbours(
-			lines=[
-				{
-					"item_code": i["item_code"],
-					"qty": flt(i["qty"]),
-					"buy_rate": flt(i["sourced"]["buy_rate"]),
-					"supplier": i["sourced"]["supplier"],
-				}
-				for i in sourced
-			],
-			company=company,
-		)
-		purchases = result.get("invoices", [])
+		# Split by whether the cashier actually handed money over. `paid` applies
+		# to a whole invoice, so lines that were paid for and lines that will be
+		# settled later have to become separate documents — booking them together
+		# would either invent a cash movement or hide one.
+		for paid_flag in (0, 1):
+			batch = [i for i in sourced if int(i["sourced"].get("paid") or 0) == paid_flag]
+			if not batch:
+				continue
+			result = receive_from_neighbours(
+				lines=[
+					{
+						"item_code": i["item_code"],
+						"qty": flt(i["qty"]),
+						"buy_rate": flt(i["sourced"]["buy_rate"]),
+						"supplier": i["sourced"]["supplier"],
+					}
+					for i in batch
+				],
+				company=company,
+				paid=paid_flag,
+			)
+			purchases.extend(result.get("invoices", []))
 
 	# 2. The sale itself.
 	invoice = _build_invoice(items, payment, customer, company, settings)

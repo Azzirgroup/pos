@@ -5,8 +5,11 @@ import { listReports, runReport, getWarehouses } from '@/data/api'
 import { useRoute } from 'vue-router'
 import PageHeader from '@/components/PageHeader.vue'
 import DataTable from '@/components/DataTable.vue'
+import ShareSheet from '@/components/ShareSheet.vue'
+import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideDownload from '~icons/lucide/download'
+import LucideSend from '~icons/lucide/send'
 
 /**
  * Also used inside the documents hub, where the report list is narrowed to the
@@ -59,6 +62,17 @@ const grouped = computed(() => {
 })
 
 const activeReport = computed(() => reports.value.find((r) => r.key === active.value))
+
+/**
+ * Report rows are computed figures, not documents, so there is nothing to
+ * attach — the numbers are the message. Columns come through as a getter
+ * because every report has its own.
+ */
+const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
+	columns: () => result.value.columns || [],
+	title: () => activeReport.value?.label || 'Report',
+})
+
 // Only stock reports vary by location; showing the picker elsewhere implies a
 // filter that does nothing.
 const usesWarehouse = computed(() => activeReport.value?.group === 'Inventory')
@@ -198,6 +212,16 @@ function exportCsv() {
 						:disabled="!result.rows.length"
 						@click="exportCsv"
 					/>
+					<!-- CSV is for a spreadsheet; this is for a person. A report that
+					     has to be downloaded, opened and re-attached does not reach
+					     the person who asked for it over the phone. -->
+					<Button
+						variant="subtle"
+						:icon-left="LucideSend"
+						label="Share"
+						:disabled="!result.rows.length"
+						@click="shareList(result.rows, activeReport?.label || 'Report')"
+					/>
 				</template>
 			</PageHeader>
 
@@ -205,8 +229,11 @@ function exportCsv() {
 				:columns="result.columns"
 				:rows="result.rows"
 				:loading="loading"
+				:actions="actionsFor"
 				empty-text="Nothing to report for this period."
 			/>
+
+			<ShareSheet v-model="shareOpen" :payload="sharePayload" />
 		</div>
 	</div>
 </template>

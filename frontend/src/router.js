@@ -108,6 +108,12 @@ const routes = [
 		meta: { title: 'Reports' },
 		component: () => import('@/views/Reports.vue'),
 	},
+	{
+		path: '/settings',
+		name: 'Settings',
+		meta: { title: 'Settings' },
+		component: () => import('@/views/Settings.vue'),
+	},
 ]
 
 export default createRouter({

@@ -17,7 +17,7 @@ so no caller-supplied string becomes a doctype name.
 
 import frappe
 from frappe import _
-from frappe.utils import cint, get_url
+from frappe.utils import cint, flt, get_url
 
 MASTERS = [
 	{
@@ -282,6 +282,97 @@ def create(key: str, values: dict | str) -> dict:
 		"desk_url": get_url(f"/app/{frappe.scrub(doctype).replace('_', '-')}/{doc.name}"),
 		"message": _("{0} created").format(doc.get(entry["title_field"]) or doc.name),
 	}
+
+
+@frappe.whitelist()
+def get_record(key: str, name: str) -> dict:
+	"""One record's current values, for editing.
+
+	Only the fields the form declares are returned. A phone number typed at the
+	counter is worth correcting there; the rest of the record belongs in the
+	desk, and `desk_url` goes to it.
+	"""
+	entry = _entry(key)
+	doc = frappe.get_doc(entry["doctype"], name)
+	doc.check_permission("read")
+
+	values = {f["fieldname"]: doc.get(f["fieldname"]) for f in entry["fields"] if f["fieldname"] != "opening_price"}
+	if entry["doctype"] == "Item":
+		values["opening_price"] = _current_item_price(name)
+
+	return {
+		"key": key,
+		"doctype": entry["doctype"],
+		"name": doc.name,
+		"title": doc.get(entry["title_field"]) or doc.name,
+		"values": values,
+		"fields": entry["fields"],
+		"can_write": frappe.has_permission(entry["doctype"], "write", doc=doc),
+		"desk_url": get_url(f"/app/{frappe.scrub(entry['doctype']).replace('_', '-')}/{doc.name}"),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def update(key: str, name: str, values: dict | str) -> dict:
+	"""Save edits to the fields this form owns.
+
+	Deliberately narrow: only declared fieldnames are written, so a value the
+	form never offered cannot be smuggled onto the record, and a field left out
+	of the payload is left alone rather than blanked.
+	"""
+	if isinstance(values, str):
+		values = frappe.parse_json(values)
+	values = values or {}
+
+	entry = _entry(key)
+	doc = frappe.get_doc(entry["doctype"], name)
+
+	allowed = {f["fieldname"] for f in entry["fields"]}
+	missing = [
+		f["label"]
+		for f in entry["fields"]
+		if f.get("required") and f["fieldname"] in values and not str(values[f["fieldname"]] or "").strip()
+	]
+	if missing:
+		frappe.throw(_("These cannot be emptied: {0}").format(", ".join(missing)))
+
+	changed = False
+	for fieldname, value in values.items():
+		if fieldname not in allowed or fieldname == "opening_price":
+			continue
+		if doc.get(fieldname) != value:
+			doc.set(fieldname, value)
+			changed = True
+
+	if changed:
+		doc.save()
+
+	price = values.get("opening_price")
+	if entry["doctype"] == "Item" and price not in (None, "") and flt(price) != flt(_current_item_price(name)):
+		_set_opening_price(name, price)
+		changed = True
+
+	return {
+		"key": key,
+		"name": doc.name,
+		"title": doc.get(entry["title_field"]) or doc.name,
+		"changed": changed,
+		"message": (
+			_("{0} saved").format(doc.get(entry["title_field"]) or doc.name)
+			if changed
+			else _("Nothing changed")
+		),
+	}
+
+
+def _current_item_price(item_code: str):
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	price_list = settings.selling_price_list
+	if not price_list:
+		return None
+	return frappe.db.get_value(
+		"Item Price", {"item_code": item_code, "price_list": price_list}, "price_list_rate"
+	)
 
 
 def _set_opening_price(item_code: str, price):

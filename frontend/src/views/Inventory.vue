@@ -5,7 +5,10 @@ import { getInventory, getWarehouses } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
+import ShareSheet from '@/components/ShareSheet.vue'
+import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
+import LucideSend from '~icons/lucide/send'
 
 const rows = ref([])
 const totals = ref({ value: 0, lines: 0 })
@@ -26,6 +29,13 @@ const COLUMNS = [
 	{ label: 'Rate', key: 'valuation_rate', type: 'currency' },
 	{ label: 'Value', key: 'value', type: 'currency' },
 ]
+
+// A stock line is not a document, so this shares the figures as text — which is
+// what "how many of these have we got?" is answered with anyway.
+const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
+	columns: COLUMNS,
+	title: (row) => `${row.item_name || row.item_code} · ${row.warehouse}`,
+})
 
 const stats = computed(() => [
 	{ label: 'Stock value', value: totals.value.value, type: 'currency' },
@@ -84,6 +94,13 @@ async function load() {
 				<div class="w-[190px]">
 					<FormControl v-model="search" type="text" placeholder="Search item…" />
 				</div>
+				<Button
+					variant="subtle"
+					:icon-left="LucideSend"
+					:disabled="!rows.length"
+					label="Share list"
+					@click="shareList(rows, 'Stock on hand')"
+				/>
 				<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load" />
 			</template>
 		</PageHeader>
@@ -93,7 +110,10 @@ async function load() {
 			:columns="COLUMNS"
 			:rows="rows"
 			:loading="loading"
+			:actions="actionsFor"
 			empty-text="No stock found. Receive stock, or clear the filters."
 		/>
+
+		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
 	</div>
 </template>

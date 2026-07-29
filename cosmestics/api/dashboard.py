@@ -159,10 +159,13 @@ def overview(days: int = DEFAULT_DAYS) -> dict:
 		"trend": _trend(start, end),
 		"payment_mix": _payment_mix(start, end),
 		"top_items": _top_items(start, end),
+		# Negative stock was dropped from here on request. It is a ledger problem
+		# rather than a trading one, and it stayed on screen for weeks at a time
+		# — a permanent red list teaches people to ignore the panel it sits in.
+		# It is still on the Warehouses tab, where a stock question belongs.
 		"attention": {
 			"below_reorder": _below_reorder_rows(),
 			"overdue": _overdue_rows(),
-			"negative_stock": _negative_stock_rows(),
 		},
 		"tills": _open_tills(),
 	}

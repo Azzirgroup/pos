@@ -3,9 +3,12 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { Button, FormControl, Badge, Spinner, Dialog } from 'frappe-ui'
 import { getReorderItems, getItemReorder, saveReorderRules } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
+import ShareSheet from '@/components/ShareSheet.vue'
+import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideSettings from '~icons/lucide/settings-2'
 import LucideSave from '~icons/lucide/save'
+import LucideSend from '~icons/lucide/send'
 
 const items = ref([])
 const search = ref('')
@@ -22,6 +25,27 @@ const saving = ref(false)
 const parent = ref(null)
 /** warehouse -> { reorder_level, reorder_qty, material_request_type } */
 const edits = ref({})
+
+/**
+ * This screen keeps its own table, so it does not get the generic actions
+ * column — but the list itself is a buying list, which is the single most
+ * useful thing in the app to send to somebody. Shared as the items that are
+ * actually below their level, not everything on screen: a colleague asked
+ * "what do we need?" wants the answer, not the register.
+ */
+const REORDER_COLUMNS = [
+	{ label: 'Item', key: 'item_name', type: 'text' },
+	{ label: 'Code', key: 'item_code', type: 'text' },
+	{ label: 'In stock', key: 'total_stock', type: 'number' },
+	{ label: 'Locations below level', key: 'below_count', type: 'number' },
+]
+
+const { shareOpen, sharePayload, shareList } = useRowActions({
+	columns: REORDER_COLUMNS,
+	title: (row) => row.item_name || row.item_code,
+})
+
+const belowLevel = computed(() => items.value.filter((i) => i.below_count > 0))
 
 const REQUEST_TYPES = [
 	{ label: 'Purchase', value: 'Purchase' },
@@ -155,6 +179,13 @@ function notify(message, tone = 'good') {
 					v-model="onlyUnconfigured"
 					type="checkbox"
 					label="Not yet configured"
+				/>
+				<Button
+					variant="subtle"
+					:icon-left="LucideSend"
+					:disabled="!belowLevel.length"
+					:label="belowLevel.length ? `Share ${belowLevel.length} to buy` : 'Nothing to buy'"
+					@click="shareList(belowLevel, 'Below reorder level')"
 				/>
 				<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load" />
 			</template>
@@ -329,5 +360,7 @@ function notify(message, tone = 'good') {
 				{{ toast.message }}
 			</div>
 		</Transition>
+
+		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
 	</div>
 </template>

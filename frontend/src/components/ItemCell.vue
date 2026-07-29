@@ -36,17 +36,29 @@ const dot = computed(() => {
  * The count in words a cashier uses. "Out" rather than "0" because the two are
  * read differently under pressure, and fractional quantities (grams, ml) are
  * rounded down — promising a customer 2.7 units of anything is not useful.
+ *
+ * Just the number otherwise: in a column headed by a price, beside a coloured
+ * pill, "left" is the one part a cashier never reads.
  */
 const stockLabel = computed(() => {
 	const qty = Number(props.item.stock) || 0
 	if (qty <= 0) return 'Out'
-	return `${Math.floor(qty).toLocaleString()} left`
+	return Math.floor(qty).toLocaleString()
 })
 
+/**
+ * The balance carries its own background, not just coloured text.
+ *
+ * Text tone alone was too quiet to catch at a glance across a dense grid, and
+ * it was the same weight as the price beside it. A filled pill separates the
+ * two and makes "nearly out" visible without being read. Green stays the
+ * quietest of the three — most items are in stock, and a grid where every cell
+ * shouts says nothing.
+ */
 const stockTone = computed(() => {
-	if (out.value) return 'text-ink-red-3'
-	if (low.value) return 'text-ink-amber-3'
-	return 'text-ink-gray-5'
+	if (out.value) return 'bg-surface-red-2 text-ink-red-3'
+	if (low.value) return 'bg-surface-amber-2 text-ink-amber-3'
+	return 'bg-surface-gray-2 text-ink-gray-6'
 })
 
 /**
@@ -128,7 +140,10 @@ const fallbackIcon = computed(() => {
 				<span class="tabular text-p-xs text-ink-gray-6">
 					KES {{ fmtMoneyShort(item.price).replace(/^\D+/, '') }}
 				</span>
-				<span class="tabular shrink-0 text-p-xs font-medium" :class="stockTone">
+				<span
+					class="tabular shrink-0 rounded px-1.5 py-0.5 text-p-xs font-medium"
+					:class="stockTone"
+				>
 					{{ stockLabel }}
 				</span>
 			</div>

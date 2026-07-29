@@ -12,6 +12,8 @@ const props = defineProps({
 	item: { type: Object, default: null },
 	warehouses: { type: Array, default: () => [] },
 	neighbours: { type: Array, default: () => [] },
+	/** How many units the cart is short by. Seeds the quantity fields. */
+	suggestedQty: { type: Number, default: 1 },
 })
 
 const emit = defineEmits(['update:modelValue', 'request-transfer', 'source', 'sell-anyway'])
@@ -22,15 +24,27 @@ const qty = ref(1)
 const warehouse = ref(null)
 const neighbour = ref(null)
 const buyRate = ref('')
+/**
+ * Whether the cashier handed over money there and then.
+ *
+ * Defaults to off because the usual arrangement between neighbouring shops is
+ * to settle at the end of the week, and booking a payment that never happened
+ * invents a cash movement the drawer will be short by. Turning it on both marks
+ * the purchase paid and takes the cash off what the shift expects to count.
+ */
+const paidNow = ref(false)
 
 watch(
 	() => props.modelValue,
 	(open) => {
 		if (!open) return
 		mode.value = 'menu'
-		qty.value = 1
+		// The gap, not one. A cashier who has just tried to sell six of the last
+		// two should not have to work out that they need four.
+		qty.value = Math.max(1, props.suggestedQty || 1)
 		warehouse.value = props.warehouses.find((w) => !w.is_default)?.name || null
 		neighbour.value = props.neighbours[0]?.name || null
+		paidNow.value = false
 		// Seed with the shelf price so the cashier only edits when the neighbour
 		// quotes something different.
 		buyRate.value = props.item ? String(props.item.price) : ''
@@ -60,7 +74,7 @@ function submitTransfer() {
 }
 
 function submitSellAnyway() {
-	emit('sell-anyway', { item: props.item, qty: 1 })
+	emit('sell-anyway', { item: props.item, qty: qty.value })
 	close()
 }
 
@@ -71,6 +85,7 @@ function submitSource() {
 		qty: qty.value,
 		supplier: neighbour.value,
 		buyRate: buyRateNum.value,
+		paidNow: paidNow.value,
 	})
 	close()
 }
@@ -98,6 +113,9 @@ function submitSource() {
 						{{ item.item_name }}
 					</div>
 					<div class="mt-1 flex items-center gap-2 text-p-sm">
+						<!-- Two different situations reach this sheet — nothing on the
+						     shelf, and not enough of it — and the fix differs, so the
+						     line says which one you are in. -->
 						<span
 							class="rounded px-1.5 py-0.5 font-medium"
 							:class="
@@ -106,7 +124,17 @@ function submitSource() {
 									: 'bg-surface-amber-2 text-ink-amber-3'
 							"
 						>
-							{{ item.stock <= 0 ? 'Out of stock' : `${item.stock} left` }}
+							{{
+								item.stock <= 0
+									? 'Out of stock'
+									: `Only ${Math.floor(item.stock)} on the shelf`
+							}}
+						</span>
+						<span
+							v-if="item.stock > 0 && suggestedQty > 0"
+							class="rounded bg-surface-gray-3 px-1.5 py-0.5 font-medium text-ink-gray-7"
+						>
+							{{ suggestedQty }} short
 						</span>
 						<span class="tabular text-ink-gray-5">{{ fmtMoney(item.price) }}</span>
 					</div>
@@ -241,6 +269,31 @@ function submitSource() {
 						{{ fmtMoney(margin) }}
 					</div>
 				</div>
+
+				<!-- Off by default: shops next door usually settle weekly, and a
+				     payment recorded here that never happened leaves the drawer
+				     short by exactly this much at closing. -->
+				<label
+					class="flex min-h-touch cursor-pointer items-center gap-3 rounded-xl border border-outline-gray-2 px-3.5 py-3"
+				>
+					<input
+						v-model="paidNow"
+						type="checkbox"
+						class="h-5 w-5 shrink-0 rounded border-outline-gray-3 text-ink-gray-8 focus:ring-outline-gray-3"
+					/>
+					<span class="min-w-0 flex-1">
+						<span class="block text-p-base font-medium text-ink-gray-9">
+							Paid them now
+						</span>
+						<span class="block text-p-xs text-ink-gray-5">
+							{{
+								paidNow
+									? `${fmtMoney(costTotal)} comes out of the drawer`
+									: 'Leave off if you settle at the end of the week'
+							}}
+						</span>
+					</span>
+				</label>
 
 				<button
 					class="min-h-touch w-full rounded-xl bg-surface-gray-7 py-4 text-p-lg font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"

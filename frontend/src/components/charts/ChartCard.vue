@@ -54,10 +54,17 @@ const asTable = ref(false)
 			<p class="text-p-sm text-ink-gray-5">{{ emptyText }}</p>
 		</div>
 
-		<!-- The table twin is the same numbers, not a summary of them. -->
-		<div v-else-if="asTable" class="max-h-[280px] min-h-0 overflow-auto">
-			<DataTable :columns="columns" :rows="rows" :empty-text="emptyText" />
-		</div>
+		<!-- The table twin is the same numbers, not a summary of them. It sizes to
+		     its rows rather than scrolling inside the card: the page already
+		     scrolls, and a bar inside a card inside a page is three ways to move
+		     and no indication of which moves what. -->
+		<DataTable
+			v-else-if="asTable"
+			:columns="columns"
+			:rows="rows"
+			:scroll="false"
+			:empty-text="emptyText"
+		/>
 
 		<div v-else class="min-w-0 px-4 pb-4 pt-2">
 			<slot />

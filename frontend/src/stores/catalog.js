@@ -106,7 +106,10 @@ export const useCatalogStore = defineStore('catalog', () => {
 			// `brand` is optional on real ERPNext items — the demo seed always had
 			// one, so an unguarded .toLowerCase() only blows up on live data.
 			if (it.item_code.toLowerCase() === q) score = 0
-			else if (it.barcodes?.includes(q)) score = 1
+			// Prefix, not equality: a cashier reading a code off a carton types
+			// the first few digits, and an exact-match-only rule made barcode
+			// search look broken for everything except a full 13-digit paste.
+			else if (it.barcodes?.some((b) => b === q || b.startsWith(q))) score = 1
 			else if (it.item_name.toLowerCase().startsWith(q)) score = 2
 			else if (it.brand?.toLowerCase().startsWith(q)) score = 3
 			else if (it._search.includes(q)) score = 4

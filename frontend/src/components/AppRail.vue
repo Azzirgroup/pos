@@ -11,8 +11,6 @@ import LucideTriangleAlert from '~icons/lucide/triangle-alert'
 import LucideUsers from '~icons/lucide/users'
 import LucideSettings from '~icons/lucide/settings-2'
 import LucideChartColumn from '~icons/lucide/chart-column'
-import LucideFiles from '~icons/lucide/files'
-import LucideBookUser from '~icons/lucide/book-user'
 
 const props = defineProps({
 	/** 'icons' | 'labels'. 'hidden' is handled by the shell not rendering us. */
@@ -43,11 +41,12 @@ const GROUPS = [
 		{ to: '/customers', icon: LucideUsers, label: 'Customers' },
 		{ to: '/accounts', icon: LucideLandmark, label: 'Accounts' },
 	],
-	[
-		{ to: '/documents', icon: LucideFiles, label: 'Documents' },
-		{ to: '/reports', icon: LucideChartColumn, label: 'Reports' },
-		{ to: '/masters', icon: LucideBookUser, label: 'Records' },
-	],
+	// Documents and Records were removed from here on purpose: every document
+	// type now sits inside the module it belongs to, in the order the paperwork
+	// happens, and records are reached from the "New" button and from the
+	// Suppliers / Customers / Accounts tabs. Both routes still exist for anyone
+	// who has one bookmarked.
+	[{ to: '/reports', icon: LucideChartColumn, label: 'Reports' }],
 ]
 
 function isActive(to) {
@@ -89,9 +88,15 @@ function isActive(to) {
 
 		<div class="mt-auto" :class="expanded ? '' : 'flex flex-col items-center'">
 			<button
-				class="flex h-9 items-center rounded-lg text-ink-gray-6 transition-colors hover:bg-surface-gray-2"
-				:class="expanded ? 'w-full gap-2.5 px-2.5' : 'w-9 justify-center'"
+				class="flex h-9 items-center rounded-lg transition-colors"
+				:class="[
+					expanded ? 'w-full gap-2.5 px-2.5' : 'w-9 justify-center',
+					isActive('/settings')
+						? 'bg-surface-gray-3 font-medium text-ink-gray-9'
+						: 'text-ink-gray-6 hover:bg-surface-gray-2 hover:text-ink-gray-8',
+				]"
 				aria-label="Settings"
+				@click="router.push('/settings')"
 			>
 				<LucideSettings class="h-[18px] w-[18px] shrink-0" />
 				<span v-if="expanded" class="truncate text-p-sm">Settings</span>

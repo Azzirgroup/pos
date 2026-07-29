@@ -5,7 +5,11 @@ import { generateBarcodes, listBarcodeItems } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
+import ShareSheet from '@/components/ShareSheet.vue'
+import { useRowActions } from '@/composables/useRowActions'
+import { ean13Svg } from '@/utils/barcode'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
+import LucideSend from '~icons/lucide/send'
 import LucideBarcode from '~icons/lucide/barcode'
 import LucidePrinter from '~icons/lucide/printer'
 
@@ -52,6 +56,11 @@ async function load() {
 }
 
 const missing = computed(() => rows.value.filter((r) => !r.barcode_count))
+
+/** Selected rows that already carry a code, i.e. ones worth reprinting. */
+const printableSelected = computed(
+	() => rows.value.filter((r) => selected.value.has(r.item_code) && r.barcode).length,
+)
 const allSelected = computed(
 	() => missing.value.length > 0 && selected.value.size === missing.value.length,
 )
@@ -63,6 +72,16 @@ const COLUMNS = [
 	{ label: 'Group', key: 'item_group', type: 'text' },
 	{ label: 'Barcode', key: 'barcode', type: 'text' },
 ]
+
+/**
+ * Sharing a barcode is how a code reaches whoever is printing labels on the
+ * other machine. The pick column is dropped from the message — a checkbox is
+ * not information once the row has left the screen.
+ */
+const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
+	columns: COLUMNS.filter((c) => c.key !== '_pick'),
+	title: (row) => row.item_name || row.item_code,
+})
 
 const stats = computed(() => [
 	{ key: 'listed', label: 'Items listed', value: rows.value.length, type: 'number', icon: 'boxes' },
@@ -115,26 +134,44 @@ async function generate() {
 }
 
 /**
- * Hands the freshly generated codes to the browser's own print dialog.
+ * Hands the labels to the browser's own print dialog, as real bars.
  *
- * A label sheet, not a document: the point is to cut them up and stick them on
- * stock, so each label carries the code as text under the item name. Rendering
- * the bars themselves would mean shipping a barcode font or a drawing library
- * for something most shops print from their label printer's own software.
+ * This used to print the digits only, which is why the labels would not scan —
+ * a scanner reads the bar pattern, not the number under it. The bars are inline
+ * SVG rather than a barcode font, because a font has to be installed on
+ * whichever machine opens the print window and falls back silently to text when
+ * it is not.
+ *
+ * Prints whatever is selected, or the codes just generated — reprinting a lost
+ * label is at least as common as printing a new one.
  */
 function printLabels() {
-	const made = (lastRun.value?.rows || []).filter((r) => r.created)
-	if (!made.length) return
+	const madeNow = (lastRun.value?.rows || []).filter((r) => r.created)
+	const chosen = rows.value.filter((r) => selected.value.has(r.item_code) && r.barcode)
+	const made = chosen.length ? chosen : madeNow
 
+	if (!made.length) {
+		notify('Select rows that already have a barcode, or generate some first', 'bad')
+		return
+	}
+
+	const unprintable = made.filter((r) => !ean13Svg(r.barcode))
 	const labels = made
-		.map(
-			(r) => `<div class="label">
+		.map((r) => {
+			const svg = ean13Svg(r.barcode)
+			return `<div class="label">
 				<div class="name">${escapeHtml(r.item_name)}</div>
-				<div class="code">${escapeHtml(r.barcode)}</div>
+				${svg || `<div class="code">${escapeHtml(r.barcode)}</div>`}
 				<div class="sku">${escapeHtml(r.item_code)}</div>
-			</div>`,
-		)
+			</div>`
+		})
 		.join('')
+
+	// Said out loud rather than printed as a silently unscannable label: a code
+	// this cannot draw is one an older import wrote in some other format.
+	if (unprintable.length) {
+		notify(`${unprintable.length} code${unprintable.length === 1 ? '' : 's'} are not EAN-13 — printed as text only`, 'bad')
+	}
 
 	const win = window.open('', '_blank', 'noopener,width=900,height=700')
 	if (!win) {
@@ -142,17 +179,33 @@ function printLabels() {
 		return
 	}
 	win.document.write(`<!doctype html><html><head><title>Barcode labels</title><style>
-		body { font-family: system-ui, sans-serif; margin: 12mm; }
-		.sheet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6mm; }
-		.label { border: 1px solid #c3c2b7; border-radius: 3px; padding: 4mm; text-align: center; }
-		.name { font-size: 10pt; font-weight: 600; margin-bottom: 2mm; }
-		.code { font-family: ui-monospace, monospace; font-size: 13pt; letter-spacing: 1px; }
-		.sku { font-size: 8pt; color: #52514e; margin-top: 1mm; }
-		@media print { body { margin: 6mm; } }
+		body { font-family: system-ui, sans-serif; margin: 10mm; }
+		.sheet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4mm; }
+		.label {
+			border: 1px solid #c3c2b7; border-radius: 2px; padding: 3mm;
+			text-align: center; break-inside: avoid; page-break-inside: avoid;
+		}
+		.name {
+			font-size: 8pt; font-weight: 600; margin-bottom: 1.5mm;
+			overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+		}
+		.label svg { display: block; margin: 0 auto; }
+		.code { font-family: ui-monospace, monospace; font-size: 12pt; letter-spacing: 1px; }
+		.sku { font-size: 7pt; color: #52514e; margin-top: 1mm; }
+		/* Bars must print solid black: a browser "saving ink" produces a grey
+		   pattern that scanners read unreliably or not at all. */
+		@media print {
+			body { margin: 5mm; }
+			.label { border-color: #999; }
+			svg rect { fill: #000 !important; }
+		}
+		@page { margin: 8mm; }
 	</style></head><body><div class="sheet">${labels}</div></body></html>`)
 	win.document.close()
 	win.focus()
-	win.print()
+	// Give the SVG a frame to lay out; printing immediately can capture an empty
+	// document in some browsers.
+	win.setTimeout(() => win.print(), 250)
 }
 
 function escapeHtml(value) {
@@ -182,6 +235,13 @@ function notify(message, tone = 'good') {
 					<FormControl v-model="search" type="text" placeholder="Search item…" />
 				</div>
 				<FormControl v-model="onlyMissing" type="checkbox" label="Only items without one" />
+				<Button
+					variant="subtle"
+					:icon-left="LucideSend"
+					:disabled="!rows.length"
+					label="Share list"
+					@click="shareList(rows, 'Item barcodes')"
+				/>
 				<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load" />
 			</template>
 		</PageHeader>
@@ -211,11 +271,17 @@ function notify(message, tone = 'good') {
 				"
 				@click="generate"
 			/>
+			<!-- Reprinting a lost label matters as much as printing a new one, so
+			     this prints the selection when there is one. -->
 			<Button
-				v-if="lastRun?.created"
+				v-if="lastRun?.created || printableSelected"
 				variant="subtle"
 				:icon-left="LucidePrinter"
-				:label="`Print ${lastRun.created} label${lastRun.created === 1 ? '' : 's'}`"
+				:label="
+					printableSelected
+						? `Print ${printableSelected} label${printableSelected === 1 ? '' : 's'}`
+						: `Print ${lastRun.created} new label${lastRun.created === 1 ? '' : 's'}`
+				"
 				@click="printLabels"
 			/>
 			<p class="ml-auto text-p-xs text-ink-gray-5">
@@ -229,13 +295,15 @@ function notify(message, tone = 'good') {
 			:rows="rows"
 			row-key="item_code"
 			:loading="loading"
+			:actions="actionsFor"
 			empty-text="Every item here already has a barcode."
 		>
 			<template #cell-_pick="{ row }">
+				<!-- Rows that already have a code stay selectable: that is how a lost
+				     label gets reprinted. Generating skips them server-side. -->
 				<input
 					type="checkbox"
 					:checked="selected.has(row.item_code)"
-					:disabled="!!row.barcode_count"
 					:aria-label="`Select ${row.item_name}`"
 					@change="toggle(row.item_code)"
 				/>
@@ -254,6 +322,8 @@ function notify(message, tone = 'good') {
 				<Badge v-else theme="orange" variant="subtle" label="None" />
 			</template>
 		</DataTable>
+
+		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
 
 		<Transition
 			enter-active-class="transition-all duration-200"

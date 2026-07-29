@@ -22,7 +22,13 @@ export function submitSale({ items, payment, customer }) {
 			qty: l.qty,
 			rate: l.rate,
 			discount_pct: l.discountPct,
-			sourced: l.sourced ? { supplier: l.sourced.supplier, buy_rate: l.sourced.buyRate } : null,
+			sourced: l.sourced
+				? {
+						supplier: l.sourced.supplier,
+						buy_rate: l.sourced.buyRate,
+						paid: l.sourced.paidNow ? 1 : 0,
+					}
+				: null,
 		})),
 		payment,
 		customer: customer || null,
@@ -50,8 +56,69 @@ export const getClosingSummary = () => call('cosmestics.api.shift.get_closing_su
 export const openShift = ({ posProfile, balances }) =>
 	call('cosmestics.api.shift.open_shift', { pos_profile: posProfile, balances })
 
-export const closeShift = ({ counted }) =>
-	call('cosmestics.api.shift.close_shift', { counted })
+export const closeShift = ({ counted, shorts }) =>
+	call('cosmestics.api.shift.close_shift', { counted, shorts: shorts || null })
+
+/* ---------- money out of the till ---------- */
+
+/** Expense accounts, modes and neighbours the money-out form needs. */
+export const getMovementOptions = () => call('cosmestics.api.shift.get_movement_options')
+
+export const listMovements = ({ shift } = {}) =>
+	call('cosmestics.api.shift.list_movements', { shift_name: shift || null })
+
+export const recordMovement = ({
+	movementType,
+	amount,
+	modeOfPayment,
+	reason,
+	person,
+	party,
+	expenseAccount,
+}) =>
+	call('cosmestics.api.shift.record_movement', {
+		movement_type: movementType,
+		amount,
+		mode_of_payment: modeOfPayment || null,
+		reason: reason || null,
+		person: person || null,
+		party: party || null,
+		expense_account: expenseAccount || null,
+	})
+
+export const voidMovement = ({ name }) => call('cosmestics.api.shift.void_movement', { name })
+
+/* ---------- settings ---------- */
+
+export const getSettings = () => call('cosmestics.api.settings.get')
+
+export const savePosSettings = (values) =>
+	call('cosmestics.api.settings.save_pos_settings', { values })
+
+export const saveProfileSettings = ({ name, values }) =>
+	call('cosmestics.api.settings.save_profile', { name, values })
+
+export const assignProfile = ({ name, assign }) =>
+	call('cosmestics.api.settings.assign_profile', { name, assign: assign ? 1 : 0 })
+
+export const saveUserSettings = (values) => call('cosmestics.api.settings.save_user', { values })
+
+export const getSettingsLinkOptions = ({ doctype, search }) =>
+	call('cosmestics.api.settings.link_options', { doctype, search: search || null })
+
+/* ---------- sharing ---------- */
+
+/** Share an arbitrary list row or selection as a WhatsApp message. */
+export const shareOnWhatsapp = ({ to, message, sender, doctype, name }) =>
+	call('cosmestics.api.notifications.share', {
+		to,
+		message,
+		sender: sender || null,
+		doctype: doctype || null,
+		name: name || null,
+	})
+
+export const getWhatsappGroups = () => call('cosmestics.api.notifications.list_groups')
 
 /* ---------- customers ---------- */
 
@@ -252,6 +319,16 @@ export const getMasterOptions = ({ key, fieldname, search }) =>
 
 export const createMaster = ({ key, values }) =>
 	call('cosmestics.api.master.create', { key, values })
+
+export const getMasterRecord = ({ key, name }) =>
+	call('cosmestics.api.master.get_record', { key, name })
+
+export const updateMaster = ({ key, name, values }) =>
+	call('cosmestics.api.master.update', { key, name, values })
+
+/** One customer's account: billed, paid, and the running balance. */
+export const getCustomerLedger = ({ customer, days } = {}) =>
+	call('cosmestics.api.customers.ledger', { customer, days: days || 365 })
 
 /* ---------- recent sales ---------- */
 

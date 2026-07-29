@@ -159,13 +159,7 @@ const attention = computed(() => {
 			...a.below_reorder,
 		},
 		{ key: 'overdue', title: 'Overdue invoices', subtitle: 'Oldest first', ...a.overdue },
-		{
-			key: 'negative_stock',
-			title: 'Negative stock',
-			subtitle: 'Sold but never received — a ledger problem, not a shelf one',
-			...a.negative_stock,
-		},
-	].filter((section) => section.rows?.length)
+	].filter((section) => section?.rows?.length)
 })
 </script>
 
@@ -203,7 +197,10 @@ const attention = computed(() => {
 			</div>
 			<template v-else-if="tabData">
 				<StatTiles :stats="tabData.stats" dense />
-				<div class="grid gap-3 px-4 lg:grid-cols-2">
+				<!-- `items-start` stops the grid stretching a three-row card to match
+				     a twelve-row one beside it. Each card is as tall as what it
+				     holds, and the page is the only thing that scrolls. -->
+				<div class="grid items-start gap-3 px-4 lg:grid-cols-2">
 					<section
 						v-for="section in tabData.sections"
 						:key="section.key"
@@ -215,13 +212,12 @@ const attention = computed(() => {
 								{{ section.subtitle }}
 							</p>
 						</header>
-						<div class="max-h-[320px] overflow-auto">
-							<DataTable
-								:columns="section.columns"
-								:rows="section.rows"
-								empty-text="Nothing in this period."
-							/>
-						</div>
+						<DataTable
+							:columns="section.columns"
+							:rows="section.rows"
+							:scroll="false"
+							empty-text="Nothing in this period."
+						/>
 					</section>
 				</div>
 			</template>
@@ -286,7 +282,7 @@ const attention = computed(() => {
 				</ChartCard>
 			</div>
 
-			<div v-if="attention.length" class="mt-3 grid gap-3 px-4 lg:grid-cols-3">
+			<div v-if="attention.length" class="mt-3 grid items-start gap-3 px-4 lg:grid-cols-3">
 				<section
 					v-for="section in attention"
 					:key="section.key"
@@ -296,9 +292,7 @@ const attention = computed(() => {
 						<h2 class="text-p-sm font-semibold text-ink-gray-8">{{ section.title }}</h2>
 						<p class="truncate text-p-xs text-ink-gray-5">{{ section.subtitle }}</p>
 					</header>
-					<div class="max-h-[260px] overflow-auto">
-						<DataTable :columns="section.columns" :rows="section.rows" />
-					</div>
+					<DataTable :columns="section.columns" :rows="section.rows" :scroll="false" />
 				</section>
 			</div>
 
@@ -317,6 +311,7 @@ const attention = computed(() => {
 							{ label: 'Since', key: 'period_start_date', type: 'text' },
 						]"
 						:rows="data.tills.rows"
+						:scroll="false"
 					/>
 				</section>
 			</div>

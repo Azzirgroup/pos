@@ -84,3 +84,90 @@ def create(customer_name: str, mobile_no: str | None = None):
 		"mobile_no": doc.mobile_no,
 		"outstanding": 0.0,
 	}
+
+
+@frappe.whitelist()
+def ledger(customer: str, days: int = 365) -> dict:
+	"""One customer's account: what they were billed, what they paid, what is left.
+
+	Read from GL Entry rather than from invoices, so a payment, a credit note, a
+	journal adjustment and an opening balance all appear — anything that moved
+	the customer's balance shows up here, which is the whole point of a ledger. A
+	statement built from Sales Invoices alone silently omits the payments and
+	then disagrees with the outstanding figure beside it.
+
+	The running balance is carried forward from before the window, so the closing
+	figure is the real one even when only the last month is shown.
+	"""
+	from frappe.utils import add_days, cint, flt, nowdate
+
+	if not frappe.db.exists("Customer", customer):
+		frappe.throw(_("{0} does not exist").format(customer), frappe.DoesNotExistError)
+
+	days = cint(days)
+	start = add_days(nowdate(), -days) if days > 0 else None
+
+	conditions = ["gle.is_cancelled = 0", "gle.party_type = 'Customer'", "gle.party = %(customer)s"]
+	values = {"customer": customer, "start": start}
+
+	company = frappe.defaults.get_global_default("company")
+	if company:
+		conditions.append("gle.company = %(company)s")
+		values["company"] = company
+
+	where = " and ".join(conditions)
+
+	# Everything before the window, collapsed into one opening figure.
+	opening = 0.0
+	if start:
+		row = frappe.db.sql(
+			f"""select sum(gle.debit) - sum(gle.credit) as balance
+			    from `tabGL Entry` gle
+			    where {where} and gle.posting_date < %(start)s""",
+			values,
+			as_dict=True,
+		)[0]
+		opening = flt(row.balance)
+
+	rows = frappe.db.sql(
+		f"""select gle.posting_date, gle.voucher_type, gle.voucher_no,
+		           gle.debit, gle.credit, gle.remarks
+		    from `tabGL Entry` gle
+		    where {where} {"and gle.posting_date >= %(start)s" if start else ""}
+		    order by gle.posting_date asc, gle.creation asc""",
+		values,
+		as_dict=True,
+	)
+
+	balance = opening
+	entries = []
+	for r in rows:
+		balance += flt(r.debit) - flt(r.credit)
+		entries.append(
+			{
+				"posting_date": str(r.posting_date),
+				"voucher_type": r.voucher_type,
+				"voucher_no": r.voucher_no,
+				"billed": flt(r.debit),
+				"paid": flt(r.credit),
+				"balance": balance,
+			}
+		)
+
+	return {
+		"customer": customer,
+		"customer_name": frappe.db.get_value("Customer", customer, "customer_name") or customer,
+		"mobile_no": frappe.db.get_value("Customer", customer, "mobile_no"),
+		"opening": opening,
+		"closing": balance,
+		"columns": [
+			{"label": _("Date"), "key": "posting_date", "type": "text"},
+			{"label": _("Type"), "key": "voucher_type", "type": "text"},
+			{"label": _("Document"), "key": "voucher_no", "type": "text"},
+			{"label": _("Billed"), "key": "billed", "type": "currency"},
+			{"label": _("Paid"), "key": "paid", "type": "currency"},
+			{"label": _("Balance"), "key": "balance", "type": "currency"},
+		],
+		"rows": entries,
+		"period": {"from": str(start) if start else None, "to": nowdate(), "days": days},
+	}
