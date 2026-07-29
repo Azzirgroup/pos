@@ -1346,9 +1346,44 @@ def _whatsapp(r):
 	from cosmestics.api import notifications
 
 	print()
-	installed = notifications._integration_available()
-	r.check("whatsapp_integration is importable", installed)
-	if not installed:
+	# Deliberately not a pass/fail on whether WhatsApp is *configured* — plenty of
+	# sites will not use it. What is checked is that the app reports the truth
+	# about it, because "importable" used to be treated as "working" and this
+	# site has the package installed with none of its DocTypes.
+	usable = notifications._integration_available()
+	has_doctype = bool(frappe.db.exists("DocType", "Whatsapp Settings"))
+	r.check(
+		"whatsapp availability is reported honestly",
+		usable == has_doctype,
+		f"usable={usable} settings doctype={has_doctype}",
+	)
+
+	groups = notifications.list_groups()
+	r.check(
+		"group listing answers, or says why not",
+		isinstance(groups["groups"], list) and (groups["groups"] or groups["reason"]),
+		f"{len(groups['groups'])} groups"
+		+ (f" · {groups['reason']}" if groups.get("reason") else ""),
+	)
+	# The envelope varies by bridge, so the parser is pinned against the shapes
+	# it is known to answer with rather than the one seen most recently.
+	shapes = [
+		({"data": [{"id": "1@g.us", "name": "Staff"}]}, [("1@g.us", "Staff")]),
+		({"groups": [{"jid": "2@g.us", "subject": "Deliveries"}]}, [("2@g.us", "Deliveries")]),
+		([{"chat_id": "3@g.us", "title": "Owners"}], [("3@g.us", "Owners")]),
+		({"data": [{"id": {"_serialized": "4@g.us"}, "name": "Branch"}]}, [("4@g.us", "Branch")]),
+		({"error": "no instance"}, []),
+		({"data": [{"name": "no id here"}]}, []),
+	]
+	wrong = [
+		s
+		for s, expected in shapes
+		if [(g["id"], g["name"]) for g in notifications._parse_groups(s)] != expected
+	]
+	r.check("group replies are parsed whatever shape they arrive in", not wrong, str(wrong))
+
+	if not usable:
+		print("  SKIP: whatsapp_integration DocTypes are not installed on this site")
 		return
 
 	from whatsapp_integration.api.whatsapp import whatsapp as wa
@@ -1482,6 +1517,7 @@ def _annotations(r):
 		(barcodes.list_items, {"search": None, "only_missing": 1, "limit": 50}),
 		(barcodes.generate, {"item_codes": [], "skip_existing": 1}),
 		(notifications.test_whatsapp, {"to": "x", "message": None}),
+		(notifications.list_groups, {}),
 	]
 
 	missing = []

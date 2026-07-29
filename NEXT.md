@@ -423,6 +423,40 @@ The test for this initially failed five of nine, because it hardcoded
 payload from the form's own defaults, which is what the browser sends — so the
 test exercises the same path the UI does rather than a narrower one.
 
+### 26. Fetching WhatsApp groups from waclient
+
+The bridge documents `GET https://waclient.com/api/get_groups` taking
+`instance_id` and `access_token` — the same pair `/api/send` already uses. There
+is also `GET /api/get_channels`, and `/api/send` accepts **`chat_id`** as an
+alternative to `number`, which is the correct field for a group JID rather than
+passing it as a phone number.
+
+`notifications.list_groups()` calls it and normalises the reply to `[{id, name}]`.
+The envelope varies — `data`, `groups`, or a bare list, with the JID under `id`,
+`jid`, `chat_id` or nested in `id._serialized` — so the shape is discovered the
+same way `_succeeded` treats send replies, and `smoke.py` pins six of those
+shapes including two that must yield nothing.
+
+The point is to stop anyone having to paste `120363012345678901@g.us` into
+settings by hand. That is not a value a shop manager can find or verify, and a
+wrong one fails by delivering nowhere at all.
+
+**It cannot run on this site yet.** `whatsapp_integration` is in the app list and
+its Python imports fine, but **its DocTypes were never installed** — there is no
+`Whatsapp Settings` DocType and no Whatsapp Integration Module Def, so there is
+nowhere for the credentials to live and every send has been failing at
+`frappe.get_single("Whatsapp Settings")`.
+
+To fix on the site:
+
+    bench --site kaysalt.com install-app whatsapp_integration
+    # then set instance id + access token in Whatsapp Settings
+
+`smoke.py` previously asserted only that the package was *importable*, which
+reported this site as healthy. It now checks that availability is reported
+honestly and skips the rest with a reason rather than passing checks it cannot
+really run — the same failure mode as the reorder investigation.
+
 ## Conventions already established
 
 - Colour rules live in `frontend/src/utils/tone.js` — extend, don't duplicate.

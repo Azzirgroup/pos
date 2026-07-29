@@ -30,6 +30,7 @@ import time
 
 import frappe
 import requests
+from frappe import _
 from frappe.utils import flt, get_url_to_form
 
 # The bridge's own host. Pinging it is what wakes the process; the send that
@@ -190,12 +191,119 @@ def list_senders() -> list:
 
 
 def _integration_available() -> bool:
+	"""Is the integration actually usable, not merely importable?
+
+	The Python package being on the path is not enough: on a site where the app
+	is listed but its DocTypes were never migrated, `Whatsapp Settings` does not
+	exist, so every send dies resolving credentials. Checking only the import
+	reported that site as healthy — which is how "WhatsApp is set up" and
+	"WhatsApp cannot possibly work" came to look identical.
+	"""
 	try:
 		import whatsapp_integration  # noqa: F401
-
-		return True
 	except ImportError:
 		return False
+
+	return bool(frappe.db.exists("DocType", "Whatsapp Settings"))
+
+
+def _credentials() -> dict | None:
+	"""Instance id and access token, however this install stores them.
+
+	Never raises. The integration's own resolver throws when the single is
+	missing or its controller cannot be imported, and this is called from status
+	and picker endpoints where "not configured" is an answer, not an error.
+	"""
+	try:
+		from whatsapp_integration.service.rest import get_whatsapp_settings
+
+		creds = get_whatsapp_settings()
+		if creds.get("access_token") and creds.get("instance_id"):
+			return creds
+	except Exception:
+		pass
+
+	if not frappe.db.exists("DocType", "Whatsapp Settings"):
+		return None
+
+	settings = frappe.db.get_singles_dict("Whatsapp Settings") or {}
+	if settings.get("access_token") and settings.get("instance_id"):
+		return {"access_token": settings["access_token"], "instance_id": settings["instance_id"]}
+	return None
+
+
+@frappe.whitelist()
+def list_groups() -> dict:
+	"""WhatsApp groups this instance belongs to.
+
+	`GET /api/get_groups` on the bridge, documented alongside `/api/send`. It
+	exists so nobody has to paste a raw group JID — `120363012345678901@g.us` is
+	not something a shop manager can find, let alone verify they typed correctly,
+	and a wrong one fails silently by delivering nowhere.
+
+	Read-only and best-effort: a bridge that is asleep or unconfigured returns an
+	empty list with a reason rather than throwing.
+	"""
+	creds = _credentials()
+	if not creds:
+		return {
+			"groups": [],
+			"reason": _(
+				"WhatsApp is not configured on this site. Install the whatsapp_integration "
+				"DocTypes and set an instance id and access token in Whatsapp Settings."
+			),
+		}
+
+	warm_up()
+	try:
+		resp = requests.get(
+			f"{WACLIENT_HOST}/api/get_groups",
+			params={"instance_id": creds["instance_id"], "access_token": creds["access_token"]},
+			timeout=20,
+		)
+		payload = resp.json()
+	except (requests.RequestException, ValueError) as e:
+		frappe.log_error(f"Could not list WhatsApp groups: {e}", "Cosmestics POS")
+		return {"groups": [], "reason": _("The WhatsApp bridge did not answer.")}
+
+	return {"groups": _parse_groups(payload), "reason": None}
+
+
+def _parse_groups(payload) -> list:
+	"""Normalise the bridge's reply into [{id, name}].
+
+	The envelope varies — the same bridge answers `data`, `groups` or a bare list
+	depending on the call — so the shape is discovered rather than assumed, the
+	way `_succeeded` treats send responses.
+	"""
+	rows = payload
+	if isinstance(payload, dict):
+		for key in ("data", "groups", "result", "message"):
+			if isinstance(payload.get(key), list):
+				rows = payload[key]
+				break
+		else:
+			rows = []
+
+	if not isinstance(rows, list):
+		return []
+
+	groups = []
+	for row in rows:
+		if not isinstance(row, dict):
+			continue
+		jid = row.get("id") or row.get("jid") or row.get("chat_id") or row.get("group_id")
+		if isinstance(jid, dict):
+			jid = jid.get("_serialized") or jid.get("user")
+		if not jid:
+			continue
+		groups.append(
+			{
+				"id": str(jid),
+				"name": row.get("name") or row.get("subject") or row.get("title") or str(jid),
+			}
+		)
+	return groups
 
 
 def _succeeded(result) -> bool:
@@ -259,6 +367,7 @@ def test_whatsapp(to: str, message: str | None = None):
 	"""
 	warmed = warm_up()
 	installed = _integration_available()
+	groups = list_groups()
 	sent = send_text(
 		to,
 		message or "Cosmestics POS test message — if you can read this, sending works.",
@@ -267,11 +376,13 @@ def test_whatsapp(to: str, message: str | None = None):
 		"integration_installed": installed,
 		"bridge_reachable": warmed,
 		"senders": [s.get("value") for s in list_senders()],
+		"groups": groups["groups"],
 		"sent": sent,
 		"hint": None
 		if sent
 		else (
-			"whatsapp_integration is not installed on this site"
+			groups.get("reason")
+			or "whatsapp_integration is not usable on this site — its DocTypes are missing"
 			if not installed
 			else "Bridge did not respond at all — check waclient is running"
 			if not warmed
