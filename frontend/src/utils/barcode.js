@@ -146,10 +146,18 @@ export function ean13Svg(code, { moduleWidth = 0.33, height = 18 } = {}) {
 	const leftHalfMid = quiet + 3 * moduleWidth + 21 * moduleWidth
 	const rightHalfMid = quiet + 50 * moduleWidth + 21 * moduleWidth
 
+	/*
+	 * The background and the bars are labelled so a stylesheet can tell them
+	 * apart. A print rule forcing solid black — which a label sheet genuinely
+	 * needs, because a browser "saving ink" produces a grey pattern scanners
+	 * read unreliably — was written as `svg rect { fill: #000 }` and hit the
+	 * white background rect too, printing every label as one solid block.
+	 */
 	return (
 		`<svg xmlns="http://www.w3.org/2000/svg" width="${width.toFixed(2)}mm" height="${totalHeight.toFixed(2)}mm" ` +
 		`viewBox="0 0 ${width.toFixed(2)} ${totalHeight.toFixed(2)}" shape-rendering="crispEdges">` +
-		`<rect width="100%" height="100%" fill="#fff"/><g fill="#000">${bars}</g>` +
+		`<rect class="ean-bg" width="100%" height="100%" fill="#fff"/>` +
+		`<g class="ean-bars" fill="#000">${bars}</g>` +
 		label(value[0], quiet - moduleWidth, 'end') +
 		label(value.slice(1, 7), leftHalfMid) +
 		label(value.slice(7), rightHalfMid) +

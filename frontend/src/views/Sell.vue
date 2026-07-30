@@ -778,6 +778,23 @@ useShortcuts({
 			</div>
 		</div>
 
+		<!-- A shift left open overnight makes every till sale fail at submit:
+		     ERPNext refuses an is_pos invoice against an opening entry from an
+		     earlier day. Said here, before anything is rung up, because found at
+		     checkout it fails after the customer has already paid — and the
+		     message ERPNext raises does not name the fix. -->
+		<button
+			v-if="shift?.outdated"
+			class="flex w-full shrink-0 items-center gap-2.5 bg-surface-red-5 px-4 py-2 text-left text-p-sm font-medium text-ink-white"
+			@click="openShiftSheet()"
+		>
+			<LucideTriangleAlert class="h-4 w-4 shrink-0" />
+			<span class="min-w-0">
+				This shift was opened on an earlier day, so sales cannot be posted. Close it and
+				open a new one — tap here.
+			</span>
+		</button>
+
 		<!-- Demo catalog is unsellable: no ERPNext Item matches these codes, so
 		     checkout fails at submit. Inline rather than floating — as an overlay
 		     it sat on top of the item grid and hid a product card. -->

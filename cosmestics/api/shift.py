@@ -13,7 +13,7 @@ the shift it belongs to, or the closing entry will find nothing.
 
 import frappe
 from frappe import _
-from frappe.utils import flt, now_datetime, nowdate
+from frappe.utils import flt, getdate, now_datetime, nowdate
 
 
 @frappe.whitelist()
@@ -56,6 +56,12 @@ def get_open_shift():
 		"pos_profile": doc.pos_profile,
 		"company": doc.company,
 		"period_start_date": str(doc.period_start_date),
+		# ERPNext refuses to post an `is_pos` invoice against an opening entry
+		# from an earlier day — `validate_pos_opening_entry` throws "Outdated POS
+		# Opening Entry". Reported here so the till can say so before a sale is
+		# attempted: found at checkout, it fails *after* the customer has paid,
+		# with a message that does not name the fix.
+		"outdated": getdate(doc.period_start_date) < getdate(nowdate()),
 		"balances": [
 			{"mode_of_payment": b.mode_of_payment, "opening_amount": flt(b.opening_amount)}
 			for b in doc.balance_details

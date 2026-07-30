@@ -47,6 +47,9 @@ async function load() {
 		barcodeType.value = data.barcode_type
 		// Selections refer to rows that may no longer be listed.
 		selected.value = new Set()
+		// A code that has just been generated needs drawing, and a code that was
+		// changed upstream must not keep showing the bars it used to have.
+		barCache.clear()
 	} catch (e) {
 		notify(e.message || 'Could not load items', 'bad')
 		rows.value = []
@@ -173,12 +176,7 @@ function printLabels() {
 		notify(`${unprintable.length} code${unprintable.length === 1 ? '' : 's'} are not EAN-13 — printed as text only`, 'bad')
 	}
 
-	const win = window.open('', '_blank', 'noopener,width=900,height=700')
-	if (!win) {
-		notify('Allow pop-ups to print labels', 'bad')
-		return
-	}
-	win.document.write(`<!doctype html><html><head><title>Barcode labels</title><style>
+	const html = `<!doctype html><html><head><title>Barcode labels</title><style>
 		body { font-family: system-ui, sans-serif; margin: 10mm; }
 		.sheet { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4mm; }
 		.label {
@@ -193,19 +191,93 @@ function printLabels() {
 		.code { font-family: ui-monospace, monospace; font-size: 12pt; letter-spacing: 1px; }
 		.sku { font-size: 7pt; color: #52514e; margin-top: 1mm; }
 		/* Bars must print solid black: a browser "saving ink" produces a grey
-		   pattern that scanners read unreliably or not at all. */
+		   pattern that scanners read unreliably or not at all.
+
+		   Scoped to .ean-bars, never to every rect in the svg. The barcode's
+		   white background is a rect too, so the unscoped version painted the
+		   whole label solid black — a barcode with no white space is not a
+		   barcode, and every sheet came out as a row of black boxes.
+
+		   print-color-adjust tells the browser not to lighten it back: a barcode
+		   is not decoration, and a grey approximation does not scan. */
+		svg .ean-bg { fill: #fff; }
+		svg .ean-bars rect { fill: #000; }
 		@media print {
 			body { margin: 5mm; }
 			.label { border-color: #999; }
-			svg rect { fill: #000 !important; }
+			svg { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+			svg .ean-bg { fill: #fff !important; }
+			svg .ean-bars rect { fill: #000 !important; }
 		}
 		@page { margin: 8mm; }
-	</style></head><body><div class="sheet">${labels}</div></body></html>`)
-	win.document.close()
-	win.focus()
-	// Give the SVG a frame to lay out; printing immediately can capture an empty
-	// document in some browsers.
-	win.setTimeout(() => win.print(), 250)
+	</style></head><body><div class="sheet">${labels}</div></body></html>`
+
+	printHtml(html)
+}
+
+/**
+ * Print a document that is not this one.
+ *
+ * Through a hidden iframe rather than a popup window, because the popup did not
+ * work at all: `window.open` was called with `noopener`, and per the spec that
+ * makes it **return null** — there is no handle to write the labels into. So the
+ * function always took the "allow pop-ups" branch and no label was ever printed,
+ * whether or not pop-ups were actually blocked.
+ *
+ * An iframe is the better fix rather than just dropping the flag: it is not a
+ * popup, so no blocker can refuse it, and nothing depends on the user having
+ * allowed one for this site.
+ *
+ * `srcdoc` rather than `document.write` so the load event is reliable — that is
+ * what tells us the SVG has laid out, which the old 250ms guess did not.
+ */
+function printHtml(html) {
+	const frame = document.createElement('iframe')
+	// Off-screen rather than display:none — a hidden frame has no layout in some
+	// browsers, and a barcode with no layout prints as a blank box.
+	frame.setAttribute('aria-hidden', 'true')
+	frame.style.position = 'fixed'
+	frame.style.right = '0'
+	frame.style.bottom = '0'
+	frame.style.width = '1px'
+	frame.style.height = '1px'
+	frame.style.opacity = '0'
+	frame.style.border = '0'
+
+	frame.onload = () => {
+		try {
+			frame.contentWindow.focus()
+			frame.contentWindow.print()
+		} catch (e) {
+			notify('Could not open the print dialog', 'bad')
+			console.error('[barcodes] print failed', e)
+		}
+		// Removed after the dialog closes rather than immediately: tearing the
+		// frame down while the dialog is open cancels the print in Safari.
+		setTimeout(() => frame.remove(), 1000)
+	}
+
+	frame.srcdoc = html
+	document.body.appendChild(frame)
+}
+
+/**
+ * The bars for one code, as an SVG string, or null if it cannot be drawn.
+ *
+ * Memoised because this is called once per row per render and the work is real —
+ * 95 modules resolved into rects. The codes on a row never change under it, so a
+ * plain Map is enough; it is cleared when the list reloads.
+ *
+ * Rendered a little shorter than the printed label: on screen this is a
+ * recognition aid — "there are bars, and they look right" — not something a
+ * scanner is going to be pointed at.
+ */
+const barCache = new Map()
+
+function barsFor(code) {
+	if (!code) return null
+	if (!barCache.has(code)) barCache.set(code, ean13Svg(code, { moduleWidth: 0.3, height: 12 }))
+	return barCache.get(code)
 }
 
 function escapeHtml(value) {
@@ -309,16 +381,37 @@ function notify(message, tone = 'good') {
 				/>
 			</template>
 			<template #cell-barcode="{ row }">
-				<span v-if="row.barcode" class="tabular font-medium text-ink-gray-8">
-					{{ row.barcode }}
-					<Badge
-						v-if="row.barcode_count > 1"
-						class="ml-1"
-						theme="gray"
-						variant="subtle"
-						:label="`+${row.barcode_count - 1}`"
+				<!-- The bars themselves, at the same scale they print at.
+				     A column of digits could not answer the question this screen
+				     exists for — whether the label will scan — because the digits
+				     render identically whether the bars behind them are right,
+				     wrong or absent. Anything this cannot draw falls back to the
+				     number and says so, rather than showing a plausible-looking
+				     pattern for a code in some other symbology. -->
+				<div v-if="row.barcode" class="flex items-center gap-2">
+					<span
+						v-if="barsFor(row.barcode)"
+						class="shrink-0 [&>svg]:h-[34px] [&>svg]:w-auto"
+						v-html="barsFor(row.barcode)"
 					/>
-				</span>
+					<div class="min-w-0">
+						<div class="tabular text-p-xs font-medium text-ink-gray-7">
+							{{ row.barcode }}
+						</div>
+						<Badge
+							v-if="!barsFor(row.barcode)"
+							theme="orange"
+							variant="subtle"
+							label="Not EAN-13"
+						/>
+						<Badge
+							v-else-if="row.barcode_count > 1"
+							theme="gray"
+							variant="subtle"
+							:label="`+${row.barcode_count - 1} more`"
+						/>
+					</div>
+				</div>
 				<Badge v-else theme="orange" variant="subtle" label="None" />
 			</template>
 		</DataTable>

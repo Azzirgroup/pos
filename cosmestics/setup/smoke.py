@@ -46,6 +46,7 @@ def _run(r):
 
 	_annotations(r)
 	_custom_fields_visible(r)
+	_clear_stale_shift(r)
 
 	wh = _default_warehouse()
 	wh_type = frappe.db.get_value("Warehouse", wh, "warehouse_type") if wh else None
@@ -176,6 +177,37 @@ def _settings(r):
 			"DocField", {"parent": "Cosmestics POS Settings", "fieldname": "not_a_real_field"}
 		),
 	)
+
+
+def _clear_stale_shift(r):
+	"""Close any shift left open from an earlier day, before the first sale.
+
+	`_shift_and_credit` already closed a pre-existing shift, but it ran *after*
+	the opening sales — so a real site with a shift left open overnight killed
+	this test on its very first `submit_sale`, with ERPNext's "Outdated POS
+	Opening Entry" and a traceback rather than a named failure.
+
+	That is not a hypothetical: it is the state a till is in every morning
+	somebody forgot to close the previous evening, and it stops the shop selling
+	until it is dealt with. So it is both reported and cleared here — reported
+	because a shop wants to know it happened, cleared because the rest of the
+	test cannot run otherwise. The whole run rolls back, so the real shift is
+	untouched.
+	"""
+	from cosmestics.api.shift import close_shift, get_open_shift
+
+	shift = get_open_shift()
+	r.check(
+		"no shift is left open from an earlier day",
+		not (shift and shift.get("outdated")),
+		f"{shift['name']} opened {shift['period_start_date']} — till cannot sell until it closes"
+		if shift and shift.get("outdated")
+		else "clear",
+	)
+
+	if shift:
+		close_shift()
+		print(f"  (closed {shift['name']} so the test can post sales; rolled back after)")
 
 
 def _modules_and_reports(r):
