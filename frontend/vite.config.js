@@ -59,22 +59,33 @@ export default defineConfig({
 				 * does, which is rarely, and a normal deploy re-fetches the app
 				 * chunk alone.
 				 */
+				/**
+				 * **One vendor chunk, deliberately.**
+				 *
+				 * This first split frappe-ui, vue and the rest into separate chunks,
+				 * which broke the app in production with
+				 *
+				 *     ReferenceError: can't access lexical declaration 'X'
+				 *     before initialization       (frappe-ui Presence.js)
+				 *
+				 * frappe-ui and its own dependencies import each other. Put in
+				 * different chunks that becomes a cycle *between chunks*, and the
+				 * browser evaluates one before the other has initialised its
+				 * bindings — a temporal dead zone error at load, on a screen that
+				 * then never paints.
+				 *
+				 * Keeping every dependency in one chunk makes such a cycle
+				 * impossible: it is all one module scope as far as the loader is
+				 * concerned. The app still splits from the framework, which is where
+				 * the caching win actually came from — a routine deploy re-fetches
+				 * the app chunk, not Vue.
+				 *
+				 * Do not "optimise" this back into several vendor chunks without
+				 * loading the built app in a browser. The build succeeds either way;
+				 * only the runtime tells you.
+				 */
 				manualChunks(id) {
-					if (!id.includes('node_modules')) return
-					// The decoder is already lazily imported and is large; keeping it
-					// out of vendor means a desktop till on a USB scanner never
-					// fetches it at all.
-					if (id.includes('zxing-wasm')) return 'scanner'
-					if (id.includes('frappe-ui')) return 'frappe-ui'
-					if (
-						id.includes('/vue/') ||
-						id.includes('vue-router') ||
-						id.includes('/@vue/') ||
-						id.includes('pinia')
-					) {
-						return 'vue'
-					}
-					return 'vendor'
+					if (id.includes('node_modules')) return 'vendor'
 				},
 			},
 		},
