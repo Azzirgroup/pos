@@ -1957,6 +1957,8 @@ def _annotations(r):
 		(barcodes.generate, {"item_codes": [], "skip_existing": 1}),
 		(notifications.test_whatsapp, {"to": "x", "message": None}),
 		(notifications.list_groups, {}),
+		(notifications.status, {}),
+		(notifications.send_material_request, {"name": "x"}),
 		(
 			notifications.share,
 			{"to": "x", "message": "y", "sender": None, "doctype": None, "name": None},

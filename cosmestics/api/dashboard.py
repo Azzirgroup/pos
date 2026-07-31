@@ -891,6 +891,8 @@ def warehouses(days: int = DEFAULT_DAYS, warehouse: str | None = None) -> dict:
 	)
 
 	value = sum(flt(r.value) for r in holdings)
+	below_reorder = _stock_position()["below_reorder"]
+
 	return {
 		"period": {"from": str(start), "to": str(end), "days": days},
 		"warehouse": warehouse,
@@ -930,10 +932,13 @@ def warehouses(days: int = DEFAULT_DAYS, warehouse: str | None = None) -> dict:
 			{
 				"key": "below_reorder",
 				"label": "Below reorder level",
-				"value": _stock_position()["below_reorder"],
+				# Read once. Called inline for both the value and the tone, this ran
+				# `_stock_position` twice — two SQL statements each — to render one
+				# tile.
+				"value": below_reorder,
 				"type": "number",
 				"icon": "alert",
-				"tone": "warn" if _stock_position()["below_reorder"] else "good",
+				"tone": "warn" if below_reorder else "good",
 			},
 		],
 		"sections": [

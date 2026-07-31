@@ -43,6 +43,33 @@ if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 	})
 }
 
+/**
+ * Cache the build assets so a cold load on a bad connection is not a blank
+ * screen.
+ *
+ * Registered without an explicit scope, so it takes the directory it is served
+ * from — the built asset folder. That is all it can claim: a worker may only
+ * control URLs beneath its own path, and widening it to `/pos` needs a
+ * `Service-Worker-Allowed` header the app cannot set from here.
+ *
+ * So this speeds up loading and does not make the app work offline. Registering
+ * with `{ scope: '/pos' }` would simply throw, which is worse than being clear
+ * about the limit.
+ *
+ * Failure is ignored on purpose: an unregistered worker costs a slower load,
+ * and a till must never fail to start over a cache.
+ */
+if ('serviceWorker' in navigator && import.meta.env.PROD) {
+	window.addEventListener('load', () => {
+		// A plain runtime path, not `new URL(..., import.meta.url)`: the worker is
+		// copied verbatim from `public/` and is not a module the bundler resolves,
+		// so asking Rollup to trace it only produces a warning and the wrong URL.
+		navigator.serviceWorker
+			.register('/assets/cosmestics/frontend/sw.js')
+			.catch((e) => console.warn('[pos] asset cache unavailable:', e.message))
+	})
+}
+
 // In `yarn dev` the page is served by vite rather than Jinja, so window.boot is
 // absent and has to be fetched. Production gets it inlined by jinjaBootData.
 if (import.meta.env.DEV && !window.boot) {

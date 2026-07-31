@@ -305,7 +305,7 @@ function notify(message, tone = 'good') {
 					<!-- No button, and the reason why. A missing control with no
 					     explanation reads as something broken. -->
 					<span
-						v-else-if="activeType?.create_hint"
+						v-if="!activeType?.creatable && activeType?.create_hint"
 						class="max-w-[320px] text-p-xs text-ink-gray-5"
 						:title="activeType.create_hint"
 					>

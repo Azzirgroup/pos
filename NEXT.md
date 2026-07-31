@@ -4,6 +4,122 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 33. Material requests never reached the WhatsApp group
+
+Reported as "the group is configured but nothing arrives". Nothing in the chain
+was missing — the hook fires, the job runs, the bridge answers. **One field was
+wrong, in an app this one does not own.**
+
+`whatsapp_integration/service/rest.py` builds its payload as
+`{"number": to_number, …}`. waclient treats `number` as a phone number and
+expects a group to arrive as **`chat_id`**. So a group JID sent that way is
+never routed: the reply comes back with no `data`, and the integration logs
+
+    WhatsApp Text API Error — Unexpected message format: None
+
+which is what the Error Log on the affected site showed, against
+`_enqueued_material_request_notice`. Item 26 recorded that `/api/send` accepts
+`chat_id`; nothing had acted on it.
+
+`notifications._send_to_group` now posts to waclient directly with `chat_id`,
+and `send_to_staff_group` routes by the target: anything ending `@g.us` is a
+group, anything else keeps going through the integration, which handles phone
+normalisation and sender selection properly.
+
+Two things came with it:
+
+- **`notifications.status()`** — can this site deliver at all, and if not, which
+  of the four reasons is it. Each needs a different fix, so they are reported
+  separately rather than as one "not configured".
+- **`notifications.send_material_request(name)`** — the retry. A queued job that
+  failed left a shop nothing to do: the request is already submitted and cannot
+  be submitted again.
+
+**The till used to lie about it.** `request_transfer` reported success and the
+toast said "sent to WhatsApp" unconditionally, when the message is only *queued*
+after submit and on an unconfigured site goes nowhere. It now says either
+"posting to the staff group" or names the reason nobody will see it.
+
+Worth knowing: the two sites behave differently. `kaysalt.com` does not have
+`whatsapp_integration` installed at all, so nothing sends there regardless;
+`classiccosmetics.frappe.cloud` does, and is where the `chat_id` bug bites.
+
+### 34. Returns, both directions
+
+A customer bringing goods back is a sale running backwards, so it is a Sales
+Invoice with `is_return=1` — `api/returns.py`. The refund route is the only real
+decision and it changes the accounting, so it is the cashier's:
+
+- **Cash** creates the credit note as a *POS* invoice inside the shift with a
+  negative payment row. `get_closing_summary` sums the payment rows of every POS
+  invoice in the window, so the expected drawer falls by exactly the refund with
+  no separate movement — one would double-count it. Verified: 2000 → 1750 on a
+  250 refund.
+- **Credit** leaves it on the customer's account, and refuses a walk-in. A
+  refund sitting against the shared walk-in customer is one nobody can claim.
+
+`api/sourcing.py` gained the mirror for neighbours — a return Purchase Invoice
+rather than a cancellation, because the goods genuinely were received and for a
+while were on our shelf. Both sides track what has already gone back per line,
+so two returns cannot exceed what was sold.
+
+**`create_sales_return` crashed on a Lead.** `quotation_to` was hardcoded to
+`"Customer"` while `party_name` took whatever the till passed, and this site has
+the CRM app — so a Lead reached the field through ordinary use and died on
+`Could not find Party: CRM-LEAD-…`, a link error naming a record that exists in
+a different doctype. `_resolve_party` now derives the type from the record.
+
+### 34. Speed — the N+1s
+
+Three, all confirmed by counting statements rather than by eye:
+
+- `shift.list_recent_shifts` ran `_movements()` **per shift**. Fifty shifts meant
+  fifty round trips to draw one table — the page got slower the more history a
+  shop had, which is backwards. `_movements_for()` does it in one.
+- `customers.search` ran `_outstanding()` **per customer**, and that search fires
+  as the cashier types. Twenty round trips per keystroke, at a counter.
+- `dashboard.warehouses` called `_stock_position()` twice inline — once for a
+  tile's value and again for its tone — running four SQL statements to render
+  one number.
+
+Query count is now **constant in the row count**: 6 for 25 shifts or for 5, 3 for
+20 customers or for 5. Warm timings: shifts 5 ms, customer search 3 ms,
+dashboard overview 31 ms.
+
+### 35. The bundle splits
+
+Everything was one ~536 kB chunk whose hash changed on any edit, so a one-line
+Vue fix made every till re-download Vue, the router and frappe-ui. `manualChunks`
+splits vendor / vue / frappe-ui / scanner, and a routine deploy now re-fetches
+the **43 kB app chunk** alone. Same bytes cold, far fewer warm.
+
+### 36. Installable, with generated icons
+
+`manifest.webmanifest` plus real PNGs at 192/512 (both plain and maskable), a
+180px Apple touch icon and a 32px favicon — drawn pixel-by-pixel in Python and
+downsampled 4x, because this machine has no rasteriser and no image library. An
+SVG is there for anywhere vector art is taken.
+
+**The service worker only caches assets.** It is served from the built asset
+directory, and a worker may only control URLs beneath its own path — so it
+cannot control `/pos` navigations. Widening it needs a `Service-Worker-Allowed: /`
+header on that file, which is a web-server setting rather than something the app
+can declare. So this speeds up loading and does **not** make the app work
+offline. Registering with `{ scope: '/pos' }` would simply throw.
+
+Frappe will not serve a `.js` file from `www/` at all — it is in
+`UNSUPPORTED_STATIC_PAGE_TYPES` — so there is no in-app route that would fix the
+scope either.
+
+### 37. The app is called Cosmetics
+
+Everything a person reads — app title, browser tab, top bar, error-log title,
+README. Deliberately *not* renamed: the Python package, the module, and the two
+DocTypes (`Cosmestics POS Settings`, `Cosmestics Shift Movement`), which hold
+live data and key the asset path. So error messages naming those DocTypes keep
+the old spelling **on purpose** — they point at a record that still exists under
+it. A full rename is a maintenance-window job; see "Still worth doing".
+
 ### 27. Money that moves at the till without being a sale
 
 Four of the six outstanding items were one change, because they all say the same
@@ -611,12 +727,35 @@ really run — the same failure mode as the reorder investigation.
 
     bench --site <site> execute cosmestics.setup.smoke.run
 
-Rolls back, safe against a live site. Currently 332/332. Add checks there for
+Rolls back, safe against a live site. Currently 347/347.
+
+Two failures this suite reported turned out to be **site state, not code**, and
+both are worth recognising if they come back:
+
+- A shift left open from a previous day. ERPNext refuses an `is_pos` invoice
+  against an outdated opening entry, so the till cannot sell — and it fails at
+  submit, after the customer has paid. `get_open_shift` now reports `outdated`
+  and the till says so before anything is rung up.
+- An active Workflow on Customer (from another app on the site) blocked customer
+  creation, which breaks quick-add *and* credit sales. The test names it rather
+  than dying on it. Add checks there for
 anything new rather than testing by hand — three separate bugs reached the
 browser because a test exercised a narrower path than the UI does.
 
 ## Still worth doing
 
+- **The service worker's scope.** One `Service-Worker-Allowed: /` header on
+  `/assets/cosmestics/frontend/sw.js` turns the asset cache into genuine offline
+  capability and satisfies Chrome's install criteria. It is an nginx line, not
+  an app change.
+- **The app rename is half done, deliberately.** Everything visible says
+  Cosmetics; the package, module and two DocTypes still say Cosmestics. Finishing
+  it means renaming two tables that hold live records, the site's
+  `installed_applications`, and the `/assets/cosmestics/` path — a maintenance
+  window with a database backup, not a mid-session edit.
+- **`sales_returns` and `neighbour_returns` reports existed before the returns
+  themselves did.** They now have a creating path; worth remembering that a
+  report is not a feature.
 - **Nothing here has been seen in a browser.** The backend is covered by the
   smoke test and the bundle builds, but no screen has been loaded on an
   authenticated site. Do that before trusting the layouts. The shift sheet's

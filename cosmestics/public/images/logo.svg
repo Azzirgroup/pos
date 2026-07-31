@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+	<!--
+		The app mark: a shopping bag.
+
+		`hooks.py` has pointed `add_to_apps_screen` at this path since the app was
+		created, but the file never existed — so the desk's apps screen has been
+		showing a broken image. Same drawing as the PWA icons under
+		frontend/public/icons, kept here because the desk reads from the app's own
+		public folder and the built frontend is a different tree.
+
+		A bag rather than a letterform because a till is recognised by what it
+		does, and initials at 32px are a grey smudge.
+	-->
+	<rect width="512" height="512" rx="113" fill="#171717" />
+	<path
+		d="M182 205 a74 74 0 0 1 148 0"
+		fill="none"
+		stroke="#ffffff"
+		stroke-width="27"
+		stroke-linecap="round"
+	/>
+	<path
+		d="M123 205 h266 l19 205 a26 26 0 0 1 -26 28 h-252 a26 26 0 0 1 -26 -28 z"
+		fill="#ffffff"
+	/>
+</svg>

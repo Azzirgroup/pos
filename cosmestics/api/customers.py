@@ -36,10 +36,40 @@ def search(query: str | None = None, limit: int = 20):
 		order_by="modified desc",
 	)
 
+	# One query for every balance on screen. This used to run one per customer,
+	# and the search behind it fires as the cashier types — twenty round trips
+	# per keystroke, at a counter, on a shop's connection.
+	owed = _outstanding_for([r["name"] for r in rows])
 	for row in rows:
-		row["outstanding"] = _outstanding(row["name"])
+		row["outstanding"] = owed.get(row["name"], 0)
 
 	return rows
+
+
+def _outstanding_for(customers) -> dict:
+	"""What each of several customers owes, in one query.
+
+	Grouped in SQL rather than fetched per customer: the caller is a
+	search-as-you-type box, so the per-customer version turned every keystroke
+	into as many round trips as there were results.
+
+	Customers with nothing outstanding are simply absent from the result — the
+	caller defaults them to zero, which is the same answer without a row.
+	"""
+	if not customers:
+		return {}
+
+	placeholders = ", ".join(["%s"] * len(customers))
+	rows = frappe.db.sql(
+		f"""select customer, sum(outstanding_amount) as owed
+		    from `tabSales Invoice`
+		    where docstatus = 1 and outstanding_amount > 0
+		      and customer in ({placeholders})
+		    group by customer""",
+		tuple(customers),
+		as_dict=True,
+	)
+	return {r.customer: flt(r.owed) for r in rows}
 
 
 def _outstanding(customer) -> float:

@@ -93,6 +93,51 @@ function tenderIcon(tender) {
 	return tender.key === 'credit' ? LucideNotebookPen : TENDER_ICONS[tender.icon] || LucideWallet
 }
 
+/**
+ * A colour per kind of tender, so they are told apart by more than a word.
+ *
+ * Deliberately a colour and an icon rather than the payment providers' own
+ * logos. Displaying a brand mark to say "this is how they paid" is ordinary
+ * enough, but bundling one means shipping a third party's trademark in this
+ * repository under a licence nobody here has checked — and a wrong or outdated
+ * mark on a till is worse than none. If the shop holds the right files, dropping
+ * them in and swapping `tenderIcon` for an `<img>` is a small change.
+ *
+ * Green for money that settles immediately, blue for a machine, amber for
+ * money that has not arrived yet. The label still says what it says, so nothing
+ * here is carried by colour alone.
+ */
+const TENDER_TONES = {
+	// `-2` is the deepest outline the theme defines for green, blue and amber —
+	// only gray and red go further. Naming a `-3` compiles to nothing and the
+	// border silently falls back to the default, which is the sort of thing that
+	// looks fine in a diff and wrong on screen.
+	cash: {
+		on: 'border-outline-green-2 bg-surface-green-2 text-ink-green-3',
+		icon: 'text-ink-green-3',
+	},
+	mobile: {
+		on: 'border-outline-green-2 bg-surface-green-2 text-ink-green-3',
+		icon: 'text-ink-green-3',
+	},
+	card: {
+		on: 'border-outline-blue-2 bg-surface-blue-2 text-ink-blue-3',
+		icon: 'text-ink-blue-3',
+	},
+	credit: {
+		on: 'border-outline-amber-2 bg-surface-amber-2 text-ink-amber-3',
+		icon: 'text-ink-amber-3',
+	},
+	other: {
+		on: 'border-outline-gray-4 bg-surface-gray-3 text-ink-gray-9',
+		icon: 'text-ink-gray-7',
+	},
+}
+
+function tenderTone(tender) {
+	return TENDER_TONES[tender.kind] || TENDER_TONES.other
+}
+
 const method = ref('cash')
 const tendered = ref('')
 const reference = ref('')
@@ -486,12 +531,18 @@ function goBack() {
 					class="flex min-h-touch flex-col items-center gap-1 rounded-xl border px-1 py-2 transition-colors"
 					:class="
 						method === m.key
-							? 'border-outline-gray-4 bg-surface-gray-3 text-ink-gray-9'
+							? tenderTone(m).on
 							: 'border-outline-gray-2 bg-surface-white text-ink-gray-6 hover:bg-surface-gray-2'
 					"
 					@click="method = m.key"
 				>
-					<component :is="tenderIcon(m)" class="h-5 w-5 shrink-0" />
+					<!-- The icon keeps its tender colour whether selected or not, so
+					     the grid is scannable before anything is chosen. -->
+					<component
+						:is="tenderIcon(m)"
+						class="h-5 w-5 shrink-0"
+						:class="method === m.key ? '' : tenderTone(m).icon"
+					/>
 					<span class="w-full truncate text-center text-p-sm font-medium">{{ m.label }}</span>
 				</button>
 			</div>

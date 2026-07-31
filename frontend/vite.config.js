@@ -43,6 +43,42 @@ export default defineConfig({
 			'lowlight',
 		],
 	},
+	build: {
+		rollupOptions: {
+			output: {
+				/**
+				 * Split the framework away from the app.
+				 *
+				 * Not to reduce the bytes — the same code is downloaded either way
+				 * on a cold load — but to stop a deploy invalidating all of it.
+				 * Everything lived in one ~536 kB chunk whose hash changed on any
+				 * edit, so fixing one line of a Vue file made every till re-download
+				 * Vue, the router and frappe-ui over a shop's connection.
+				 *
+				 * Split this way the vendor chunk changes only when a dependency
+				 * does, which is rarely, and a normal deploy re-fetches the app
+				 * chunk alone.
+				 */
+				manualChunks(id) {
+					if (!id.includes('node_modules')) return
+					// The decoder is already lazily imported and is large; keeping it
+					// out of vendor means a desktop till on a USB scanner never
+					// fetches it at all.
+					if (id.includes('zxing-wasm')) return 'scanner'
+					if (id.includes('frappe-ui')) return 'frappe-ui'
+					if (
+						id.includes('/vue/') ||
+						id.includes('vue-router') ||
+						id.includes('/@vue/') ||
+						id.includes('pinia')
+					) {
+						return 'vue'
+					}
+					return 'vendor'
+				},
+			},
+		},
+	},
 	server: {
 		fs: {
 			allow: [path.resolve(__dirname, '..')],

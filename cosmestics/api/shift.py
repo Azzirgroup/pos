@@ -227,11 +227,26 @@ def _till_modes(shift) -> list:
 
 
 def _movements(shift_name):
-	"""Submitted till movements for a shift, newest first."""
-	return frappe.get_all(
+	"""Submitted till movements for one shift, newest first."""
+	return _movements_for([shift_name]).get(shift_name, [])
+
+
+def _movements_for(shift_names):
+	"""Movements for several shifts at once, grouped by shift.
+
+	One query rather than one per shift. `list_recent_shifts` returns up to
+	fifty, and calling the single-shift version in that loop meant fifty round
+	trips to answer a screen that shows a table — the page took visibly longer
+	the more history a shop had, which is exactly backwards.
+	"""
+	if not shift_names:
+		return {}
+
+	rows = frappe.get_all(
 		"Cosmestics Shift Movement",
-		filters={"shift": shift_name, "docstatus": 1},
+		filters={"shift": ("in", list(shift_names)), "docstatus": 1},
 		fields=[
+			"shift",
 			"name",
 			"movement_type",
 			"mode_of_payment",
@@ -246,6 +261,11 @@ def _movements(shift_name):
 		],
 		order_by="creation desc",
 	)
+
+	grouped = {}
+	for row in rows:
+		grouped.setdefault(row.shift, []).append(row)
+	return grouped
 
 
 def _paid_out_by_mode(movements):
@@ -567,9 +587,12 @@ def list_recent_shifts(limit: int = 10, mine: int = 1) -> dict:
 	):
 		differences[d.parent] = differences.get(d.parent, 0) + flt(d.difference)
 
+	# One query for every shift's movements, not one per shift.
+	movements = _movements_for([c.pos_opening_entry for c in closings])
+
 	rows = []
 	for c in closings:
-		summary = _movement_summary(_movements(c.pos_opening_entry))
+		summary = _movement_summary(movements.get(c.pos_opening_entry, []))
 
 		rows.append(
 			{

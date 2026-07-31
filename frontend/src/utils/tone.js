@@ -43,10 +43,41 @@ const DEBT_KEYS = new Set([
  * reading a colour that is always on. Negative still means what it means
  * everywhere else, so this narrows the rule rather than adding a second one.
  */
+/**
+ * Money you *have*, where a positive figure is genuinely good news.
+ *
+ * Split out of NEGATIVE_ONLY_KEYS because the reasoning there does not apply to
+ * these. That rule exists because a page of ordinary invoice lines is all
+ * positive, so colouring every one green makes a normal page look like a
+ * celebration and the eye stops reading the colour. But an account balance, a
+ * collected total or a stock valuation appears a handful of rows at a time and
+ * is the whole point of the screen it is on — "what have we got" is exactly the
+ * question, and green answers it at a glance.
+ *
+ * Line-item keys (`amount`, `rate`, `value`) stay negative-only for that
+ * original reason. This is a narrower rule, not a reversal of it.
+ */
+const CREDIT_KEYS = new Set([
+	'balance',
+	'available',
+	'available_qty',
+	'cash_and_bank',
+	'collected',
+	'paid',
+	'paid_amount',
+	'received',
+	'closing_amount',
+	'opening_amount',
+	'expected_amount',
+	'taken',
+	'revenue',
+	'spend',
+	'stock_value',
+])
+
 const NEGATIVE_ONLY_KEYS = new Set([
 	'amount',
 	'qty',
-	'balance',
 	'change_amount',
 	'value_difference',
 	'difference_amount',
@@ -122,6 +153,14 @@ export function cellTone(key, value, row = null) {
 	if (PROGRESS_KEYS.has(key)) {
 		if (n >= 100) return GREEN
 		if (n > 0) return AMBER
+		return MUTED
+	}
+
+	// Money in hand: green when there is some, red when it has gone negative,
+	// muted at zero — an empty account is a fact rather than a problem.
+	if (CREDIT_KEYS.has(key)) {
+		if (n < 0) return RED
+		if (n > 0) return GREEN
 		return MUTED
 	}
 

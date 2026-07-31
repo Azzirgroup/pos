@@ -342,6 +342,141 @@ def _succeeded(result) -> bool:
 	return bool(result.get("id") or result.get("message_id"))
 
 
+#: waclient's own send endpoint. Posted to directly for group messages — see
+#: `_send_to_group` for why the integration cannot do it.
+SEND_URL = f"{WACLIENT_HOST}/api/send"
+
+#: A WhatsApp group id always ends this way. A phone number never does, which is
+#: what makes the distinction safe to draw from the value itself.
+GROUP_SUFFIX = "@g.us"
+
+
+def is_group(to: str) -> bool:
+	return bool(to) and str(to).strip().endswith(GROUP_SUFFIX)
+
+
+def _send_to_group(jid: str, message: str) -> bool:
+	"""Post to a WhatsApp group, going around the integration's transport.
+
+	**Why this exists.** `whatsapp_integration.service.rest.send_whatsapp_message`
+	builds its payload as `{"number": to_number, ...}`. waclient treats `number`
+	as a phone number and expects a group to arrive as **`chat_id`** instead, so
+	a group JID sent that way is not delivered — the reply comes back with no
+	`data`, and the integration logs `Unexpected message format: None` and
+	returns an error.
+
+	That is precisely the failure a shop sees as "material requests are not
+	reaching the group": the request is raised, the job runs, the bridge answers,
+	and nothing arrives. Nothing in the chain is missing — one field is wrong,
+	in an app this one does not own.
+
+	So group sends are posted here, with `chat_id`. Phone numbers still go
+	through the integration, which handles normalisation and sender selection
+	properly and is the better path for the case it actually supports.
+	"""
+	creds = _credentials()
+	if not creds:
+		frappe.log_error(
+			"WhatsApp credentials are not configured; group message skipped",
+			"Cosmetics POS",
+		)
+		return False
+
+	payload = {
+		# The field that makes this a group send rather than a phone number.
+		"chat_id": jid,
+		"type": "text",
+		"message": message,
+		"instance_id": creds.get("instance_id"),
+		"access_token": creds.get("access_token"),
+	}
+
+	last_error = None
+	for attempt in range(SEND_ATTEMPTS):
+		try:
+			response = requests.post(SEND_URL, json=payload, timeout=30)
+			response.raise_for_status()
+			body = response.json()
+			if _succeeded(body):
+				return True
+			last_error = body
+		except Exception as e:
+			last_error = e
+
+		if attempt < len(BACKOFF_SECONDS):
+			time.sleep(BACKOFF_SECONDS[attempt])
+			warm_up()
+
+	frappe.log_error(
+		f"WhatsApp group send to {jid} failed after {SEND_ATTEMPTS} attempts: {last_error}",
+		"Cosmetics POS",
+	)
+	return False
+
+
+@frappe.whitelist()
+def status() -> dict:
+	"""Can this site actually deliver a WhatsApp message right now?
+
+	Used by the till so it can say whether anybody will be told, rather than
+	claiming a message was sent because one was queued. Every field is a
+	separate reason it might not work, because they need different fixes.
+	"""
+	settings = _settings()
+	group = settings.whatsapp_group_jid
+	installed = _integration_available()
+	creds = _credentials() if installed else None
+
+	if not settings.notify_material_request:
+		reason = "WhatsApp notices are switched off in settings."
+	elif not group:
+		reason = "No staff group is chosen in settings."
+	elif not installed:
+		reason = (
+			"whatsapp_integration is not installed on this site — its DocTypes are "
+			"missing, so there is nowhere for the credentials to live."
+		)
+	elif not creds:
+		reason = "WhatsApp is installed but has no instance id or access token."
+	else:
+		reason = None
+
+	return {
+		"usable": reason is None,
+		"reason": reason,
+		"group": group,
+		"is_group": is_group(group),
+		"installed": installed,
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def send_material_request(name: str) -> dict:
+	"""Post one material request to the staff group, now.
+
+	The submit hook already queues this, but a queued job that failed leaves
+	nothing a shop can retry — the request is submitted and cannot be submitted
+	again. This is the retry, and the way to test the group is reachable without
+	raising a fake request to do it.
+	"""
+	doc = frappe.get_doc("Material Request", name)
+	if not frappe.has_permission("Material Request", "read", doc=doc.name):
+		frappe.throw(_("You do not have permission to send {0}").format(name))
+
+	state = status()
+	if not state["usable"]:
+		return {"sent": False, "message": state["reason"], **state}
+
+	sent = send_to_staff_group(format_material_request(doc))
+	return {
+		"sent": bool(sent),
+		"message": _("{0} posted to the staff group").format(name)
+		if sent
+		else _("WhatsApp accepted nothing — check the Error Log for the reply"),
+		**state,
+	}
+
+
 def send_to_staff_group(message: str) -> bool:
 	"""Post to the configured staff group."""
 	try:
@@ -352,9 +487,15 @@ def send_to_staff_group(message: str) -> bool:
 	if not settings.notify_material_request or not settings.whatsapp_group_jid:
 		return False
 
-	return send_text(
-		settings.whatsapp_group_jid, message, settings.whatsapp_sender or None
-	)
+	target = settings.whatsapp_group_jid
+
+	# A group and a phone number are two different sends. The integration only
+	# knows how to do the second — it puts whatever it is given in the `number`
+	# field, which waclient will not route to a group.
+	if is_group(target):
+		return _send_to_group(target, message)
+
+	return send_text(target, message, settings.whatsapp_sender or None)
 
 
 @frappe.whitelist(methods=["POST"])

@@ -558,7 +558,16 @@ async function requestTransfer({ item, qty, warehouse }) {
 			items: [{ item_code: item.item_code, qty }],
 			fromWarehouse: warehouse,
 		})
-		notify(`${res.name} raised — sent to WhatsApp`, 'ok')
+		// It used to say "sent to WhatsApp" unconditionally, which the app had no
+		// basis for: the message is queued after submit, and on a site where
+		// WhatsApp is not configured it never goes anywhere. Now it reports what
+		// is actually known — that it was queued, or that nobody will see it.
+		notify(
+			res.whatsapp?.usable
+				? `${res.name} raised — posting to the staff group`
+				: `${res.name} raised, but nobody was notified: ${res.whatsapp?.reason || 'WhatsApp is not set up'}`,
+			res.whatsapp?.usable ? 'ok' : 'warn',
+		)
 	} catch (e) {
 		console.error('[pos] material request failed', e)
 		notify(`Request failed: ${e.message || 'server error'}`, 'warn')

@@ -62,7 +62,13 @@ def request_transfer(
 	mr.insert()
 	mr.submit()
 
-	return {"name": mr.name, "items": len(mr.items)}
+	from cosmestics.api.notifications import status as whatsapp_status
+
+	# Whether anybody will actually be told. The submit hook queues the message,
+	# so this cannot report delivery — but it can report whether delivery is even
+	# possible, which is the difference between "on its way" and "nobody will
+	# ever see this". The till used to say "sent to WhatsApp" either way.
+	return {"name": mr.name, "items": len(mr.items), "whatsapp": whatsapp_status()}
 
 
 def _default_warehouse(company):

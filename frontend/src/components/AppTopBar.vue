@@ -13,6 +13,14 @@ import MasterSheet from '@/components/MasterSheet.vue'
 
 const emit = defineEmits(['toggleRail'])
 
+/**
+ * Bound rather than written inline in `src`, so the bundler treats it as a
+ * runtime URL. An absolute `/assets/…` path in a plain `src` attribute is
+ * something Rollup tries to resolve at build time, and it fails the build
+ * because the file lives in the app's public folder rather than this tree.
+ */
+const LOGO = '/assets/cosmestics/images/logo.svg'
+
 const route = useRoute()
 const title = computed(() => route.meta?.title || 'POS')
 
@@ -102,6 +110,19 @@ onMounted(async () => {
 		>
 			<LucidePanelLeft class="h-[17px] w-[17px]" />
 		</button>
+
+		<!-- The app's own mark, top left. Served from the app's public folder
+		     rather than the built frontend so the desk and the till show the same
+		     one. `alt` is empty on purpose: the title beside it already names the
+		     app, and a screen reader announcing "Cosmetics POS logo, Cosmetics
+		     POS" is worse than silence. -->
+		<img
+			:src="LOGO"
+			alt=""
+			width="22"
+			height="22"
+			class="h-[22px] w-[22px] shrink-0 rounded"
+		/>
 
 		<span class="text-p-sm font-medium text-ink-gray-8">{{ title }}</span>
 
