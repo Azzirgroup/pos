@@ -39,6 +39,7 @@ import ShiftSheet from '@/components/ShiftSheet.vue'
 import CustomerSheet from '@/components/CustomerSheet.vue'
 import ScanSheet from '@/components/ScanSheet.vue'
 import QuotationSheet from '@/components/QuotationSheet.vue'
+import TillContext from '@/components/TillContext.vue'
 import ReturnSheet from '@/components/ReturnSheet.vue'
 import { cameraScanSupported } from '@/composables/useCameraScanner'
 import LucideTriangleAlert from '~icons/lucide/triangle-alert'
@@ -957,8 +958,12 @@ useShortcuts({
 			class="flex shrink-0 items-center gap-2 border-b border-outline-gray-2 bg-surface-white px-3 py-1.5"
 		>
 			<TabButtons v-model="mode" :buttons="MODES" />
-			<div class="ml-auto flex items-center gap-2">
-				<span class="tabular rounded-md border border-outline-gray-2 px-2 py-1 text-p-xs text-ink-gray-6">
+			<div class="ml-auto flex min-w-0 items-center gap-2">
+				<!-- Who is selling, from which till and warehouse. Moved off the app
+				     header, where it sat above screens it had nothing to do with;
+				     here it is beside the cart it actually describes. -->
+				<TillContext class="hidden md:flex" />
+				<span class="tabular shrink-0 rounded-md border border-outline-gray-2 px-2 py-1 text-p-xs text-ink-gray-6">
 					{{ count }} {{ count === 1 ? 'item' : 'items' }} · {{ fmtMoney(total) }}
 				</span>
 			</div>

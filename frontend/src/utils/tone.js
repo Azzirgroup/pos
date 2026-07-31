@@ -118,6 +118,8 @@ const RED = 'text-ink-red-3 font-medium'
 const AMBER = 'text-ink-amber-3'
 const GREEN = 'text-ink-green-3'
 const MUTED = 'text-ink-gray-5'
+/** Any figure with no particular meaning. Neutral on purpose — see `cellTone`. */
+const NUMERIC = 'text-ink-blue-3'
 
 function isPast(value) {
 	const date = new Date(value)
@@ -169,7 +171,8 @@ export function cellTone(key, value, row = null) {
 		return MUTED
 	}
 
-	if (NEGATIVE_ONLY_KEYS.has(key)) return n < 0 ? RED : ''
+	// Negative still means what it means; the rest are figures like any other.
+	if (NEGATIVE_ONLY_KEYS.has(key)) return n < 0 ? RED : NUMERIC
 
 	if (MONEY_KEYS.has(key) || key === 'margin_pct') {
 		if (n < 0) return RED
@@ -179,7 +182,20 @@ export function cellTone(key, value, row = null) {
 
 	if (STOCK_KEYS.has(key)) return stockTone(n)
 
-	return ''
+	/**
+	 * Every remaining figure still gets colour, on request.
+	 *
+	 * A deliberate softening of the rule at the top of this file, which kept
+	 * unclassified numbers plain so the meaningful ones stood out. The shop
+	 * wanted figures to read as figures across every list, so they do — but in
+	 * a *neutral* blue rather than in the vocabulary. Red, amber and green keep
+	 * their meanings, and because blue carries none, a red balance still reads
+	 * as the exception on a page of blue ones.
+	 *
+	 * If a screen ever looks busy, this line is the one to remove: everything
+	 * above it is load-bearing, and this is presentation.
+	 */
+	return NUMERIC
 }
 
 /**

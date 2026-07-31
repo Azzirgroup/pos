@@ -27,30 +27,56 @@ const expanded = computed(() => props.mode === 'labels')
  * Module rail. Collapsed to icons by default: this column is permanent, so
  * every pixel it takes is taken from the item grid for the whole shift.
  */
+/**
+ * A colour per destination, carried whether or not you are on it.
+ *
+ * The rail was a column of identical grey glyphs, told apart only by shape at
+ * 18px — so finding Purchasing meant reading every icon. Giving each one a fixed
+ * hue makes it findable by colour before it is read, and because the colour is
+ * always there it becomes a position you learn rather than a state you check.
+ *
+ * The active item is still marked by its filled background, not by the colour:
+ * "where am I" and "what is this" are different questions and must not share a
+ * signal. Hues are grouped by what the section is about — stock is amber, money
+ * is green, paperwork is blue — so the rail reads as sections rather than as a
+ * row of unrelated colours.
+ */
+const TONES = {
+	home: 'text-ink-gray-7',
+	sell: 'text-ink-green-3',
+	stock: 'text-ink-amber-3',
+	money: 'text-ink-blue-3',
+	// Four hues, not five. The theme this app is built on ships gray, amber,
+	// blue, green and red — and red is spoken for by errors, so inventing a
+	// fifth section colour would mean a class that compiles to nothing and a
+	// glyph that quietly stays grey. Customers sits with the money group, which
+	// is where the rail already places it.
+}
+
 const GROUPS = [
 	[
-		{ to: '/dashboard', icon: LucideHome, label: 'Dashboard' },
-		{ to: '/pos', icon: LucideShoppingCart, label: 'Point of sale' },
+		{ to: '/dashboard', icon: LucideHome, label: 'Dashboard', tone: 'home' },
+		{ to: '/pos', icon: LucideShoppingCart, label: 'Point of sale', tone: 'sell' },
 		// Directly under the till: a shift belongs to the counter, and the
 		// person closing one has usually just come from it.
-		{ to: '/previous-shifts', icon: LucideClock, label: 'Shifts' },
+		{ to: '/previous-shifts', icon: LucideClock, label: 'Shifts', tone: 'sell' },
 	],
 	[
-		{ to: '/inventory', icon: LucideBoxes, label: 'Inventory' },
-		{ to: '/purchasing', icon: LucideTruck, label: 'Purchasing' },
-		{ to: '/suppliers', icon: LucideFactory, label: 'Suppliers' },
+		{ to: '/inventory', icon: LucideBoxes, label: 'Inventory', tone: 'stock' },
+		{ to: '/purchasing', icon: LucideTruck, label: 'Purchasing', tone: 'stock' },
+		{ to: '/suppliers', icon: LucideFactory, label: 'Suppliers', tone: 'stock' },
 	],
 	[
-		{ to: '/sales', icon: LucideReceipt, label: 'Sales' },
-		{ to: '/customers', icon: LucideUsers, label: 'Customers' },
-		{ to: '/accounts', icon: LucideLandmark, label: 'Accounts' },
+		{ to: '/sales', icon: LucideReceipt, label: 'Sales', tone: 'money' },
+		{ to: '/customers', icon: LucideUsers, label: 'Customers', tone: 'money' },
+		{ to: '/accounts', icon: LucideLandmark, label: 'Accounts', tone: 'money' },
 	],
 	// Documents and Records were removed from here on purpose: every document
 	// type now sits inside the module it belongs to, in the order the paperwork
 	// happens, and records are reached from the "New" button and from the
 	// Suppliers / Customers / Accounts tabs. Both routes still exist for anyone
 	// who has one bookmarked.
-	[{ to: '/reports', icon: LucideChartColumn, label: 'Reports' }],
+	[{ to: '/reports', icon: LucideChartColumn, label: 'Reports', tone: 'money' }],
 ]
 
 function isActive(to) {
@@ -78,7 +104,11 @@ function isActive(to) {
 				:aria-label="item.label"
 				@click="router.push(item.to)"
 			>
-				<component :is="item.icon" class="h-[18px] w-[18px] shrink-0" />
+				<component
+					:is="item.icon"
+					class="h-[18px] w-[18px] shrink-0"
+					:class="TONES[item.tone] || 'text-ink-gray-6'"
+				/>
 				<span v-if="expanded" class="truncate text-p-sm">{{ item.label }}</span>
 				<!-- Tooltip only when collapsed; with labels shown it would duplicate. -->
 				<span

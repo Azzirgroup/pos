@@ -42,6 +42,7 @@ declare module 'vue' {
     Sidebar: typeof import('./src/components/Sidebar.vue')['default']
     StatTiles: typeof import('./src/components/StatTiles.vue')['default']
     StockActionSheet: typeof import('./src/components/StockActionSheet.vue')['default']
+    TillContext: typeof import('./src/components/TillContext.vue')['default']
     TopBar: typeof import('./src/components/TopBar.vue')['default']
     TrendChart: typeof import('./src/components/charts/TrendChart.vue')['default']
   }

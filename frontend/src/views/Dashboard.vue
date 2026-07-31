@@ -11,7 +11,6 @@ import TrendChart from '@/components/charts/TrendChart.vue'
 import BarList from '@/components/charts/BarList.vue'
 import DonutChart from '@/components/charts/DonutChart.vue'
 import PairedBars from '@/components/charts/PairedBars.vue'
-import ShareBar from '@/components/charts/ShareBar.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 
 /**
@@ -209,6 +208,11 @@ function trendPoints(section) {
 		.map((row) => ({ ...row, day: row[c.label] }))
 }
 
+/** Payment mix in the shape the ring wants: a label and a magnitude. */
+const paymentSlices = computed(() =>
+	(data.value?.payment_mix || []).map((p) => ({ label: p.mode, value: p.amount })),
+)
+
 const collected = computed(() =>
 	(data.value?.payment_mix || []).reduce((sum, p) => sum + Number(p.amount || 0), 0),
 )
@@ -377,7 +381,12 @@ const attention = computed(() => {
 					:rows="paymentTable.rows"
 					empty-text="Nothing collected in this period."
 				>
-					<ShareBar :segments="data.payment_mix" />
+					<!-- A ring rather than a stacked bar. The question here is "how
+					     did the money come in" — a composition — and a ring says that
+					     directly, where a single stacked bar makes small tenders into
+					     slivers too thin to label or compare. The legend carries the
+					     figures either way, so nothing depends on reading a colour. -->
+					<DonutChart :rows="paymentSlices" type="currency" />
 					<!-- Spelled out because the gap between the two is the thing worth
 					     noticing, and a chart of collections alone does not show it. -->
 					<p class="mt-3 border-t border-outline-gray-2 pt-2 text-p-xs text-ink-gray-5">
