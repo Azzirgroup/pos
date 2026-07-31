@@ -288,7 +288,22 @@ def _mode_map(settings) -> dict:
 	}
 
 
+#: Prefix for a tender that *is* a Mode of Payment rather than one of the named
+#: keys above. Lets a shop's own modes — Bank Transfer, Voucher, whatever they
+#: have set up — be offered at the till without a code change.
+MODE_PREFIX = "mode:"
+
+
 def _mode_of_payment(method, settings) -> str:
+	if isinstance(method, str) and method.startswith(MODE_PREFIX):
+		name = method[len(MODE_PREFIX) :]
+		# Validated, not trusted: this arrives from the browser, and an unchecked
+		# value here would let a caller book a sale against any Mode of Payment
+		# on the site — including ones this till was never offered.
+		if not frappe.db.exists("Mode of Payment", {"name": name, "enabled": 1}):
+			frappe.throw(_("{0} is not an enabled Mode of Payment").format(name))
+		return name
+
 	mode = _mode_map(settings).get(method)
 	if not mode:
 		frappe.throw(
@@ -328,13 +343,33 @@ def get_payment_methods() -> dict:
 		if modes.get(tender["key"])
 	]
 
-	# The M-Pesa channels are grouped behind one button; the cashier picks the
-	# channel after choosing M-Pesa, which is how the transaction actually
-	# happens — you know it is M-Pesa before you know which kind.
+	# Anything else the shop takes money through. The five above are the ones this
+	# app has opinions about — a cash tender needs a tendered amount, an M-Pesa
+	# one needs a reference — but a shop that has set up Bank Transfer or a
+	# voucher mode should be able to ring it up without waiting for a release.
+	known = {m["mode_of_payment"] for m in methods}
+	for extra in _other_modes():
+		if extra in known:
+			continue
+		methods.append(
+			{
+				"key": f"{MODE_PREFIX}{extra}",
+				"label": extra,
+				"kind": "other",
+				"icon": "wallet",
+				"mode_of_payment": extra,
+			}
+		)
+		known.add(extra)
+
 	mpesa = [m for m in methods if m["kind"] == "mobile"]
 
 	return {
 		"methods": methods,
+		# Kept for the split-tender rows, which still list the channels
+		# individually. The main tender grid is flat now: the second tap to
+		# choose a channel cost more than the grouping saved, and it hid the
+		# distinction that makes the shift reconcile.
 		"mpesa_channels": mpesa,
 		# True when the channels are all the same Mode of Payment, i.e. nobody has
 		# split them out yet. The till still offers them; they just all book alike.
@@ -342,14 +377,51 @@ def get_payment_methods() -> dict:
 	}
 
 
+def _other_modes() -> list:
+	"""Modes of Payment this till accepts beyond the ones the app names.
+
+	Read from the POS Profile where there is one, because that is what the shop
+	said this counter takes. Falling back to every enabled mode on the site would
+	offer a warehouse transfer account as a way to pay for lipstick.
+	"""
+	profile = frappe.db.get_value(
+		"POS Opening Entry",
+		{"user": frappe.session.user, "docstatus": 1, "status": "Open"},
+		"pos_profile",
+	)
+	if not profile:
+		company = frappe.defaults.get_user_default("Company")
+		filters = {"disabled": 0, **({"company": company} if company else {})}
+		profile = frappe.db.get_value("POS Profile", filters, "name")
+
+	if not profile:
+		return []
+
+	rows = frappe.get_all(
+		"POS Payment Method", filters={"parent": profile}, pluck="mode_of_payment"
+	)
+	enabled = set(
+		frappe.get_all("Mode of Payment", filters={"enabled": 1}, pluck="name")
+	)
+	# Order preserved as the profile lists them, deduplicated.
+	return list(dict.fromkeys(m for m in rows if m in enabled))
+
+
 @frappe.whitelist()
-def recent_sales(limit: int = 20, mine: int = 1) -> dict:
+def recent_sales(limit: int = 20, mine: int = 1, this_shift: int = 1) -> dict:
 	"""The last few sales, for reprinting and for answering "did that go through?".
 
-	Defaults to this cashier's own sales: at a counter the question is almost
-	always about the sale just rung up, and a list of everyone's invoices buries
-	it. Windowed on `creation`, not `posting_date`, because posting_date is a
-	date and cannot order two sales on the same day.
+	Scoped to the open shift by default. "Did that go through?" is always asked
+	about something rung up at this counter today, and yesterday's invoices
+	sitting above it are not just noise — they are reprintable, so a cashier in a
+	hurry can hand a customer somebody else's receipt from last week.
+
+	Falls back to the whole list when no shift is open, because the question is
+	still worth answering at a till nobody has opened a shift on.
+
+	Defaults to this cashier's own sales for the same reason. Windowed on
+	`creation`, not `posting_date`, because posting_date is a date and cannot
+	order two sales on the same day.
 	"""
 	filters = {"docstatus": 1}
 	if cint(mine):
@@ -358,6 +430,17 @@ def recent_sales(limit: int = 20, mine: int = 1) -> dict:
 	company = frappe.defaults.get_user_default("Company")
 	if company:
 		filters["company"] = company
+
+	shift = None
+	if cint(this_shift):
+		shift = frappe.db.get_value(
+			"POS Opening Entry",
+			{"user": frappe.session.user, "docstatus": 1, "status": "Open"},
+			["name", "period_start_date"],
+			as_dict=True,
+		)
+		if shift:
+			filters["creation"] = (">=", shift.period_start_date)
 
 	rows = frappe.get_all(
 		"Sales Invoice",
@@ -384,6 +467,10 @@ def recent_sales(limit: int = 20, mine: int = 1) -> dict:
 			"outstanding": sum(flt(r.outstanding_amount) for r in rows),
 		},
 		"mine": bool(cint(mine)),
+		# So the sheet can say which it is showing. A list scoped to a shift and
+		# a list that simply has nothing in it look identical otherwise.
+		"shift": shift.name if shift else None,
+		"since": str(shift.period_start_date) if shift else None,
 	}
 
 

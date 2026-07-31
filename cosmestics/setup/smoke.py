@@ -120,6 +120,60 @@ def _run(r):
 	_barcodes(r)
 	_whatsapp(r)
 	_settings(r)
+	_quotations(r, item)
+
+
+def _quotations(r, item):
+	"""Quote a cart, then load it back.
+
+	The round trip is the whole feature, so it is tested as a round trip: the
+	thing that must hold is that what comes back is what was quoted, at the price
+	it was quoted at. A quote that reprices on load is not a quote.
+	"""
+	from cosmestics.api.quotations import create, get, list_quotations
+
+	print()
+	# A rate deliberately unlike any price list, so a re-priced line is obvious.
+	quoted = create(
+		items=[{"item_code": item.item_code, "qty": 3, "rate": 333, "discount_pct": 0}],
+		valid_days=7,
+	)
+	r.check("quotation created", bool(quoted["name"]), quoted["name"])
+	r.check("quotation totals the quoted rate (999)", flt(quoted["grand_total"]) == 999,
+	        str(quoted["grand_total"]))
+
+	doc = frappe.get_doc("Quotation", quoted["name"])
+	r.check("quotation submitted", doc.docstatus == 1, str(doc.docstatus))
+	r.check("valid_till was set from valid_days", bool(doc.valid_till), str(doc.valid_till))
+
+	loaded = get(name=quoted["name"])
+	r.check("quotation loads back as cart lines", len(loaded["items"]) == 1,
+	        str(len(loaded["items"])))
+	if loaded["items"]:
+		line = loaded["items"][0]
+		r.check("loaded line keeps the item", line["item_code"] == item.item_code,
+		        str(line["item_code"]))
+		r.check("loaded line keeps the quantity (3)", flt(line["qty"]) == 3, str(line["qty"]))
+		# The point of the whole feature: the customer was promised 333.
+		r.check("loaded line keeps the QUOTED rate (333)", flt(line["rate"]) == 333,
+		        str(line["rate"]))
+
+	listed = list_quotations(days=1)
+	r.check("the new quotation is listed", any(q["name"] == quoted["name"] for q in listed["rows"]),
+	        f"{listed['totals']['count']} quotations")
+
+	# Expiry is computed rather than read off `status`, which only updates when
+	# ERPNext's scheduler runs.
+	row = next((q for q in listed["rows"] if q["name"] == quoted["name"]), None)
+	if row:
+		r.check("a quote valid until later is not marked expired", not row["expired"],
+		        str(row["valid_till"]))
+
+	try:
+		create(items=[])
+		r.check("quoting an empty cart is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("quoting an empty cart is refused", True)
 
 
 def _settings(r):
@@ -1476,11 +1530,31 @@ def _master_data(r):
 	groups = master.options(key="customer", fieldname="customer_group")
 	r.check("link options resolve", isinstance(groups, list), f"{len(groups)} customer groups")
 
-	res = frappe.call(
-		master.create,
-		key="customer",
-		values={"customer_name": "Quick Add Smoke Customer", "mobile_no": "254700111222"},
-	)
+	# An active Workflow on Customer refuses the insert outright, which is a real
+	# thing another app on the site can turn on without this one knowing. Caught
+	# and named rather than left to kill the run: the whole point of this test is
+	# to distinguish "the feature is broken" from "the site is configured in a way
+	# the feature cannot work under", and a traceback says neither.
+	try:
+		res = frappe.call(
+			master.create,
+			key="customer",
+			values={"customer_name": "Quick Add Smoke Customer", "mobile_no": "254700111222"},
+		)
+	except (frappe.PermissionError, frappe.ValidationError) as e:
+		# WorkflowPermissionError subclasses ValidationError, so both are caught.
+		blocking = frappe.get_all(
+			"Workflow",
+			filters={"document_type": "Customer", "is_active": 1},
+			pluck="name",
+		)
+		r.check(
+			"customer quick-add is not blocked by a workflow",
+			False,
+			f"{blocking or e} — quick-add and credit sales cannot create a customer on this site",
+		)
+		return
+
 	r.check("customer created from quick-add", bool(res["name"]), res["name"])
 	r.check(
 		"created customer is real",
@@ -1739,6 +1813,7 @@ def _annotations(r):
 		modules,
 		pos,
 		pricing,
+		quotations,
 		reorder,
 		reports,
 		session,
@@ -1764,6 +1839,19 @@ def _annotations(r):
 		(stock.request_transfer, {"items": [], "from_warehouse": "x"}),
 		(sourcing.receive_from_neighbours, {"lines": []}),
 		(sourcing.list_purchases, {"days": 30, "status": None, "limit": 200}),
+		(sourcing.return_to_neighbour, {"invoice": "x", "lines": None, "reason": None}),
+		(sourcing.returnable, {"invoice": "x"}),
+		(sourcing.neighbour_customer, {"supplier": "x"}),
+		(sourcing.list_neighbours, {}),
+		(
+			quotations.create,
+			{"items": [], "customer": None, "valid_days": 14, "notes": None},
+		),
+		(
+			quotations.list_quotations,
+			{"days": 30, "status": None, "search": None, "limit": 50},
+		),
+		(quotations.get, {"name": "x"}),
 		(catalog.get_catalog, {}),
 		(session.me, {}),
 		(session.context, {}),

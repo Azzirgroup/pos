@@ -1,7 +1,6 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
 import { storeToRefs } from 'pinia'
-import { useRouter } from 'vue-router'
 
 import { useCatalogStore } from '@/stores/catalog'
 import { useCartStore } from '@/stores/cart'
@@ -25,6 +24,7 @@ import {
 	getMovementOptions,
 	recordMovement as apiRecordMovement,
 	voidMovement as apiVoidMovement,
+	createQuotation,
 } from '@/data/api'
 
 import { Button, Dialog, FormControl, TabButtons } from 'frappe-ui'
@@ -38,6 +38,7 @@ import StockActionSheet from '@/components/StockActionSheet.vue'
 import ShiftSheet from '@/components/ShiftSheet.vue'
 import CustomerSheet from '@/components/CustomerSheet.vue'
 import ScanSheet from '@/components/ScanSheet.vue'
+import QuotationSheet from '@/components/QuotationSheet.vue'
 import { cameraScanSupported } from '@/composables/useCameraScanner'
 import LucideTriangleAlert from '~icons/lucide/triangle-alert'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
@@ -49,8 +50,8 @@ import LucideUserRound from '~icons/lucide/user-round'
 import LucidePrinter from '~icons/lucide/printer'
 import LucideReceiptText from '~icons/lucide/receipt-text'
 import LucideSend from '~icons/lucide/send'
+import LucideFileText from '~icons/lucide/file-text'
 
-const router = useRouter()
 const catalog = useCatalogStore()
 const cart = useCartStore()
 const till = useTillStore()
@@ -61,27 +62,21 @@ const query = ref('')
 const searchInput = ref(null)
 
 /** Mode tabs from the reference layout. Menu is the till itself; the rest are
- *  the things a cashier does between sales.
+ *  the things a cashier does *between* sales, without leaving the counter.
  *
- *  Held gave up its slot because it already has a toolbar button carrying its
- *  count, so the tab was a second door to the same sheet. What replaced it is
- *  deliberately split in two: **Previous shifts** is history and goes to its own
- *  page, while **Expenses** is money leaving the drawer right now and opens the
- *  shift sheet. Closing a shift is neither — it stays on the toolbar, next to
- *  the button that opened it. */
+ *  Shift history is deliberately not here. It moved to the rail, because
+ *  reading back over closed shifts is a back-office job done sitting down —
+ *  putting it on the till strip meant a cashier one tap from navigating away
+ *  from a half-rung sale. What stays are the two things done mid-sale: naming
+ *  the customer, and recording money out of the drawer. */
 const MODES = [
 	{ label: 'Menu', value: 'menu' },
-	{ label: 'Previous shifts', value: 'shifts' },
 	{ label: 'Customer', value: 'customer' },
 	{ label: 'Expenses', value: 'expenses' },
 ]
 const mode = ref('menu')
 
 watch(mode, (m) => {
-	// History, not the shift in hand. Closing is done at the till, from the
-	// toolbar button; this is for reading back over closes that already
-	// happened, which wants room and a URL rather than a sheet over the grid.
-	if (m === 'shifts') router.push('/previous-shifts')
 	if (m === 'customer') pickCustomer(false)
 	// The same sheet, opened on the tab that matters. Money out of the drawer is
 	// frequent enough to deserve its own door, but it belongs to the shift, and
@@ -136,8 +131,10 @@ const customerRequired = ref(false)
  */
 const lastSale = ref(null)
 
-/** M-Pesa channels this shop is set up for; the pay sheet falls back if absent. */
+/** Every tender this till accepts, and the M-Pesa channels within it. Both come
+ *  from the server; the pay sheet falls back to a built-in list if absent. */
 const mpesaChannels = ref([])
+const paymentMethods = ref([])
 
 onMounted(async () => {
 	catalog.load()
@@ -153,6 +150,7 @@ onMounted(async () => {
 	// Separately: a failure here must not cost us the shift lookup above.
 	try {
 		const methods = await getPaymentMethods()
+		if (methods?.methods?.length) paymentMethods.value = methods.methods
 		if (methods?.mpesa_channels?.length) mpesaChannels.value = methods.mpesa_channels
 	} catch (e) {
 		console.warn('[pos] payment methods lookup failed', e)
@@ -252,6 +250,8 @@ const recentSheet = ref(false)
 const recent = ref({ rows: [], totals: {} })
 const recentLoading = ref(false)
 const recentMine = ref(true)
+/** Scoped to the open shift by default — see `pos.recent_sales`. */
+const recentThisShift = ref(true)
 
 async function openRecent() {
 	recentSheet.value = true
@@ -261,7 +261,11 @@ async function openRecent() {
 async function loadRecent() {
 	recentLoading.value = true
 	try {
-		recent.value = await getRecentSales({ limit: 25, mine: recentMine.value })
+		recent.value = await getRecentSales({
+			limit: 25,
+			mine: recentMine.value,
+			thisShift: recentThisShift.value,
+		})
 	} catch (e) {
 		notify(e.message || 'Could not load recent sales', 'warn')
 		recent.value = { rows: [], totals: {} }
@@ -270,12 +274,17 @@ async function loadRecent() {
 	}
 }
 
-watch(recentMine, () => {
+watch([recentMine, recentThisShift], () => {
 	if (recentSheet.value) loadRecent()
 })
 
+const SHIFT_TABS = ['count', 'money', 'neighbours']
+
 async function openShiftSheet(initialTab = 'count') {
-	shiftTab.value = initialTab
+	// Guarded because a bare `@click="openShiftSheet"` hands this the click
+	// event, and the sheet then opened on a tab that does not exist — rendering
+	// no panel at all, which reads as "Close shift is broken".
+	shiftTab.value = SHIFT_TABS.includes(initialTab) ? initialTab : 'count'
 
 	if (shift.value) {
 		shiftMode.value = 'close'
@@ -562,6 +571,13 @@ async function requestTransfer({ item, qty, warehouse }) {
 const scanned = ref(null)
 const scanQty = ref('1')
 const scanQtyInput = ref(null)
+/** Set when the item on screen has just been scanned again. */
+const scanRepeat = ref(false)
+
+/** How many of the scanned item are already in the cart, if any. */
+const scannedInCart = computed(() =>
+	scanned.value ? cartQtys.value[scanned.value.item_code] || 0 : 0,
+)
 
 /** The last code accepted, so a camera re-reading it does not reopen the sheet. */
 let lastCode = ''
@@ -588,14 +604,23 @@ async function onScan(code) {
 	scanFlash.value++
 	scanResult.value = { ok: true, message: `${item.item_name} · ${fmtMoney(item.price)}` }
 
-	// Scanning the same item again while its sheet is open just counts up, which
-	// is what repeatedly scanning a pile of identical products should mean.
+	// Scanning the same item again does NOT count up.
+	//
+	// It used to, on the theory that repeatedly scanning a pile of identical
+	// products means "one more each time". In practice a scanner fires twice off
+	// one trigger pull often enough that the quantity was silently wrong, and a
+	// number that changes by itself is one nobody checks. So the read is
+	// acknowledged and the quantity is left exactly where the cashier put it —
+	// they say how many, and the field is reselected so typing it is one action.
 	if (scanned.value?.item_code === item.item_code) {
-		scanQty.value = String((Number(scanQty.value) || 0) + 1)
+		scanRepeat.value = true
+		await nextTick()
+		scanQtyInput.value?.select?.()
 		return
 	}
 
 	scanned.value = item
+	scanRepeat.value = false
 	scanQty.value = '1'
 	await nextTick()
 	scanQtyInput.value?.select?.()
@@ -606,9 +631,20 @@ function confirmScan() {
 	const qty = Number(scanQty.value)
 	if (!item || !(qty > 0)) return
 
+	// The stock check applies to a scan as much as to a tap: scanning six of
+	// something with two on the shelf is the same decision as typing it.
+	const inCart = cartQtys.value[item.item_code] || 0
+	if (promptIfShort(item, inCart + qty)) {
+		scanned.value = null
+		scanRepeat.value = false
+		lastCode = ''
+		return
+	}
+
 	cart.add(item, qty)
 	notify(`${qty} × ${item.item_name}`, 'ok')
 	scanned.value = null
+	scanRepeat.value = false
 	// Cleared so the same product can be scanned again straight away as a
 	// separate line decision.
 	lastCode = ''
@@ -616,6 +652,7 @@ function confirmScan() {
 
 function cancelScan() {
 	scanned.value = null
+	scanRepeat.value = false
 	lastCode = ''
 }
 
@@ -668,6 +705,88 @@ function holdSale() {
 	if (ticket) {
 		cartSheet.value = false
 		notify(`Sale ${ticket.id} held`, 'ok')
+	}
+}
+
+/* ---------- quotations ---------- */
+
+/**
+ * A price given now, honoured when the customer comes back.
+ *
+ * Held tickets solved the wrong half of this: they live in the browser and die
+ * with the tab, so "how much for all this?" had no answer that survived the
+ * customer walking out. A Quotation is ERPNext's document for it — it prints, it
+ * carries a validity date, and the back office already knows what one is.
+ */
+const quotationSheet = ref(false)
+const quotationBusy = ref(false)
+
+async function saveQuotation({ validDays, notes }) {
+	if (isEmpty.value) return
+	quotationBusy.value = true
+	try {
+		const res = await createQuotation({
+			items: lines.value,
+			customer: customer.value?.name || null,
+			validDays,
+			notes,
+		})
+		quotationSheet.value = false
+		notify(`Quoted ${fmtMoney(res.grand_total)} — ${res.name}, valid to ${res.valid_till}`, 'ok')
+	} catch (e) {
+		notify(e.message || 'Could not save the quotation', 'warn')
+	} finally {
+		quotationBusy.value = false
+	}
+}
+
+/**
+ * Load a quote into the cart, at the prices it was quoted at.
+ *
+ * Replaces the cart rather than appending: a quote is a whole basket somebody
+ * was given a total for, and mixing it into a half-rung sale produces a number
+ * that matches neither. The current cart is held first when there is one, so
+ * nothing is destroyed by loading a quote onto it by mistake.
+ */
+function loadQuotation(quote) {
+	if (!isEmpty.value) {
+		const ticket = cart.hold()
+		if (ticket) notify(`Current sale held as ${ticket.id}`, 'ok')
+	}
+
+	cart.clear()
+	for (const line of quote.items) {
+		const item = catalog.byCode.get(line.item_code) || {
+			item_code: line.item_code,
+			item_name: line.item_name,
+			price: line.rate,
+			uom: line.uom,
+			stock: 0,
+		}
+		const added = cart.add({ ...item, price: line.rate }, line.qty)
+		// The quoted rate wins over today's price list — that is the promise the
+		// quote made, and re-pricing here would make it a suggestion.
+		if (added) cart.setRate(added.id, line.rate)
+	}
+
+	if (quote.customer_id) {
+		customer.value = { name: quote.customer_id, customer_name: quote.customer }
+		cart.customer = quote.customer
+	}
+
+	quotationSheet.value = false
+
+	// Said out loud rather than dropped: a quote whose lines quietly vanish is
+	// worse than one that names the line it cannot honour.
+	if (quote.unavailable?.length) {
+		notify(
+			`${quote.name} loaded — ${quote.unavailable.length} line${quote.unavailable.length === 1 ? '' : 's'} no longer sellable and left out`,
+			'warn',
+		)
+	} else if (quote.expired) {
+		notify(`${quote.name} loaded — note it expired on ${quote.valid_till}`, 'warn')
+	} else {
+		notify(`${quote.name} loaded at quoted prices`, 'ok')
 	}
 }
 
@@ -755,6 +874,7 @@ useShortcuts({
 		if (shiftSheet.value) return (shiftSheet.value = false)
 		if (stockSheet.value) return (stockSheet.value = false)
 		if (paySheet.value) return (paySheet.value = false)
+		if (quotationSheet.value) return (quotationSheet.value = false)
 		if (heldSheet.value) return (heldSheet.value = false)
 		if (cartSheet.value) return (cartSheet.value = false)
 		if (query.value) return query.value = ''
@@ -846,13 +966,21 @@ useShortcuts({
 				variant="subtle"
 				:icon-left="shift ? LucideSunset : LucideSunrise"
 				:label="shift ? 'Close shift' : 'Open shift'"
-				@click="openShiftSheet"
+				@click="openShiftSheet()"
 			/>
 			<Button
 				variant="subtle"
 				:icon-left="LucideLayers"
 				:label="held.length ? `Held (${held.length})` : 'Held'"
 				@click="heldSheet = true"
+			/>
+			<!-- Beside Held on purpose: both answer "keep this basket for later",
+			     and the difference is only whether it has to survive the tab. -->
+			<Button
+				variant="subtle"
+				:icon-left="LucideFileText"
+				label="Quotes"
+				@click="quotationSheet = true"
 			/>
 			<Button
 				variant="subtle"
@@ -936,7 +1064,7 @@ useShortcuts({
 		     false". -->
 		<Dialog
 			:model-value="!!scanned"
-			:options="{ title: 'Scanned', size: 'sm' }"
+			:options="{ title: scanRepeat ? 'Already scanned' : 'Scanned', size: 'sm' }"
 			@update:model-value="$event || cancelScan()"
 		>
 			<template #body-content>
@@ -976,9 +1104,21 @@ useShortcuts({
 							+
 						</button>
 					</div>
-					<p class="text-p-xs text-ink-gray-5">
-						Scanning this item again adds one more. Enter accepts.
+					<!-- The quantity is the cashier's to set, and nothing changes it
+					     behind them. A second read of the same label says so rather
+					     than counting up: scanners double-fire off one trigger pull
+					     often enough that a self-incrementing number is one nobody
+					     can trust. -->
+					<p
+						v-if="scanRepeat"
+						class="rounded-lg bg-surface-amber-2 px-3 py-2 text-p-sm font-medium text-ink-amber-3"
+					>
+						Already scanned — set the quantity you want.
 					</p>
+					<p v-if="scannedInCart" class="text-p-xs text-ink-gray-5">
+						{{ scannedInCart }} already in the cart; this adds to that.
+					</p>
+					<p class="text-p-xs text-ink-gray-5">Enter accepts.</p>
 				</div>
 			</template>
 			<template #actions>
@@ -1069,6 +1209,15 @@ useShortcuts({
 			<div class="flex flex-col gap-2 px-4 pb-5">
 				<div class="flex items-center justify-between gap-2">
 					<FormControl v-model="recentMine" type="checkbox" label="Only mine" />
+					<!-- A list scoped to a shift and a list that is simply empty look
+					     identical, so the scope is a control rather than a silent
+					     filter. -->
+					<FormControl
+						v-model="recentThisShift"
+						type="checkbox"
+						:label="recent.shift ? 'This shift only' : 'This shift only (none open)'"
+						:disabled="!recent.shift && recentThisShift"
+					/>
 					<span class="tabular text-p-sm text-ink-gray-6">
 						{{ recent.totals.count || 0 }} sales · {{ fmtMoney(recent.totals.revenue || 0) }}
 					</span>
@@ -1117,6 +1266,7 @@ useShortcuts({
 			:total="total"
 			:customer="customer"
 			:mpesa-channels="mpesaChannels.length ? mpesaChannels : undefined"
+			:methods="paymentMethods"
 			@complete="completeSale"
 			@pick-customer="pickCustomer(true)"
 		/>
@@ -1144,6 +1294,16 @@ useShortcuts({
 		/>
 
 		<ScanSheet v-model="scanSheet" :last-result="scanResult" @scan="onCameraScan" />
+
+		<QuotationSheet
+			v-model="quotationSheet"
+			:lines="lines"
+			:total="total"
+			:customer="customer"
+			:busy="quotationBusy"
+			@save="saveQuotation"
+			@load="loadQuotation"
+		/>
 
 		<!-- Placeholder: the real banner is rendered inline above the grid so it
 		     pushes content rather than covering it. See the strip after TopBar. -->

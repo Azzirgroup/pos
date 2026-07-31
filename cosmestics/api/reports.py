@@ -106,6 +106,18 @@ REPORTS = [
 		"hint": "What was repriced, and by whom",
 	},
 	{
+		"key": "sales_returns",
+		"label": "Sales returns",
+		"group": "Sales",
+		"hint": "What customers brought back, and what it cost you",
+	},
+	{
+		"key": "neighbour_returns",
+		"label": "Returns to neighbours",
+		"group": "Purchasing",
+		"hint": "Stock sent back to the shop next door",
+	},
+	{
 		"key": "cancelled_docs",
 		"label": "Cancelled & amended",
 		"group": "Audit",
@@ -141,6 +153,8 @@ def run(report: str, days: int = 30, warehouse: str | None = None):
 		"shift_history": _shift_history,
 		"audit_trail": _audit_trail,
 		"price_changes": _price_changes,
+		"sales_returns": _sales_returns,
+		"neighbour_returns": _neighbour_returns,
 		"cancelled_docs": _cancelled_docs,
 		"stock_movement": _stock_movement,
 	}.get(report)
@@ -548,6 +562,92 @@ def _price_changes(days, _wh):
 		],
 		"rows": rows,
 		"totals": {"changes": len(rows)},
+	}
+
+
+def _sales_returns(days, _wh):
+	"""Goods customers brought back.
+
+	A return in ERPNext is a Sales Invoice with `is_return=1` and negative
+	quantities, so the figures come back negative. They are left that way rather
+	than flipped: a return *is* a reduction, and a screen full of positive
+	numbers under a heading called "returns" is the kind of thing that gets added
+	to revenue by mistake.
+
+	`return_against` names the original sale, which is the column anybody
+	investigating a return actually needs.
+	"""
+	start, end = _window(days)
+	rows = frappe.db.sql(
+		"""select si.posting_date as day, si.name, si.customer,
+		          si.return_against, si.grand_total, si.total_qty as qty,
+		          si.owner as user
+		   from `tabSales Invoice` si
+		   where si.docstatus = 1 and si.is_return = 1
+		     and si.posting_date between %s and %s
+		   order by si.posting_date desc, si.creation desc limit 300""",
+		(start, end),
+		as_dict=True,
+	)
+	return {
+		"columns": [
+			_text("Date", "day"),
+			_text("Credit note", "name"),
+			_text("Customer", "customer"),
+			_text("Against", "return_against"),
+			_text("Taken by", "user"),
+			_num("Units", "qty"),
+			_money("Value", "grand_total"),
+		],
+		"rows": rows,
+		"totals": {
+			"returns": len(rows),
+			"value": flt(sum(flt(r.grand_total) for r in rows)),
+			"units": flt(sum(flt(r.qty) for r in rows)),
+		},
+	}
+
+
+def _neighbour_returns(days, _wh):
+	"""Stock sent back to the shop it was bought from.
+
+	Scoped to the neighbour supplier group, because a return to a wholesaler is
+	ordinary purchasing and a return to the shop next door is the till undoing
+	something it did mid-sale — different people chase them.
+	"""
+	start, end = _window(days)
+	group = frappe.db.get_single_value("Cosmestics POS Settings", "neighbour_supplier_group")
+	if not group:
+		return {"columns": [_text("Supplier", "supplier")], "rows": [], "totals": {}}
+
+	rows = frappe.db.sql(
+		"""select pi.posting_date as day, pi.name, pi.supplier,
+		          pi.return_against, pi.grand_total, pi.total_qty as qty,
+		          pi.owner as user
+		   from `tabPurchase Invoice` pi
+		   join tabSupplier s on s.name = pi.supplier
+		   where pi.docstatus = 1 and pi.is_return = 1
+		     and s.supplier_group = %s
+		     and pi.posting_date between %s and %s
+		   order by pi.posting_date desc, pi.creation desc limit 300""",
+		(group, start, end),
+		as_dict=True,
+	)
+	return {
+		"columns": [
+			_text("Date", "day"),
+			_text("Debit note", "name"),
+			_text("Shop", "supplier"),
+			_text("Against", "return_against"),
+			_text("Sent by", "user"),
+			_num("Units", "qty"),
+			_money("Value", "grand_total"),
+		],
+		"rows": rows,
+		"totals": {
+			"returns": len(rows),
+			"value": flt(sum(flt(r.grand_total) for r in rows)),
+		},
 	}
 
 

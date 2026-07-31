@@ -7,10 +7,11 @@ import LucideBoxes from '~icons/lucide/boxes'
 import LucideTruck from '~icons/lucide/truck'
 import LucideReceipt from '~icons/lucide/receipt-text'
 import LucideLandmark from '~icons/lucide/landmark'
-import LucideTriangleAlert from '~icons/lucide/triangle-alert'
 import LucideUsers from '~icons/lucide/users'
 import LucideSettings from '~icons/lucide/settings-2'
 import LucideChartColumn from '~icons/lucide/chart-column'
+import LucideFactory from '~icons/lucide/factory'
+import LucideClock from '~icons/lucide/clock'
 
 const props = defineProps({
 	/** 'icons' | 'labels'. 'hidden' is handled by the shell not rendering us. */
@@ -30,11 +31,14 @@ const GROUPS = [
 	[
 		{ to: '/dashboard', icon: LucideHome, label: 'Dashboard' },
 		{ to: '/pos', icon: LucideShoppingCart, label: 'Point of sale' },
+		// Directly under the till: a shift belongs to the counter, and the
+		// person closing one has usually just come from it.
+		{ to: '/previous-shifts', icon: LucideClock, label: 'Shifts' },
 	],
 	[
 		{ to: '/inventory', icon: LucideBoxes, label: 'Inventory' },
-		{ to: '/reorder', icon: LucideTriangleAlert, label: 'Reorder levels' },
 		{ to: '/purchasing', icon: LucideTruck, label: 'Purchasing' },
+		{ to: '/suppliers', icon: LucideFactory, label: 'Suppliers' },
 	],
 	[
 		{ to: '/sales', icon: LucideReceipt, label: 'Sales' },

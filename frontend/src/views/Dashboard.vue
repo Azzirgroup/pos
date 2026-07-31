@@ -9,6 +9,8 @@ import AttentionList from '@/components/AttentionList.vue'
 import ChartCard from '@/components/charts/ChartCard.vue'
 import TrendChart from '@/components/charts/TrendChart.vue'
 import BarList from '@/components/charts/BarList.vue'
+import DonutChart from '@/components/charts/DonutChart.vue'
+import PairedBars from '@/components/charts/PairedBars.vue'
 import ShareBar from '@/components/charts/ShareBar.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 
@@ -152,6 +154,61 @@ const itemBars = computed(() =>
 	})),
 )
 
+/**
+ * Which sections are showing figures instead of their chart.
+ *
+ * Per section rather than one page-wide switch: a manager reading a bar chart
+ * of spend still wants the exact receivable, and a single toggle would make
+ * them give up the one to see the other.
+ */
+const asTable = ref({})
+
+function toggleTable(key) {
+	asTable.value = { ...asTable.value, [key]: !asTable.value[key] }
+}
+
+// Cleared when the tab changes: section keys repeat across tabs, and a toggle
+// left on would show the wrong section as a table.
+watch(tab, () => (asTable.value = {}))
+
+/**
+ * A section's rows in the shape BarList wants.
+ *
+ * The server names which column is the label and which is the magnitude; this
+ * only reshapes. The hint is the secondary figure — "12 sales" under a revenue
+ * bar — which is what stops a bar chart being less informative than the table
+ * it replaced.
+ */
+function barRows(section) {
+	const c = section.chart
+	const hintCol = c.hint ? section.columns.find((col) => col.key === c.hint) : null
+	return (section.rows || []).map((row) => ({
+		label: row[c.label] ?? '—',
+		value: Number(row[c.value]) || 0,
+		hint: hintCol
+			? `${Number(row[c.hint] ?? 0).toLocaleString()} ${hintCol.label.toLowerCase()}`
+			: null,
+	}))
+}
+
+/** Two measures per row, for the relationship charts. */
+function pairedRows(section) {
+	const c = section.chart
+	return (section.rows || []).map((row) => ({
+		label: row[c.label] ?? '—',
+		a: Number(row[c.a]) || 0,
+		b: Number(row[c.b]) || 0,
+	}))
+}
+
+/** Oldest first: a line over time drawn newest-first runs backwards. */
+function trendPoints(section) {
+	const c = section.chart
+	return [...(section.rows || [])]
+		.reverse()
+		.map((row) => ({ ...row, day: row[c.label] }))
+}
+
 const collected = computed(() =>
 	(data.value?.payment_mix || []).reduce((sum, p) => sum + Number(p.amount || 0), 0),
 )
@@ -230,12 +287,54 @@ const attention = computed(() => {
 								{{ section.subtitle }}
 							</p>
 						</header>
-						<!-- Also a list. Some of these carry seven columns, which in half
-						     a page is a sideways scroll however it is sliced. The
-						     dashboard is a set of shortlists; the full grid for any of
-						     them is the module screen, which is full width and has row
-						     actions. -->
+						<!-- Drawn where the server named a magnitude column, listed
+						     otherwise. A bar is faster to compare down than a column
+						     of figures, and the exact numbers stay one tap away. The
+						     sections with no chart are the ones where every row
+						     matters equally and there is nothing to rank. -->
+						<template v-if="section.chart && section.rows?.length">
+							<div class="flex justify-end px-3 pt-2">
+								<button
+									class="text-p-xs font-medium text-ink-gray-5 transition-colors hover:text-ink-gray-8"
+									@click="toggleTable(section.key)"
+								>
+									{{ asTable[section.key] ? 'Show chart' : 'Show figures' }}
+								</button>
+							</div>
+							<AttentionList
+								v-if="asTable[section.key]"
+								:columns="section.columns"
+								:rows="section.rows"
+							/>
+							<BarList
+								v-else-if="section.chart.kind === 'bar'"
+								class="px-3 pb-3 pt-1"
+								:rows="barRows(section)"
+								:type="section.chart.type || 'currency'"
+							/>
+							<DonutChart
+								v-else-if="section.chart.kind === 'donut'"
+								class="px-3 pb-3 pt-2"
+								:rows="barRows(section)"
+								:type="section.chart.type || 'currency'"
+							/>
+							<PairedBars
+								v-else-if="section.chart.kind === 'paired'"
+								class="px-3 pb-3 pt-2"
+								:rows="pairedRows(section)"
+								:a-label="section.chart.a_label"
+								:b-label="section.chart.b_label"
+								:type="section.chart.type || 'number'"
+							/>
+							<TrendChart
+								v-else
+								class="px-3 pb-3 pt-1"
+								:points="trendPoints(section)"
+								:value-key="section.chart.value"
+							/>
+						</template>
 						<AttentionList
+							v-else
 							:columns="section.columns"
 							:rows="section.rows"
 							empty-text="Nothing in this period."
@@ -304,7 +403,21 @@ const attention = computed(() => {
 				</ChartCard>
 			</div>
 
-			<div v-if="attention.length" class="mt-3 grid items-start gap-3 px-4 lg:grid-cols-3">
+			<!-- Columns follow the count, so the row always fills the width. At a
+			     fixed three columns a period with two attention lists left a third
+			     of the page empty and the two cards needlessly narrow — which is
+			     what forced their contents to wrap. -->
+			<div
+				v-if="attention.length"
+				class="mt-3 grid items-start gap-3 px-4"
+				:class="
+					attention.length === 1
+						? 'grid-cols-1'
+						: attention.length === 2
+							? 'lg:grid-cols-2'
+							: 'lg:grid-cols-3'
+				"
+			>
 				<section
 					v-for="section in attention"
 					:key="section.key"

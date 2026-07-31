@@ -14,13 +14,16 @@
  */
 export const MODULE_TABS = {
 	inventory: [
+		{ label: 'Items', to: '/masters/item' },
+		{ label: 'Item price', to: '/pricing' },
 		{ label: 'Stock levels', to: '/inventory' },
-		{ label: 'Reorder levels', to: '/reorder' },
-		{ label: 'Price updates', to: '/pricing' },
 		{ label: 'Barcodes', to: '/barcodes' },
-		{ label: 'Stock entries', to: '/documents/stock-entry' },
 		{ label: 'Stock counts', to: '/documents/stock-reconciliation' },
-		{ label: 'Stock movement', to: '/inventory/movement' },
+		// Filed here rather than under Purchasing because the person who notices
+		// the shelf is empty is the one who raises the request; it appears in both
+		// strips for that reason.
+		{ label: 'Material requests', to: '/documents/material-request' },
+		{ label: 'Reorder levels', to: '/reorder' },
 	],
 	purchasing: [
 		{ label: 'Overview', to: '/purchasing' },
@@ -29,7 +32,7 @@ export const MODULE_TABS = {
 		{ label: 'Receipts', to: '/documents/purchase-receipt' },
 		{ label: 'Bills', to: '/documents/purchase-invoice' },
 		{ label: 'Landed costs', to: '/documents/landed-cost-voucher' },
-		{ label: 'Suppliers', to: '/masters/supplier' },
+		{ label: 'Suppliers', to: '/suppliers' },
 	],
 	sales: [
 		{ label: 'Overview', to: '/sales' },
@@ -78,12 +81,13 @@ export function moduleFor(path) {
 	if (path.startsWith('/documents/')) {
 		return DOCUMENT_MODULE[path.split('/')[2]] || null
 	}
-	if (path.startsWith('/masters/supplier')) return 'purchasing'
+	if (path.startsWith('/suppliers')) return 'purchasing'
 	if (path.startsWith('/masters/account')) return 'accounts'
 	if (
 		path.startsWith('/inventory') ||
 		path.startsWith('/reorder') ||
 		path.startsWith('/pricing') ||
+		path.startsWith('/masters/item') ||
 		path.startsWith('/barcodes')
 	)
 		return 'inventory'

@@ -484,8 +484,73 @@ def _negative_stock_rows() -> dict:
 # --------------------------------------------------------------------------
 
 
-def _section(key, title, subtitle, columns, rows):
-	return {"key": key, "title": title, "subtitle": subtitle, "columns": columns, "rows": rows}
+def _section(key, title, subtitle, columns, rows, chart=None):
+	"""One tab section.
+
+	`chart` is an optional drawing hint — {kind, label, value, hint} naming which
+	columns to plot. The front end draws it and keeps the table behind a toggle,
+	so nothing is lost: a bar is faster to compare across, and the exact figures
+	are one tap away for anyone who needs them.
+
+	Declared here rather than in the browser because the server is what knows
+	which column is the magnitude. A section with no `chart` simply renders as a
+	list, which is right for the ones where every row matters equally.
+	"""
+	return {
+		"key": key,
+		"title": title,
+		"subtitle": subtitle,
+		"columns": columns,
+		"rows": rows,
+		"chart": chart,
+	}
+
+
+def _bar(label, value, hint=None, kind="currency"):
+	"""A horizontal bar chart of `value`, labelled by `label`.
+
+	For rankings — "which is biggest" — where comparing lengths against a shared
+	baseline is exactly the question.
+	"""
+	return {"kind": "bar", "label": label, "value": value, "hint": hint, "type": kind}
+
+
+def _donut(label, value, kind="currency"):
+	"""A ring showing how a whole divides.
+
+	For composition — which account holds the cash, which tender the money came
+	through. Deliberately not used for rankings: angles are hard to compare when
+	slices are close, and a bar answers that better.
+	"""
+	return {"kind": "donut", "label": label, "value": value, "type": kind}
+
+
+def _paired(label, a, b, a_label, b_label, kind="number"):
+	"""Two measures per row, for a relationship rather than a magnitude.
+
+	Received against issued is the case this exists for: a single bar of the net
+	figure cannot distinguish "nothing moved" from "a hundred in and a hundred
+	out", and those are very different weeks.
+	"""
+	return {
+		"kind": "paired",
+		"label": label,
+		"a": a,
+		"b": b,
+		"a_label": a_label,
+		"b_label": b_label,
+		"type": kind,
+	}
+
+
+def _line(label, value):
+	"""A line over time. `label` must be a date column.
+
+	Named `_line` rather than `_trend` because `_trend(start, end)` already
+	builds the overview's daily series — two functions with one name would have
+	silently shadowed it and broken the front page.
+	"""
+	return {"kind": "trend", "label": label, "value": value}
 
 
 def _col(label, key, kind="text"):
@@ -573,6 +638,14 @@ def sales(days: int = DEFAULT_DAYS, branch: str | None = None) -> dict:
 	)
 
 	invoices = cint(totals.invoices)
+	# Derived from the section rows above rather than re-queried: these tiles
+	# describe the same slice the tables show, so computing them from anything
+	# else would let the headline and the detail disagree.
+	best_day = max(by_day, key=lambda d: flt(d.revenue)) if by_day else None
+	best_cashier = by_cashier[0] if by_cashier else None
+	units = sum(flt(i.qty) for i in by_item)
+	collected = flt(totals.revenue) - flt(totals.outstanding)
+
 	return {
 		"period": {"from": str(start), "to": str(end), "days": days},
 		"branch": branch,
@@ -594,6 +667,39 @@ def sales(days: int = DEFAULT_DAYS, branch: str | None = None) -> dict:
 				"icon": "hourglass",
 				"tone": "warn" if flt(totals.outstanding) else "good",
 			},
+			{
+				"key": "collected",
+				"label": "Collected",
+				"value": collected,
+				"type": "currency",
+				"icon": "wallet",
+				"hint": f"{collected / flt(totals.revenue) * 100:.0f}% of billed"
+				if flt(totals.revenue)
+				else None,
+			},
+			{
+				"key": "units",
+				"label": "Items sold",
+				"value": units,
+				"type": "number",
+				"icon": "package",
+			},
+			{
+				"key": "per_day",
+				"label": "Busiest day",
+				"value": str(best_day["day"]) if best_day else "—",
+				"type": "text",
+				"icon": "calendar",
+				"hint": f"{flt(best_day['revenue']):,.0f}" if best_day else None,
+			},
+			{
+				"key": "top_cashier",
+				"label": "Top cashier",
+				"value": best_cashier["cashier"] if best_cashier else "—",
+				"type": "text",
+				"icon": "user",
+				"hint": f"{flt(best_cashier['revenue']):,.0f}" if best_cashier else None,
+			},
 		],
 		"sections": [
 			_section(
@@ -602,6 +708,9 @@ def sales(days: int = DEFAULT_DAYS, branch: str | None = None) -> dict:
 				"Newest first",
 				[_col("Date", "day"), _col("Sales", "invoices", "number"), _col("Revenue", "revenue", "currency")],
 				by_day,
+				# Reversed for the chart: the table reads newest-first, but a line
+				# over time has to run left to right or it draws the period backwards.
+				_line("day", "revenue"),
 			),
 			_section(
 				"by_cashier",
@@ -609,6 +718,7 @@ def sales(days: int = DEFAULT_DAYS, branch: str | None = None) -> dict:
 				"Who rang it up",
 				[_col("Cashier", "cashier"), _col("Sales", "invoices", "number"), _col("Revenue", "revenue", "currency")],
 				by_cashier,
+				_bar("cashier", "revenue", hint="invoices"),
 			),
 			_section(
 				"by_item",
@@ -616,6 +726,7 @@ def sales(days: int = DEFAULT_DAYS, branch: str | None = None) -> dict:
 				"Net of tax",
 				[_col("Item", "item_name"), _col("Qty", "qty", "number"), _col("Revenue", "revenue", "currency")],
 				by_item,
+				_bar("item_name", "revenue", hint="qty"),
 			),
 		],
 	}
@@ -683,6 +794,28 @@ def branches(days: int = DEFAULT_DAYS) -> dict:
 				"type": "number",
 				"icon": "unlock",
 			},
+			{
+				"key": "per_branch",
+				"label": "Average per branch",
+				"value": revenue / len(rows) if rows else 0,
+				"type": "currency",
+				"icon": "landmark",
+			},
+			{
+				"key": "quietest",
+				"label": "Quietest branch",
+				"value": rows[-1]["branch"] if rows else "—",
+				"type": "text",
+				"icon": "trending-down",
+				"hint": f"{flt(rows[-1]['revenue']):,.0f}" if rows else None,
+			},
+			{
+				"key": "branch_sales",
+				"label": "Sales across branches",
+				"value": sum(cint(r["invoices"]) for r in rows),
+				"type": "number",
+				"icon": "receipt",
+			},
 		],
 		"sections": [
 			_section(
@@ -699,6 +832,7 @@ def branches(days: int = DEFAULT_DAYS) -> dict:
 					_col("Customers", "customers", "number"),
 				],
 				rows,
+				_donut("branch", "revenue"),
 			),
 			_section(
 				"shifts",
@@ -710,6 +844,7 @@ def branches(days: int = DEFAULT_DAYS) -> dict:
 					_col("Over / short", "difference", "currency"),
 				],
 				shifts,
+				_bar("branch", "difference", hint="shifts"),
 			),
 		],
 	}
@@ -777,6 +912,29 @@ def warehouses(days: int = DEFAULT_DAYS, warehouse: str | None = None) -> dict:
 				"icon": "alert",
 				"tone": "bad" if negative else "good",
 			},
+			{
+				"key": "biggest",
+				"label": "Largest holding",
+				"value": holdings[0]["warehouse"] if holdings else "—",
+				"type": "text",
+				"icon": "boxes",
+				"hint": f"{flt(holdings[0]['value']):,.0f}" if holdings else None,
+			},
+			{
+				"key": "avg_location",
+				"label": "Average per location",
+				"value": value / len(holdings) if holdings else 0,
+				"type": "currency",
+				"icon": "package",
+			},
+			{
+				"key": "below_reorder",
+				"label": "Below reorder level",
+				"value": _stock_position()["below_reorder"],
+				"type": "number",
+				"icon": "alert",
+				"tone": "warn" if _stock_position()["below_reorder"] else "good",
+			},
 		],
 		"sections": [
 			_section(
@@ -790,6 +948,7 @@ def warehouses(days: int = DEFAULT_DAYS, warehouse: str | None = None) -> dict:
 					_col("Value", "value", "currency"),
 				],
 				holdings,
+				_donut("warehouse", "value"),
 			),
 			_section(
 				"movement",
@@ -802,6 +961,7 @@ def warehouses(days: int = DEFAULT_DAYS, warehouse: str | None = None) -> dict:
 					_col("Net", "net", "number"),
 				],
 				movement,
+				_paired("warehouse", "received", "issued", "Received", "Issued"),
 			),
 			_section(
 				"negative",
@@ -809,6 +969,7 @@ def warehouses(days: int = DEFAULT_DAYS, warehouse: str | None = None) -> dict:
 				"Sold but never received — a ledger problem, not a shelf one",
 				[_col("Item", "item_name"), _col("Warehouse", "warehouse"), _col("On hand", "actual_qty", "number")],
 				negative,
+				_bar("item_name", "actual_qty", hint=None, kind="number"),
 			),
 		],
 	}
@@ -887,6 +1048,29 @@ def procurement(days: int = DEFAULT_DAYS) -> dict:
 				"icon": "package",
 				"tone": "warn" if unbilled else "good",
 			},
+			{
+				"key": "suppliers",
+				"label": "Suppliers used",
+				"value": len(spend),
+				"type": "number",
+				"icon": "truck",
+			},
+			{
+				"key": "top_supplier",
+				"label": "Biggest supplier",
+				"value": spend[0]["supplier"] if spend else "—",
+				"type": "text",
+				"icon": "landmark",
+				"hint": f"{flt(spend[0]['spend']):,.0f}" if spend else None,
+			},
+			{
+				"key": "requests",
+				"label": "Requests outstanding",
+				"value": len(requests),
+				"type": "number",
+				"icon": "clipboard",
+				"tone": "warn" if requests else "good",
+			},
 		],
 		"sections": [
 			_section(
@@ -900,6 +1084,7 @@ def procurement(days: int = DEFAULT_DAYS) -> dict:
 					_col("Still owed", "owed", "currency"),
 				],
 				spend,
+				_donut("supplier", "spend"),
 			),
 			_section(
 				"orders",
@@ -915,6 +1100,7 @@ def procurement(days: int = DEFAULT_DAYS) -> dict:
 					_col("Total", "grand_total", "currency"),
 				],
 				orders,
+				_bar("supplier", "grand_total", hint="per_received"),
 			),
 			_section(
 				"unbilled",
@@ -928,6 +1114,7 @@ def procurement(days: int = DEFAULT_DAYS) -> dict:
 					_col("Value", "grand_total", "currency"),
 				],
 				unbilled,
+				_bar("supplier", "grand_total", hint="per_billed"),
 			),
 			_section(
 				"requests",
@@ -1017,6 +1204,36 @@ def accounts(days: int = DEFAULT_DAYS) -> dict:
 				"icon": "trending-up",
 				"tone": "good" if net >= 0 else "bad",
 			},
+			{
+				"key": "customers_owing",
+				"label": "Customers owing",
+				"value": len(receivable),
+				"type": "number",
+				"icon": "users",
+				"hint": f"{money['overdue_count']} overdue" if money["overdue_count"] else None,
+			},
+			{
+				"key": "suppliers_owed",
+				"label": "Suppliers owed",
+				"value": len(payable),
+				"type": "number",
+				"icon": "truck",
+			},
+			{
+				"key": "biggest_debtor",
+				"label": "Biggest debtor",
+				"value": receivable[0]["party"] if receivable else "—",
+				"type": "text",
+				"icon": "user",
+				"hint": f"{flt(receivable[0]['outstanding']):,.0f}" if receivable else None,
+			},
+			{
+				"key": "accounts_held",
+				"label": "Cash and bank accounts",
+				"value": len(balances),
+				"type": "number",
+				"icon": "landmark",
+			},
 		],
 		"sections": [
 			_section(
@@ -1025,6 +1242,7 @@ def accounts(days: int = DEFAULT_DAYS) -> dict:
 				"Balance to date, not just this period",
 				[_col("Account", "account"), _col("Type", "type"), _col("Balance", "balance", "currency")],
 				balances,
+				_donut("account", "balance"),
 			),
 			_section(
 				"receivable",
@@ -1032,6 +1250,7 @@ def accounts(days: int = DEFAULT_DAYS) -> dict:
 				"Biggest first",
 				[_col("Customer", "party"), _col("Invoices", "invoices", "number"), _col("Owes", "outstanding", "currency")],
 				receivable,
+				_bar("party", "outstanding", hint="invoices"),
 			),
 			_section(
 				"payable",
@@ -1039,6 +1258,7 @@ def accounts(days: int = DEFAULT_DAYS) -> dict:
 				"Biggest first",
 				[_col("Supplier", "party"), _col("Invoices", "invoices", "number"), _col("We owe", "outstanding", "currency")],
 				payable,
+				_bar("party", "outstanding", hint="invoices"),
 			),
 		],
 	}

@@ -12,6 +12,9 @@ import LucideAlertTriangle from '~icons/lucide/alert-triangle'
 import LucideX from '~icons/lucide/x'
 import LucideSplit from '~icons/lucide/split'
 import LucideChevronLeft from '~icons/lucide/chevron-left'
+import LucideBuilding from '~icons/lucide/building-2'
+import LucideHandCoins from '~icons/lucide/hand-coins'
+import LucideWallet from '~icons/lucide/wallet'
 
 const props = defineProps({
 	modelValue: { type: Boolean, default: false },
@@ -32,39 +35,89 @@ const props = defineProps({
 			{ key: 'mpesa_withdraw', label: 'Withdraw' },
 		],
 	},
+	/**
+	 * Every tender this till accepts, from the server — cash, each M-Pesa
+	 * channel, card, and any other Mode of Payment on the POS Profile.
+	 */
+	methods: { type: Array, default: () => [] },
 })
 
 const emit = defineEmits(['update:modelValue', 'complete', 'pick-customer'])
 
-const METHODS = [
-	{ key: 'cash', label: 'Cash', icon: LucideBanknote },
-	{ key: 'mpesa', label: 'M-Pesa', icon: LucideSmartphone },
-	{ key: 'card', label: 'Card', icon: LucideCreditCard },
-	{ key: 'credit', label: 'Credit', icon: LucideNotebookPen },
+/**
+ * Icons by the server's name for them, so a tender it invents gets a sensible
+ * one rather than a blank square.
+ */
+const TENDER_ICONS = {
+	banknote: LucideBanknote,
+	smartphone: LucideSmartphone,
+	building: LucideBuilding,
+	'hand-coins': LucideHandCoins,
+	'credit-card': LucideCreditCard,
+	wallet: LucideWallet,
+}
+
+/**
+ * Every tender as its own button.
+ *
+ * M-Pesa used to be one button that expanded into three, on the reasoning that
+ * a cashier knows it is M-Pesa before they know which kind. In practice that
+ * cost a second tap on the most common non-cash payment in the shop, and the
+ * channel — the thing that decides which account the money lands in, and
+ * therefore whether the shift reconciles — was one level down where it was easy
+ * to leave on whatever it defaulted to. Flat, the choice is made once and it is
+ * visible.
+ *
+ * Falls back to the built-in four only until the server's list arrives: a till
+ * that cannot take payment because a lookup is slow is worse than one showing a
+ * button it might not have.
+ */
+const FALLBACK = [
+	{ key: 'cash', label: 'Cash', icon: 'banknote', kind: 'cash' },
+	{ key: 'mpesa_send', label: 'Send Money', icon: 'smartphone', kind: 'mobile' },
+	{ key: 'mpesa_paybill', label: 'Paybill', icon: 'building', kind: 'mobile' },
+	{ key: 'mpesa_withdraw', label: 'Withdraw', icon: 'hand-coins', kind: 'mobile' },
+	{ key: 'card', label: 'Card', icon: 'credit-card', kind: 'card' },
 ]
+
+/** Credit is not a Mode of Payment — it is the absence of one — so it is
+ *  appended here rather than expected from the server. */
+const CREDIT = { key: 'credit', label: 'Credit', icon: 'notebook', kind: 'credit' }
+
+const tenders = computed(() => [
+	...(props.methods.length ? props.methods : FALLBACK),
+	CREDIT,
+])
+
+function tenderIcon(tender) {
+	return tender.key === 'credit' ? LucideNotebookPen : TENDER_ICONS[tender.icon] || LucideWallet
+}
 
 const method = ref('cash')
 const tendered = ref('')
 const reference = ref('')
 const tenderedInput = ref(null)
 
-/**
- * Which M-Pesa channel the money came through.
- *
- * M-Pesa is one button because the cashier knows it is M-Pesa before they know
- * which kind; the channel is the second, smaller decision. They settle into
- * different accounts, so the choice has to reach the invoice — sending them all
- * as plain "mpesa" is what left the shift unable to reconcile.
- */
-const mpesaChannel = ref('mpesa_send')
+/** The tender on screen, and therefore what the server books against. */
+const activeTender = computed(
+	() => tenders.value.find((t) => t.key === method.value) || tenders.value[0] || null,
+)
 
-const isMpesa = computed(() => method.value === 'mpesa')
+/** Each channel is its own button now, so the key is simply the selection. */
+const tenderKey = computed(() => method.value)
 
-/** The key the server should book this against. */
-const tenderKey = computed(() => (isMpesa.value ? mpesaChannel.value : method.value))
+/** Cash is the only tender that takes more than is owed and gives change back. */
+const isCash = computed(() => activeTender.value?.kind === 'cash')
 
-const channelLabel = computed(
-	() => props.mpesaChannels.find((c) => c.key === mpesaChannel.value)?.label || 'M-Pesa',
+/** Everything that settles through a machine or a phone carries a reference. */
+const needsReference = computed(() =>
+	['mobile', 'card', 'other'].includes(activeTender.value?.kind),
+)
+
+const referenceLabel = computed(() =>
+	activeTender.value?.kind === 'card'
+		? 'Card reference'
+		: `${activeTender.value?.label || 'Payment'} code`,
 )
 
 const tenderedNum = computed(() => Number(tendered.value) || 0)
@@ -160,7 +213,7 @@ const canComplete = computed(() => {
 		return isPartial.value ? Boolean(props.customer) : true
 	}
 
-	if (method.value === 'cash') {
+	if (isCash.value) {
 		if (tenderedNum.value <= 0) return false
 		return isPartial.value ? Boolean(props.customer) : true
 	}
@@ -193,8 +246,7 @@ watch(
 	() => props.modelValue,
 	async (open) => {
 		if (!open) return
-		method.value = 'cash'
-		mpesaChannel.value = props.mpesaChannels[0]?.key || 'mpesa_send'
+		method.value = tenders.value[0]?.key || 'cash'
 		tendered.value = ''
 		reference.value = ''
 		splitMode.value = false
@@ -229,8 +281,8 @@ function complete() {
 		// Mode of Payment and therefore which account the money lands in.
 		method: tenderKey.value,
 		// A credit sale collects nothing now.
-		tendered: isCredit.value ? 0 : method.value === 'cash' ? tenderedNum.value : props.total,
-		change: method.value === 'cash' ? change.value : 0,
+		tendered: isCredit.value ? 0 : isCash.value ? tenderedNum.value : props.total,
+		change: isCash.value ? change.value : 0,
 		// Reported so the confirmation can name the balance. The server derives
 		// the real outstanding from the invoice either way — this is what the
 		// cashier was told, not what is booked.
@@ -425,12 +477,13 @@ function goBack() {
 				Split or part-pay
 			</button>
 
-			<!-- Method -->
-			<div v-if="!splitMode" class="grid grid-cols-4 gap-2">
+			<!-- Every tender, one tap. Three across so six or seven fit without
+			     the labels shrinking to initials. -->
+			<div v-if="!splitMode" class="grid grid-cols-3 gap-2">
 				<button
-					v-for="m in METHODS"
+					v-for="m in tenders"
 					:key="m.key"
-					class="flex min-h-touch flex-col items-center gap-1 rounded-xl border py-2 transition-colors"
+					class="flex min-h-touch flex-col items-center gap-1 rounded-xl border px-1 py-2 transition-colors"
 					:class="
 						method === m.key
 							? 'border-outline-gray-4 bg-surface-gray-3 text-ink-gray-9'
@@ -438,33 +491,9 @@ function goBack() {
 					"
 					@click="method = m.key"
 				>
-					<component :is="m.icon" class="h-5 w-5" />
-					<span class="text-p-sm font-medium">{{ m.label }}</span>
+					<component :is="tenderIcon(m)" class="h-5 w-5 shrink-0" />
+					<span class="w-full truncate text-center text-p-sm font-medium">{{ m.label }}</span>
 				</button>
-			</div>
-
-			<!-- Which M-Pesa. A second, smaller decision than "is it M-Pesa", and
-			     only asked once that one is made — but it has to be asked, because
-			     the three settle into different accounts. -->
-			<div v-if="!splitMode && isMpesa && mpesaChannels.length > 1" class="flex flex-col gap-1.5">
-				<span class="text-p-sm font-medium text-ink-gray-7">How did it come in?</span>
-				<!-- Flex rather than a computed grid-cols-N: Tailwind's scanner only
-				     sees literal class names, so an interpolated one produces no CSS. -->
-				<div class="flex flex-wrap gap-2">
-					<button
-						v-for="c in mpesaChannels"
-						:key="c.key"
-						class="min-h-touch min-w-[96px] flex-1 rounded-xl border px-3 py-2.5 text-p-sm font-medium transition-colors"
-						:class="
-							mpesaChannel === c.key
-								? 'border-outline-gray-4 bg-surface-gray-3 text-ink-gray-9'
-								: 'border-outline-gray-2 bg-surface-white text-ink-gray-6 hover:bg-surface-gray-2'
-						"
-						@click="mpesaChannel = c.key"
-					>
-						{{ c.label }}
-					</button>
-				</div>
 			</div>
 
 			<!-- Credit: the customer IS the transaction, so it leads. -->
@@ -620,17 +649,19 @@ function goBack() {
 				</div>
 			</div>
 
-			<!-- M-Pesa / card reference -->
-			<div v-else>
+			<!-- Reference, for anything that settles through a phone or a machine.
+			     Named after the tender actually chosen, so a Paybill payment asks
+			     for a Paybill code rather than a generic one. -->
+			<div v-else-if="needsReference">
 				<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
-					{{ isMpesa ? `${channelLabel} code` : 'Card reference' }}
+					{{ referenceLabel }}
 					<span class="font-normal text-ink-gray-4">(optional)</span>
 				</label>
 				<input
 					v-model="reference"
 					type="text"
 					autocapitalize="characters"
-					:placeholder="isMpesa ? 'e.g. SLK7XR2QM4' : 'Last 4 digits'"
+					:placeholder="activeTender?.kind === 'card' ? 'Last 4 digits' : 'e.g. SLK7XR2QM4'"
 					class="h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-4 text-p-lg uppercase text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
 					@keyup.enter="complete"
 				/>

@@ -8,6 +8,7 @@ import {
 	saveUserSettings,
 	assignProfile,
 	getSettingsLinkOptions,
+	getWhatsappGroups,
 } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
@@ -48,6 +49,45 @@ const profileName = ref(null)
 /** doctype → [{name}], filled on demand for the link fields on screen. */
 const options = ref({})
 
+/**
+ * WhatsApp groups, from the bridge.
+ *
+ * The staff group is stored as a JID — `120363012345678901@g.us` — which is not
+ * a value a shop manager can find, verify or type. Worse, a wrong one fails by
+ * delivering nowhere at all rather than by erroring, so a shop can believe it is
+ * posting stock requests for weeks. `notifications.list_groups` already asks
+ * waclient what groups exist; this is that list, as a dropdown.
+ */
+const groups = ref([])
+const groupsLoading = ref(false)
+const groupsError = ref(null)
+
+async function loadGroups() {
+	groupsLoading.value = true
+	groupsError.value = null
+	try {
+		const res = await getWhatsappGroups()
+		groups.value = res?.groups || []
+		// The endpoint reports *why* it is empty — unconfigured, or configured
+		// and genuinely groupless. Those need different actions, so the reason is
+		// shown rather than an empty dropdown.
+		if (!groups.value.length) groupsError.value = res?.reason || 'No groups came back from WhatsApp.'
+	} catch (e) {
+		groupsError.value = e.message || 'Could not reach WhatsApp'
+		groups.value = []
+	} finally {
+		groupsLoading.value = false
+	}
+}
+
+/** True when the stored JID is not one of the groups the bridge knows about. */
+const unknownGroup = computed(
+	() =>
+		Boolean(pos.value.whatsapp_group_jid) &&
+		groups.value.length > 0 &&
+		!groups.value.some((g) => g.id === pos.value.whatsapp_group_jid),
+)
+
 onMounted(load)
 
 async function load() {
@@ -83,6 +123,10 @@ async function loadOptions() {
 		}
 	}
 	for (const t of PROFILE_LINKS) targets.add(t)
+
+	// Fetched alongside the link fields: the group picker is the one field on
+	// this screen nobody can fill in by hand.
+	loadGroups()
 
 	await Promise.all(
 		[...targets].map(async (doctype) => {
@@ -258,8 +302,44 @@ function notify(message, tone = 'good') {
 								{{ meta(field).label }}
 							</label>
 							<div class="min-w-0 flex-1">
+								<!-- The staff group is a JID, which nobody can type or verify,
+								     and a wrong one fails by delivering nowhere at all. Picked
+								     from what the bridge actually reports instead. -->
+								<template v-if="field === 'whatsapp_group_jid'">
+									<select
+										v-model="pos[field]"
+										:disabled="!data.can_edit_pos || !groups.length"
+										class="h-10 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none disabled:text-ink-gray-5"
+									>
+										<option :value="null">No group</option>
+										<option v-for="g in groups" :key="g.id" :value="g.id">
+											{{ g.name }}
+										</option>
+										<!-- Kept selectable so opening this screen cannot silently
+										     clear a group that was already working. -->
+										<option v-if="unknownGroup" :value="pos[field]">
+											{{ pos[field] }} — not in the list
+										</option>
+									</select>
+									<div class="mt-1 flex flex-wrap items-center gap-2">
+										<button
+											class="text-p-xs font-medium text-ink-gray-6 hover:text-ink-gray-8"
+											:disabled="groupsLoading"
+											@click="loadGroups"
+										>
+											{{ groupsLoading ? 'Checking…' : 'Refresh groups' }}
+										</button>
+										<span v-if="groupsError" class="text-p-xs text-ink-amber-3">
+											{{ groupsError }}
+										</span>
+										<span v-else-if="groups.length" class="text-p-xs text-ink-gray-5">
+											{{ groups.length }} group{{ groups.length === 1 ? '' : 's' }} on
+											the connected number
+										</span>
+									</div>
+								</template>
 								<input
-									v-if="meta(field).fieldtype === 'Check'"
+									v-else-if="meta(field).fieldtype === 'Check'"
 									v-model="pos[field]"
 									type="checkbox"
 									:true-value="1"

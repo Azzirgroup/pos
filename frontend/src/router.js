@@ -115,6 +115,12 @@ const routes = [
 		component: () => import('@/views/PreviousShifts.vue'),
 	},
 	{
+		path: '/suppliers',
+		name: 'Suppliers',
+		meta: { title: 'Suppliers' },
+		component: () => import('@/views/Suppliers.vue'),
+	},
+	{
 		path: '/neighbours',
 		name: 'Neighbours',
 		meta: { title: 'Neighbour purchases' },

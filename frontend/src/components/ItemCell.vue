@@ -58,7 +58,7 @@ const stockLabel = computed(() => {
 const stockTone = computed(() => {
 	if (out.value) return 'bg-surface-red-2 text-ink-red-3'
 	if (low.value) return 'bg-surface-amber-2 text-ink-amber-3'
-	return 'bg-surface-gray-2 text-ink-gray-6'
+	return 'bg-surface-green-2 text-ink-green-3'
 })
 
 /**

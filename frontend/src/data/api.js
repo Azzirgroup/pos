@@ -61,6 +61,31 @@ export const closeShift = ({ counted, shorts }) =>
 
 /* ---------- money out of the till ---------- */
 
+/* ---------- quotations ---------- */
+
+export const createQuotation = ({ items, customer, validDays, notes }) =>
+	call('cosmestics.api.quotations.create', {
+		items: items.map((l) => ({
+			item_code: l.item_code,
+			qty: l.qty,
+			rate: l.rate,
+			discount_pct: l.discountPct,
+		})),
+		customer: customer || null,
+		valid_days: validDays || 14,
+		notes: notes || null,
+	})
+
+export const listQuotations = ({ days, status, search, limit } = {}) =>
+	call('cosmestics.api.quotations.list_quotations', {
+		days: days || 30,
+		status: status || null,
+		search: search || null,
+		limit: limit || 50,
+	})
+
+export const getQuotation = ({ name }) => call('cosmestics.api.quotations.get', { name })
+
 /** Stock bought from neighbouring shops, and what is still owed for it. */
 export const listNeighbourPurchases = ({ days, status, limit } = {}) =>
 	call('cosmestics.api.sourcing.list_purchases', {
@@ -347,8 +372,12 @@ export const getCustomerLedger = ({ customer, days } = {}) =>
 
 /* ---------- recent sales ---------- */
 
-export const getRecentSales = ({ limit, mine } = {}) =>
-	call('cosmestics.api.pos.recent_sales', { limit: limit || 20, mine: mine === false ? 0 : 1 })
+export const getRecentSales = ({ limit, mine, thisShift } = {}) =>
+	call('cosmestics.api.pos.recent_sales', {
+		limit: limit || 20,
+		mine: mine === false ? 0 : 1,
+		this_shift: thisShift === false ? 0 : 1,
+	})
 
 /* ---------- session ---------- */
 

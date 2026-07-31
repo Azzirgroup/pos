@@ -89,6 +89,217 @@ def _record_till_payments(invoices):
 	return recorded
 
 
+@frappe.whitelist(methods=["POST"])
+def return_to_neighbour(invoice: str, lines: list | str | None = None, reason: str | None = None) -> dict:
+	"""Send stock back to the shop it was bought from.
+
+	Trade between neighbouring shops runs both ways: what was bought to complete
+	a sale that then fell through goes back, and the debt for it has to go with
+	it. Until now the purchase could be made from the till but never undone, so
+	the payable stood against goods sitting on the wrong shelf.
+
+	A **return Purchase Invoice** rather than a cancellation. Cancelling would
+	erase the fact that the goods were ever received, which is wrong — they were,
+	and for a while they were on our shelf. A return records the movement in the
+	other direction, leaves both documents in the ledger, and nets the payable
+	down by exactly what went back.
+
+	`lines` is [{item_code, qty}] for a partial return; omit it to send back
+	everything on the invoice.
+	"""
+	if isinstance(lines, str):
+		lines = frappe.parse_json(lines)
+
+	original = frappe.get_doc("Purchase Invoice", invoice)
+	if original.docstatus != 1:
+		frappe.throw(_("{0} is not a submitted purchase").format(invoice))
+	if original.get("is_return"):
+		frappe.throw(_("{0} is already a return").format(invoice))
+
+	_assert_neighbour(original.supplier)
+
+	# What is still returnable: what came in, less whatever already went back.
+	returned = _already_returned(invoice)
+	wanted = {r["item_code"]: flt(r.get("qty")) for r in (lines or [])}
+
+	doc = frappe.new_doc("Purchase Invoice")
+	doc.supplier = original.supplier
+	doc.company = original.company
+	doc.posting_date = nowdate()
+	doc.set_posting_time = 1
+	doc.is_return = 1
+	doc.return_against = original.name
+	# Mirrors the original: it received stock, so the return has to issue it back
+	# out or the shelf keeps goods that are no longer ours.
+	doc.update_stock = original.update_stock
+	doc.set_warehouse = original.set_warehouse
+	doc.remarks = reason or _("Returned to {0}").format(original.supplier)
+
+	for row in original.items:
+		available = flt(row.qty) - returned.get(row.item_code, 0)
+		qty = wanted.get(row.item_code, available) if lines else available
+		if qty <= 0:
+			continue
+		if qty > available:
+			frappe.throw(
+				_("Only {0} of {1} is still returnable on {2}").format(
+					available, row.item_code, invoice
+				)
+			)
+		doc.append(
+			"items",
+			{
+				"item_code": row.item_code,
+				# Negative, which is what makes it a return to ERPNext.
+				"qty": -abs(qty),
+				"rate": flt(row.rate),
+				"warehouse": row.warehouse,
+				"purchase_invoice_item": row.name,
+			},
+		)
+
+	if not doc.items:
+		frappe.throw(_("Nothing left to return on {0}").format(invoice))
+
+	doc.insert()
+	doc.submit()
+
+	return {
+		"name": doc.name,
+		"against": original.name,
+		"supplier": doc.supplier,
+		# Negative on the document; reported as a positive magnitude because the
+		# cashier is being told how much went back, not signing a ledger.
+		"total": abs(flt(doc.grand_total)),
+		"items": len(doc.items),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def neighbour_customer(supplier: str) -> dict:
+	"""The Customer record for a neighbouring shop, created if it has none.
+
+	Trade between neighbours runs both ways — they sell to us when we are short,
+	and we sell to them when they are. ERPNext keeps buying and selling parties
+	in separate doctypes, so a shop we buy from cannot be sold to until it also
+	exists as a Customer. Rather than making a cashier notice that and go create
+	one, this pairs them on first use.
+
+	Named identically on purpose: two records for one shop that do not share a
+	name is how a debt gets chased twice, or not at all.
+	"""
+	_assert_neighbour(supplier)
+
+	if frappe.db.exists("Customer", supplier):
+		return {"customer": supplier, "created": False}
+
+	group = frappe.db.get_value("Customer Group", {"is_group": 0}, "name")
+	territory = frappe.db.get_value("Territory", {"is_group": 0}, "name")
+	if not group:
+		frappe.throw(_("No customer group exists to file {0} under").format(supplier))
+
+	doc = frappe.new_doc("Customer")
+	doc.customer_name = supplier
+	doc.customer_group = group
+	if territory:
+		doc.territory = territory
+	doc.customer_type = "Company"
+	# Created by the till on behalf of a cashier who is mid-sale, so permissions
+	# are bypassed for the same reason `_ensure_supplier` does: refusing here
+	# blocks a sale that is already happening.
+	doc.insert(ignore_permissions=True)
+
+	return {"customer": doc.name, "created": True}
+
+
+@frappe.whitelist()
+def list_neighbours() -> dict:
+	"""Neighbouring shops, and whether each can already be sold to.
+
+	`sellable` says a Customer record exists. The till shows the rest anyway and
+	pairs them on selection — the list is about who is next door, not about which
+	doctypes happen to exist yet.
+	"""
+	group = frappe.db.get_single_value("Cosmestics POS Settings", "neighbour_supplier_group")
+	if not group:
+		return {"rows": [], "reason": "No neighbour supplier group is configured."}
+
+	suppliers = frappe.get_all(
+		"Supplier", filters={"supplier_group": group}, pluck="name", order_by="name asc"
+	)
+	customers = set(
+		frappe.get_all("Customer", filters={"name": ("in", suppliers)}, pluck="name")
+	) if suppliers else set()
+
+	return {
+		"rows": [{"name": s, "sellable": s in customers} for s in suppliers],
+		"reason": None if suppliers else "No shops are registered in the neighbour group yet.",
+	}
+
+
+def _assert_neighbour(supplier: str):
+	"""Only neighbour purchases may be returned from the till.
+
+	A return to a wholesaler is ordinary purchasing with its own approvals; the
+	till has no business issuing one, and this endpoint is reachable by any
+	cashier.
+	"""
+	group = frappe.db.get_single_value("Cosmestics POS Settings", "neighbour_supplier_group")
+	if not group:
+		frappe.throw(_("No neighbour supplier group is configured"))
+	if frappe.db.get_value("Supplier", supplier, "supplier_group") != group:
+		frappe.throw(_("{0} is not a neighbouring shop").format(supplier))
+
+
+def _already_returned(invoice: str) -> dict:
+	"""Per item, how much of this invoice has gone back already.
+
+	Without this a second return of the same line would sail through and the
+	shop would end up owing a negative amount for goods it never had.
+	"""
+	rows = frappe.db.sql(
+		"""select pii.item_code, sum(abs(pii.qty)) as qty
+		   from `tabPurchase Invoice Item` pii
+		   join `tabPurchase Invoice` pi on pi.name = pii.parent
+		   where pi.docstatus = 1 and pi.is_return = 1 and pi.return_against = %s
+		   group by pii.item_code""",
+		(invoice,),
+		as_dict=True,
+	)
+	return {r.item_code: flt(r.qty) for r in rows}
+
+
+@frappe.whitelist()
+def returnable(invoice: str) -> dict:
+	"""What is still on a neighbour purchase, ready to be sent back."""
+	original = frappe.get_doc("Purchase Invoice", invoice)
+	returned = _already_returned(invoice)
+
+	items = []
+	for row in original.items:
+		available = flt(row.qty) - returned.get(row.item_code, 0)
+		if available <= 0:
+			continue
+		items.append(
+			{
+				"item_code": row.item_code,
+				"item_name": row.item_name,
+				"qty": available,
+				"rate": flt(row.rate),
+				"value": flt(row.rate) * available,
+			}
+		)
+
+	return {
+		"name": original.name,
+		"supplier": original.supplier,
+		"posting_date": str(original.posting_date),
+		"grand_total": flt(original.grand_total),
+		"outstanding": flt(original.outstanding_amount),
+		"items": items,
+	}
+
+
 @frappe.whitelist()
 def list_purchases(days: int = 30, status: str | None = None, limit: int = 200) -> dict:
 	"""Everything bought from a neighbouring shop, and what is still owed.
