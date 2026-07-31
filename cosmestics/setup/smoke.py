@@ -1895,6 +1895,8 @@ def _annotations(r):
 			{"days": 30, "status": None, "search": None, "limit": 50},
 		),
 		(quotations.get, {"name": "x"}),
+		(quotations.print_url, {"name": "x", "print_format": None}),
+		(quotations.send_whatsapp, {"name": "x", "to": "y", "sender": None}),
 		(returns.returnable_sale, {"invoice": "x"}),
 		(
 			returns.create_sales_return,
@@ -1961,7 +1963,16 @@ def _annotations(r):
 		(notifications.send_material_request, {"name": "x"}),
 		(
 			notifications.share,
-			{"to": "x", "message": "y", "sender": None, "doctype": None, "name": None},
+			{
+				"to": "x",
+				"message": "y",
+				"sender": None,
+				"doctype": None,
+				"name": None,
+				"csv_columns": None,
+				"csv_rows": None,
+				"filename": None,
+			},
 		),
 		(shift.get_movement_options, {}),
 		(shift.list_movements, {"shift_name": None}),

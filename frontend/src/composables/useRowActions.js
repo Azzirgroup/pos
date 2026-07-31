@@ -49,13 +49,6 @@ export function rowToMessage(row, columns, { title } = {}) {
 }
 
 /**
- * A whole list as one message.
- *
- * Capped, and it says so when it caps. A silently truncated list reads as the
- * complete answer, which is how somebody ends up chasing nine of eleven
- * overdue invoices believing they are done.
- */
-/**
  * A fixed-width table inside a WhatsApp code block.
  *
  * Triple backticks are the only way to get columns that line up on a phone —
@@ -157,11 +150,23 @@ export function useRowActions({ columns, title, documentFor = null, extra = null
 
 	function shareList(rows, heading) {
 		const cols = typeof columns === 'function' ? columns() : columns || []
+		const usable = cols.filter((c) => c.label && c.key !== '_actions')
+
 		sharePayload.value = {
 			title: heading || 'Share list',
 			message: rowsToMessage(rows, cols, { title: heading }),
 			doctype: null,
 			name: null,
+			// The message caps at twenty rows and four columns to stay readable on
+			// a phone; the spreadsheet carries all of them, so nothing is lost to
+			// that cap.
+			csv: rows.length
+				? {
+						filename: (heading || 'list').replace(/[^\w -]+/g, '').slice(0, 40) || 'list',
+						columns: usable.map((c) => ({ key: c.key, label: c.label })),
+						rows,
+					}
+				: null,
 		}
 		shareOpen.value = true
 	}

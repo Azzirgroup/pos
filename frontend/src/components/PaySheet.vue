@@ -2,19 +2,13 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { fmtMoney, fmtMoneyShort, round2 } from '@/utils/format'
 import BottomSheet from './BottomSheet.vue'
-import LucideBanknote from '~icons/lucide/banknote'
-import LucideSmartphone from '~icons/lucide/smartphone'
-import LucideCreditCard from '~icons/lucide/credit-card'
 import LucideCheck from '~icons/lucide/check'
-import LucideNotebookPen from '~icons/lucide/notebook-pen'
 import LucideUserPlus from '~icons/lucide/user-plus'
 import LucideAlertTriangle from '~icons/lucide/alert-triangle'
 import LucideX from '~icons/lucide/x'
 import LucideSplit from '~icons/lucide/split'
 import LucideChevronLeft from '~icons/lucide/chevron-left'
-import LucideBuilding from '~icons/lucide/building-2'
-import LucideHandCoins from '~icons/lucide/hand-coins'
-import LucideWallet from '~icons/lucide/wallet'
+import PaymentLogo from './PaymentLogo.vue'
 
 const props = defineProps({
 	modelValue: { type: Boolean, default: false },
@@ -43,19 +37,6 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:modelValue', 'complete', 'pick-customer'])
-
-/**
- * Icons by the server's name for them, so a tender it invents gets a sensible
- * one rather than a blank square.
- */
-const TENDER_ICONS = {
-	banknote: LucideBanknote,
-	smartphone: LucideSmartphone,
-	building: LucideBuilding,
-	'hand-coins': LucideHandCoins,
-	'credit-card': LucideCreditCard,
-	wallet: LucideWallet,
-}
 
 /**
  * Every tender as its own button.
@@ -89,23 +70,16 @@ const tenders = computed(() => [
 	CREDIT,
 ])
 
-function tenderIcon(tender) {
-	return tender.key === 'credit' ? LucideNotebookPen : TENDER_ICONS[tender.icon] || LucideWallet
-}
 
 /**
  * A colour per kind of tender, so they are told apart by more than a word.
  *
- * Deliberately a colour and an icon rather than the payment providers' own
- * logos. Displaying a brand mark to say "this is how they paid" is ordinary
- * enough, but bundling one means shipping a third party's trademark in this
- * repository under a licence nobody here has checked — and a wrong or outdated
- * mark on a till is worse than none. If the shop holds the right files, dropping
- * them in and swapping `tenderIcon` for an `<img>` is a small change.
+ * The badge names the brand; this tints the button behind it, so the selected
+ * tender is obvious at arm's length without the badge having to change.
  *
- * Green for money that settles immediately, blue for a machine, amber for
- * money that has not arrived yet. The label still says what it says, so nothing
- * here is carried by colour alone.
+ * Green for money that settles immediately, blue for a machine, amber for money
+ * that has not arrived yet. The label still says what it says, so nothing here
+ * is carried by colour alone.
  */
 const TENDER_TONES = {
 	// `-2` is the deepest outline the theme defines for green, blue and amber —
@@ -536,14 +510,13 @@ function goBack() {
 					"
 					@click="method = m.key"
 				>
-					<!-- The icon keeps its tender colour whether selected or not, so
-					     the grid is scannable before anything is chosen. -->
-					<component
-						:is="tenderIcon(m)"
-						class="h-5 w-5 shrink-0"
-						:class="method === m.key ? '' : tenderTone(m).icon"
-					/>
-					<span class="w-full truncate text-center text-p-sm font-medium">{{ m.label }}</span>
+					<!-- The brand badge, matched on the Mode of Payment's own name, so
+					     a shop that adds Airtel Money gets an Airtel badge without a
+					     code change. The label stays underneath: a logo says which
+					     network, the words say which channel — Paybill and Send Money
+					     share a badge and are not the same tender. -->
+					<PaymentLogo :name="m.mode_of_payment || m.label" :kind="m.kind" />
+					<span class="w-full truncate text-center text-p-xs font-medium">{{ m.label }}</span>
 				</button>
 			</div>
 

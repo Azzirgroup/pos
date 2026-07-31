@@ -113,6 +113,12 @@ export const listQuotations = ({ days, status, search, limit } = {}) =>
 
 export const getQuotation = ({ name }) => call('cosmestics.api.quotations.get', { name })
 
+export const getQuotationPrintUrl = ({ name, printFormat } = {}) =>
+	call('cosmestics.api.quotations.print_url', { name, print_format: printFormat || null })
+
+export const sendQuotationWhatsapp = ({ name, to, sender }) =>
+	call('cosmestics.api.quotations.send_whatsapp', { name, to, sender: sender || null })
+
 /** Stock bought from neighbouring shops, and what is still owed for it. */
 export const listNeighbourPurchases = ({ days, status, limit } = {}) =>
 	call('cosmestics.api.sourcing.list_purchases', {
@@ -176,13 +182,18 @@ export const getSettingsLinkOptions = ({ doctype, search }) =>
 /* ---------- sharing ---------- */
 
 /** Share an arbitrary list row or selection as a WhatsApp message. */
-export const shareOnWhatsapp = ({ to, message, sender, doctype, name }) =>
+export const shareOnWhatsapp = ({ to, message, sender, doctype, name, csv }) =>
 	call('cosmestics.api.notifications.share', {
 		to,
 		message,
 		sender: sender || null,
 		doctype: doctype || null,
 		name: name || null,
+		// A shared list goes as a spreadsheet as well as text: the message is for
+		// reading on a phone, the CSV is what somebody works from.
+		csv_columns: csv?.columns || null,
+		csv_rows: csv?.rows || null,
+		filename: csv?.filename || null,
 	})
 
 export const getWhatsappGroups = () => call('cosmestics.api.notifications.list_groups')

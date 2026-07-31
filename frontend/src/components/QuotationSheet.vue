@@ -1,10 +1,17 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { fmtMoney, fmtMoneyShort } from '@/utils/format'
-import { listQuotations, getQuotation } from '@/data/api'
+import {
+	listQuotations,
+	getQuotation,
+	getQuotationPrintUrl,
+	sendQuotationWhatsapp,
+} from '@/data/api'
 import BottomSheet from './BottomSheet.vue'
 import LucideFileText from '~icons/lucide/file-text'
 import LucideSearch from '~icons/lucide/search'
+import LucidePrinter from '~icons/lucide/printer'
+import LucideSend from '~icons/lucide/send'
 
 /**
  * Quotations, from the till.
@@ -26,7 +33,7 @@ const props = defineProps({
 	busy: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['update:modelValue', 'save', 'load'])
+const emit = defineEmits(['update:modelValue', 'save', 'load', 'sent'])
 
 const TABS = [
 	{ label: 'Saved quotes', value: 'list' },
@@ -97,6 +104,49 @@ function save() {
  * shapes.
  */
 const loadingOne = ref('')
+
+/**
+ * Printing and sending a saved quote.
+ *
+ * Both go through the document itself rather than the list row: a customer
+ * given a quote should get the shop's letterhead and the real prices, and a
+ * screenshot of a summary is not something anyone can hold the shop to.
+ */
+const busyOne = ref('')
+const sendTo = ref('')
+const sendingFor = ref('')
+
+async function printQuote(row) {
+	busyOne.value = row.name
+	try {
+		const { url } = await getQuotationPrintUrl({ name: row.name })
+		window.open(url, '_blank', 'noopener')
+	} catch (e) {
+		console.error('[quotations] print failed', e)
+	} finally {
+		busyOne.value = ''
+	}
+}
+
+async function sendQuote(row) {
+	if (!sendTo.value.trim()) {
+		// Asking inline rather than in another dialog: the number is one field,
+		// and a sheet on top of a sheet on a phone is a wall.
+		sendingFor.value = row.name
+		return
+	}
+	busyOne.value = row.name
+	try {
+		const res = await sendQuotationWhatsapp({ name: row.name, to: sendTo.value.trim() })
+		emit('sent', res)
+		sendingFor.value = ''
+		sendTo.value = ''
+	} catch (e) {
+		console.error('[quotations] send failed', e)
+	} finally {
+		busyOne.value = ''
+	}
+}
 
 async function loadQuote(row) {
 	loadingOne.value = row.name
@@ -278,6 +328,36 @@ async function loadQuote(row) {
 							</div>
 						</div>
 					</button>
+
+					<!-- Beside the row, not inside it: loading a quote into the cart
+					     and sending it to a customer are different intentions, and a
+					     mis-tap between them replaces the cart. -->
+					<div class="-mt-1 mb-1 flex items-center gap-2 pl-1">
+						<button
+							class="flex items-center gap-1 rounded-md px-2 py-1 text-p-xs font-medium text-ink-gray-6 hover:bg-surface-gray-2 hover:text-ink-gray-8"
+							:disabled="busyOne === q.name"
+							@click="printQuote(q)"
+						>
+							<LucidePrinter class="h-3.5 w-3.5" />
+							Print
+						</button>
+						<button
+							class="flex items-center gap-1 rounded-md px-2 py-1 text-p-xs font-medium text-ink-gray-6 hover:bg-surface-gray-2 hover:text-ink-gray-8"
+							:disabled="busyOne === q.name"
+							@click="sendQuote(q)"
+						>
+							<LucideSend class="h-3.5 w-3.5" />
+							{{ busyOne === q.name ? 'Sending…' : 'WhatsApp' }}
+						</button>
+						<input
+							v-if="sendingFor === q.name"
+							v-model="sendTo"
+							type="tel"
+							inputmode="tel"
+							placeholder="2547… then tap WhatsApp"
+							class="h-8 min-w-0 flex-1 rounded-md border border-outline-gray-2 bg-surface-gray-2 px-2 text-p-xs text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						/>
+					</div>
 				</div>
 			</template>
 		</div>

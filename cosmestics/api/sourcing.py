@@ -482,16 +482,49 @@ def _ensure_supplier(supplier):
 
 
 def _sourcing_warehouse(company):
+	"""Where neighbour-bought goods land — which must be where the sale draws.
+
+	This is the whole correctness condition of buying from next door: the
+	purchase receives stock and the invoice immediately consumes it, so the two
+	have to name the same shelf. They did not.
+
+	With a Sourcing Warehouse configured both used it and everything worked.
+	With it blank, this fell back to *any* non-group warehouse on the company —
+	in practice whichever the query returned first, which on a real site was a
+	per-customer van — while the sale fell through to the POS Profile's
+	warehouse. The goods arrived somewhere the sale could not see, and the
+	invoice died with
+
+	    NegativeStockError: 2.0 units of Item … needed in Stores …
+
+	naming the selling warehouse, which is why it read as a stock problem rather
+	than a routing one.
+
+	So the fallback now mirrors `pos._build_invoice` exactly: settings first, then
+	the POS Profile of the open shift. A bare "first warehouse we find" is the
+	one answer guaranteed to be wrong.
+	"""
 	settings = frappe.get_cached_doc("Cosmestics POS Settings")
 	if settings.default_source_warehouse:
 		return settings.default_source_warehouse
 
-	warehouse = frappe.db.get_value(
-		"Warehouse", {"company": company, "is_group": 0, "disabled": 0}, "name"
+	from cosmestics.api.pos import _active_pos_profile
+
+	profile = _active_pos_profile()
+	if profile:
+		warehouse = frappe.db.get_value("POS Profile", profile, "warehouse")
+		if warehouse:
+			return warehouse
+
+	# Nothing configured and no shift open. Refuse rather than guess: a purchase
+	# received into an arbitrary warehouse is stock the shop cannot sell and will
+	# not find, which is worse than a sale that stops and says why.
+	frappe.throw(
+		_(
+			"No warehouse to receive neighbour stock into. Set a Sourcing Warehouse "
+			"in Settings, or give this till's POS Profile a warehouse."
+		)
 	)
-	if not warehouse:
-		frappe.throw(_("Set a Sourcing Warehouse in Cosmestics POS Settings"))
-	return warehouse
 
 
 def _default_mode_of_payment(company):

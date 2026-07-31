@@ -226,6 +226,93 @@ def list_quotations(
 
 
 @frappe.whitelist()
+def print_url(name: str, print_format: str | None = None) -> dict:
+	"""A printable quotation, through ERPNext's own print engine.
+
+	The same route the documents hub uses: a customer handed a quote should get
+	the shop's letterhead and tax lines, not a screen rendering that happens to
+	look similar.
+	"""
+	if not frappe.has_permission("Quotation", "print"):
+		frappe.throw(_("Not permitted to print quotations"), frappe.PermissionError)
+	if not frappe.db.exists("Quotation", name):
+		frappe.throw(_("Quotation {0} not found").format(name), frappe.DoesNotExistError)
+
+	params = [
+		f"doctype={frappe.utils.quoted('Quotation')}",
+		f"name={frappe.utils.quoted(name)}",
+		"no_letterhead=0",
+		"trigger_print=1",
+	]
+	if print_format:
+		params.append(f"format={frappe.utils.quoted(print_format)}")
+
+	return {"url": frappe.utils.get_url("/printview?" + "&".join(params))}
+
+
+@frappe.whitelist(methods=["POST"])
+def send_whatsapp(name: str, to: str, sender: str | None = None) -> dict:
+	"""Send a quotation to the customer, as the real PDF.
+
+	A quote is a promise about prices, and a customer holding a screenshot of a
+	summary has no way to hold the shop to it. The document itself goes.
+	"""
+	from cosmestics.api import notifications
+
+	if not frappe.db.exists("Quotation", name):
+		frappe.throw(_("Quotation {0} not found").format(name), frappe.DoesNotExistError)
+	if not to:
+		frappe.throw(_("Say where to send it"))
+
+	doc = frappe.get_doc("Quotation", name)
+	sent = notifications.send_document(
+		"Quotation", name, to, message=format_quotation(doc), sender=sender
+	)
+
+	return {
+		"sent": bool(sent),
+		"message": _("Quotation sent to {0}").format(to)
+		if sent
+		else _("Could not send — check the WhatsApp settings"),
+	}
+
+
+def format_quotation(doc) -> str:
+	"""The quote as a table, for the covering message.
+
+	Mirrors the stock request: the customer is reading this on a phone and wants
+	the prices, not the document metadata.
+	"""
+	from cosmestics.api.notifications import _table, app_url
+
+	rows = []
+	for item in doc.items:
+		name = item.item_name or item.item_code
+		rows.append(
+			[
+				f"{flt(item.qty):g}",
+				name if len(name) <= 22 else name[:21] + "…",
+				f"{flt(item.rate):,.0f}",
+				f"{flt(item.amount):,.0f}",
+			]
+		)
+
+	lines = [
+		"*Quotation*",
+		f"{doc.name} · {doc.customer_name or doc.party_name}",
+		"",
+		_table(["Qty", "Item", "Rate", "Amount"], rows),
+		f"Total: {flt(doc.grand_total):,.0f}",
+	]
+	if doc.valid_till:
+		lines.append(f"Valid until {doc.valid_till}")
+	lines.append("")
+	lines.append(app_url("/documents/quotation"))
+
+	return "\n".join(lines)
+
+
+@frappe.whitelist()
 def get(name: str) -> dict:
 	"""One quotation, as cart lines.
 

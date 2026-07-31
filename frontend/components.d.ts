@@ -30,6 +30,7 @@ declare module 'vue' {
     ModuleTabs: typeof import('./src/components/ModuleTabs.vue')['default']
     PageHeader: typeof import('./src/components/PageHeader.vue')['default']
     PairedBars: typeof import('./src/components/charts/PairedBars.vue')['default']
+    PaymentLogo: typeof import('./src/components/PaymentLogo.vue')['default']
     PaySheet: typeof import('./src/components/PaySheet.vue')['default']
     QuotationSheet: typeof import('./src/components/QuotationSheet.vue')['default']
     ReturnSheet: typeof import('./src/components/ReturnSheet.vue')['default']

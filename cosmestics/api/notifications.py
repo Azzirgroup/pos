@@ -429,6 +429,104 @@ def _send_to_group(jid: str, message: str) -> bool:
 	return False
 
 
+def _send_media_to_group(jid: str, message: str, media_url: str, filename: str) -> bool:
+	"""A file to a group, with `chat_id` — same reason as `_send_to_group`."""
+	creds = _credentials()
+	if not creds:
+		return False
+
+	payload = {
+		"chat_id": jid,
+		"type": "media",
+		"message": message,
+		"media_url": media_url,
+		"filename": filename,
+		"instance_id": creds.get("instance_id"),
+		"access_token": creds.get("access_token"),
+	}
+	try:
+		response = requests.post(SEND_URL, json=payload, timeout=45)
+		response.raise_for_status()
+		return _succeeded(response.json())
+	except Exception as e:
+		frappe.log_error(f"WhatsApp group file send to {jid} failed: {e}", "Cosmetics POS")
+		return False
+
+
+def send_file(to: str, message: str, media_url: str, filename: str) -> bool:
+	"""Send an attachment, to a group or a number.
+
+	Groups go direct; numbers keep using the integration, which normalises the
+	phone number and picks the sender account.
+	"""
+	if not to or not media_url:
+		return False
+
+	if is_group(to):
+		return _send_media_to_group(to, message, media_url, filename)
+
+	try:
+		from whatsapp_integration.service.rest import send_whatsapp_media
+	except ImportError:
+		return send_text(to, message)
+
+	try:
+		return _succeeded(
+			_quiet(
+				send_whatsapp_media,
+				to_number=to,
+				message=message,
+				media_url=media_url,
+				file_name=filename,
+				country_name=None,
+				sender=None,
+			)
+		)
+	except Exception as e:
+		frappe.log_error(f"WhatsApp file send to {to} failed: {e}", "Cosmetics POS")
+		return False
+
+
+def publish_csv(filename: str, columns: list, rows: list) -> str | None:
+	"""Write rows to a CSV the bridge can fetch, and return its URL.
+
+	**Public, like the integration's own PDF attachments.** waclient pulls the
+	file over plain HTTP, so a private File would come back as a login page.
+	The URL is unguessable but not access-controlled — the same trade the
+	document send already makes, restated here because it is easy to miss when
+	the payload is a list of customer balances rather than one invoice.
+
+	A CSV rather than a prettier format because the thing anybody does with a
+	shared list is open it in a spreadsheet, and every phone can.
+	"""
+	if not rows:
+		return None
+
+	import csv
+	import io
+
+	buffer = io.StringIO()
+	writer = csv.writer(buffer)
+	writer.writerow([c.get("label", c.get("key")) for c in columns])
+	for row in rows:
+		writer.writerow([row.get(c["key"], "") for c in columns])
+
+	doc = frappe.get_doc(
+		{
+			"doctype": "File",
+			"file_name": filename if filename.endswith(".csv") else f"{filename}.csv",
+			"content": buffer.getvalue(),
+			"is_private": 0,
+		}
+	)
+	doc.insert(ignore_permissions=True)
+	# Committed so the bridge can fetch it: it reads the file over HTTP in
+	# another request, which cannot see an uncommitted transaction.
+	frappe.db.commit()
+
+	return f"{frappe.utils.get_url()}{doc.file_url}"
+
+
 @frappe.whitelist()
 def status() -> dict:
 	"""Can this site actually deliver a WhatsApp message right now?
@@ -554,6 +652,9 @@ def share(
 	sender: str | None = None,
 	doctype: str | None = None,
 	name: str | None = None,
+	csv_columns: list | str | None = None,
+	csv_rows: list | str | None = None,
+	filename: str | None = None,
 ) -> dict:
 	"""Share something from a list view on WhatsApp.
 
@@ -576,18 +677,34 @@ def share(
 
 	sender = sender or _settings().whatsapp_sender or None
 
+	if isinstance(csv_columns, str):
+		csv_columns = frappe.parse_json(csv_columns)
+	if isinstance(csv_rows, str):
+		csv_rows = frappe.parse_json(csv_rows)
+
+	attached = None
 	if doctype and name:
 		# Read permission is checked on the real document: this endpoint must not
 		# become a way to render a PDF of anything on the site by naming it.
 		if not frappe.has_permission(doctype, "read", doc=name):
 			frappe.throw(_("You do not have permission to share {0} {1}").format(doctype, name))
 		sent = send_document(doctype, name, to, message, sender)
+	elif csv_rows and csv_columns:
+		# A list goes as a file as well as text. The message is readable on the
+		# phone; the CSV is what somebody actually works from.
+		attached = publish_csv(filename or "list", csv_columns, csv_rows)
+		sent = (
+			send_file(to, message, attached, (filename or "list") + ".csv")
+			if attached
+			else send_text(to, message, sender)
+		)
 	else:
 		sent = send_text(to, message, sender)
 
 	return {
 		"sent": bool(sent),
 		"to": to,
+		"attached": attached,
 		"message": _("Sent to {0}").format(to)
 		if sent
 		else _("Could not send to {0} — check the WhatsApp settings").format(to),
@@ -703,4 +820,36 @@ def on_material_request_submit(doc, method=None):
 
 def _enqueued_material_request_notice(docname: str):
 	doc = frappe.get_doc("Material Request", docname)
-	send_to_staff_group(format_material_request(doc))
+	message = format_material_request(doc)
+
+	settings = _settings()
+	target = settings.whatsapp_group_jid
+	if not target:
+		return
+
+	# The table in the message is for reading; the CSV is for working from —
+	# whoever is buying wants it in a spreadsheet, not retyped off a phone.
+	columns = [
+		{"key": "item_code", "label": "Item code"},
+		{"key": "item_name", "label": "Item"},
+		{"key": "qty", "label": "Qty"},
+		{"key": "uom", "label": "UOM"},
+		{"key": "warehouse", "label": "To"},
+	]
+	rows = [
+		{
+			"item_code": i.item_code,
+			"item_name": i.item_name,
+			"qty": flt(i.qty),
+			"uom": i.uom,
+			"warehouse": i.warehouse,
+		}
+		for i in doc.items
+	]
+
+	url = publish_csv(docname, columns, rows)
+	if url and send_file(target, message, url, f"{docname}.csv"):
+		return
+
+	# The list still has to reach the group even if the attachment did not.
+	send_to_staff_group(message)

@@ -78,6 +78,7 @@ async function send() {
 			message: message.value,
 			doctype: props.payload?.doctype || null,
 			name: props.payload?.name || null,
+			csv: props.payload?.csv || null,
 		})
 		result.value = { ok: res.sent, message: res.message }
 		if (res.sent) {
@@ -172,6 +173,10 @@ async function copy() {
 					<p v-if="asDocument" class="mt-1.5 text-p-xs text-ink-gray-5">
 						The {{ payload.doctype }} PDF goes with this as an attachment — what they
 						receive is the document, not a description of it.
+					</p>
+					<p v-else-if="payload?.csv" class="mt-1.5 text-p-xs text-ink-gray-5">
+						A spreadsheet of all {{ payload.csv.rows.length }} rows is attached. The
+						message is capped so it stays readable on a phone; the file is not.
 					</p>
 				</div>
 

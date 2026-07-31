@@ -199,21 +199,24 @@ function submitSource() {
 					<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
 						Which shop
 					</label>
-					<div class="flex flex-col gap-2">
-						<button
-							v-for="n in neighbours"
-							:key="n.name"
-							class="min-h-touch rounded-lg border px-3 py-2.5 text-left text-p-base transition-colors"
-							:class="
-								neighbour === n.name
-									? 'border-outline-gray-4 bg-surface-gray-3 font-medium text-ink-gray-9'
-									: 'border-outline-gray-2 bg-surface-white text-ink-gray-7 hover:bg-surface-gray-2'
-							"
-							@click="neighbour = n.name"
-						>
+					<!-- A select rather than a button per shop. The list starts at one
+					     and grows every time the till sources from somewhere new —
+					     `_ensure_supplier` creates unknown shops on the spot — so a
+					     stack of buttons would push the price and the margin off the
+					     screen exactly as the shop got busier. A native select also
+					     gets the platform's own picker, which on a phone is a
+					     scrollable wheel rather than a list to hunt through. -->
+					<select
+						v-model="neighbour"
+						class="h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
+					>
+						<option v-if="!neighbours.length" :value="null">
+							No neighbour shops set up
+						</option>
+						<option v-for="n in neighbours" :key="n.name" :value="n.name">
 							{{ n.name }}
-						</button>
-					</div>
+						</option>
+					</select>
 				</div>
 
 				<div class="grid grid-cols-2 gap-3">
