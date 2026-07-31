@@ -252,6 +252,9 @@ function notify(message, tone = 'good') {
 		<PageHeader title="Settings" subtitle="How this shop and this till are set up">
 			<template #actions>
 				<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load" />
+			</template>
+
+			<template #primary>
 				<Button
 					theme="gray"
 					variant="solid"

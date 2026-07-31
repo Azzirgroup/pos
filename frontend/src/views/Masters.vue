@@ -119,64 +119,12 @@ function notify(message, tone = 'good') {
 
 <template>
 	<div class="flex min-h-0 flex-1 overflow-hidden">
-		<!-- The type picker, shown only when this screen is the Records index.
-		     Reached from a module tab — Inventory → Items, say — the type is
-		     already decided, so a column listing the other five is 200px spent
-		     offering to leave the page you just asked for. -->
-		<aside
-			v-if="!focused"
-			class="hidden w-[200px] shrink-0 overflow-y-auto border-r border-outline-gray-2 bg-surface-white py-2 lg:block"
-		>
-			<div class="px-3 pb-1 text-p-xs font-medium uppercase tracking-wide text-ink-gray-5">
-				Records
-			</div>
-			<button
-				v-for="t in types"
-				:key="t.key"
-				class="flex w-full items-center gap-2 px-3 py-1.5 text-left text-p-sm transition-colors"
-				:class="
-					activeKey === t.key
-						? 'bg-surface-gray-3 font-medium text-ink-gray-9'
-						: 'text-ink-gray-7 hover:bg-surface-gray-2'
-				"
-				@click="router.push(`/masters/${t.key}`)"
-			>
-				<component
-					:is="resolveIcon(t.icon)"
-					v-if="resolveIcon(t.icon)"
-					class="h-4 w-4 shrink-0 text-ink-gray-5"
-					aria-hidden="true"
-				/>
-				<span class="truncate">{{ t.label }}</span>
-			</button>
-		</aside>
-
 		<div class="flex min-w-0 flex-1 flex-col overflow-hidden">
 			<PageHeader :title="activeType?.label || 'Records'" :subtitle="subtitle">
-				<template #actions>
-					<!-- The narrow-screen stand-in for the type rail, hidden for the
-					     same reason: on a focused route the type is already decided. -->
-					<div v-if="!focused" class="w-[180px] lg:hidden">
-						<FormControl
-							type="select"
-							:model-value="activeKey"
-							:options="types.map((t) => ({ label: t.label, value: t.key }))"
-							@update:model-value="router.push(`/masters/${$event}`)"
-						/>
-					</div>
-					<div class="w-[190px]">
-						<FormControl v-model="search" type="text" placeholder="Search…" />
-					</div>
-						<Button
-						variant="subtle"
-						:icon-left="LucideSend"
-						:disabled="!data.rows.length"
-						label="Share"
-						@click="shareList(data.rows, activeType?.label || 'Records')"
-					/>
-					<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load" />
+				<!-- Creating sits on the title line, away from the controls that
+				     only narrow what is already listed. -->
+				<template v-if="data.can_create !== false" #primary>
 					<Button
-						v-if="data.can_create !== false"
 						theme="gray"
 						variant="solid"
 						:icon-left="LucidePlus"
@@ -184,7 +132,54 @@ function notify(message, tone = 'good') {
 						@click="newOpen = true"
 					/>
 				</template>
+
+				<template #actions>
+					<div class="w-[190px]">
+						<FormControl v-model="search" type="text" placeholder="Search…" />
+					</div>
+					<Button
+						variant="subtle"
+						:icon-left="LucideSend"
+						:disabled="!data.rows.length"
+						label="Share"
+						@click="shareList(data.rows, activeType?.label || 'Records')"
+					/>
+					<Button
+						variant="subtle"
+						:icon-left="LucideRefreshCw"
+						:loading="loading"
+						@click="load"
+					/>
+				</template>
 			</PageHeader>
+
+			<!-- The type picker, horizontal. It was a 200px rail; a row of chips
+			     costs one line, and on a route that already chose its type there
+			     is nothing to pick, so it is absent entirely. -->
+			<div
+				v-if="!focused && types.length > 1"
+				class="flex shrink-0 flex-wrap items-center gap-1 border-b border-outline-gray-2 bg-surface-white px-4 py-2"
+			>
+				<button
+					v-for="t in types"
+					:key="t.key"
+					class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-p-sm transition-colors"
+					:class="
+						activeKey === t.key
+							? 'bg-surface-gray-3 font-medium text-ink-gray-9'
+							: 'text-ink-gray-6 hover:bg-surface-gray-2 hover:text-ink-gray-8'
+					"
+					@click="router.push(`/masters/${t.key}`)"
+				>
+					<component
+						:is="resolveIcon(t.icon)"
+						v-if="resolveIcon(t.icon)"
+						class="h-4 w-4 shrink-0"
+						aria-hidden="true"
+					/>
+					{{ t.label }}
+				</button>
+			</div>
 
 			<p v-if="activeType?.hint" class="shrink-0 bg-surface-amber-1 px-4 py-2 text-p-xs text-ink-amber-3">
 				{{ activeType.hint }}

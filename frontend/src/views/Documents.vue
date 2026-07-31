@@ -287,17 +287,21 @@ function notify(message, tone = 'good') {
 
 		<div class="flex min-w-0 flex-1 flex-col overflow-hidden">
 			<PageHeader :title="activeType?.label || 'Documents'" :subtitle="subtitle">
-				<template #actions>
-					<!-- Only for types that declare a form and that this user may
-					     create; the server decides both. -->
+				<!-- Only for types that declare a form and that this user may
+				     create; the server decides both. On the title line rather than
+				     among the filters, so the one control that raises a document is
+				     not a mis-tap away from a period picker. -->
+				<template v-if="activeType?.creatable" #primary>
 					<Button
-						v-if="activeType?.creatable"
 						theme="gray"
 						variant="solid"
 						:icon-left="LucidePlus"
 						:label="`New ${activeType.label}`"
 						@click="newOpen = true"
 					/>
+				</template>
+
+				<template #actions>
 					<!-- No button, and the reason why. A missing control with no
 					     explanation reads as something broken. -->
 					<span

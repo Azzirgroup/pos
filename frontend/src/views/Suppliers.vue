@@ -97,8 +97,12 @@ function createNew() {
 					:loading="loading"
 					@click="load"
 				/>
+			</template>
+
+			<!-- On the title line, away from search and refresh: the control a
+			     mis-tap reaches should not be the one that opens a form. -->
+			<template v-if="tab === 'list'" #primary>
 				<Button
-					v-if="tab === 'list'"
 					theme="gray"
 					variant="solid"
 					:icon-left="LucidePlus"
