@@ -96,17 +96,38 @@ const returnQty = ref({})
 const returnBusy = ref(false)
 const returnError = ref(null)
 
+/**
+ * How the money comes back, which is the only decision here that changes the
+ * books rather than the screen.
+ *
+ * 'account' nets it off what we owe them — right for the usual arrangement where
+ * two shops run a tab and settle at the end of the week, and the only thing that
+ * can happen at all when the purchase was never paid for. 'cash' is the shop
+ * next door handing the money over the counter, which also has to be told to the
+ * open shift or the drawer comes up over at closing with nothing to explain it.
+ */
+const refundMethod = ref('account')
+const refundMode = ref(null)
+
 async function openReturn(row) {
 	returnOpen.value = true
 	returning.value = null
 	returnQty.value = {}
 	returnError.value = null
+	refundMethod.value = 'account'
+	refundMode.value = null
 	try {
 		returning.value = await getReturnablePurchase({ invoice: row.name })
+		refundMode.value = returning.value.default_refund_mode || null
 	} catch (e) {
 		returnError.value = e.message || 'Could not load that purchase'
 	}
 }
+
+/** The account the refund lands in follows from the mode — so that is what is asked. */
+const refundModeOptions = computed(() =>
+	(returning.value?.refund_modes || []).map((m) => ({ label: m.name, value: m.name })),
+)
 
 const returnLines = computed(() => returning.value?.items || [])
 
@@ -132,9 +153,16 @@ async function submitReturn() {
 			lines: returnLines.value
 				.filter((l) => (Number(returnQty.value[l.item_code]) || 0) > 0)
 				.map((l) => ({ item_code: l.item_code, qty: Number(returnQty.value[l.item_code]) })),
+			refundMethod: refundMethod.value,
+			refundMode: refundMethod.value === 'cash' ? refundMode.value : null,
 		})
 		returnOpen.value = false
-		notify(`${fmtMoney(res.total)} sent back to ${res.supplier} · ${res.name}`, 'good')
+		notify(
+			res.refund_method === 'cash'
+				? `${fmtMoney(res.total)} back from ${res.supplier} · ${res.name}`
+				: `${fmtMoney(res.total)} off what you owe ${res.supplier} · ${res.name}`,
+			'good',
+		)
 		load()
 	} catch (e) {
 		returnError.value = e.message || 'Could not send it back'
@@ -285,6 +313,63 @@ async function load() {
 						</div>
 					</div>
 
+					<!-- Where the money goes. Cash is only offered where there is
+					     money to come back: a purchase still on the tab has none, and
+					     taking it anyway would leave the drawer over. -->
+					<div v-if="returnLines.length">
+						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
+							How does the money come back?
+						</label>
+						<div class="grid grid-cols-2 gap-2">
+							<button
+								v-for="m in [
+									{
+										key: 'account',
+										label: 'Off the tab',
+										hint: 'Reduces what you owe them',
+									},
+									{
+										key: 'cash',
+										label: 'They pay it back',
+										hint: returning.can_cash
+											? `Up to ${fmtMoney(returning.refundable_cash)}`
+											: 'Nothing was paid yet',
+									},
+								]"
+								:key="m.key"
+								class="flex min-h-touch flex-col items-start gap-0.5 rounded-xl border px-3 py-2.5 text-left transition-colors"
+								:class="[
+									refundMethod === m.key
+										? 'border-outline-gray-4 bg-surface-gray-3 text-ink-gray-9'
+										: 'border-outline-gray-2 bg-surface-white text-ink-gray-6 hover:bg-surface-gray-2',
+									m.key === 'cash' && !returning.can_cash ? 'cursor-not-allowed opacity-50' : '',
+								]"
+								:disabled="m.key === 'cash' && !returning.can_cash"
+								@click="refundMethod = m.key"
+							>
+								<span class="text-p-base font-medium">{{ m.label }}</span>
+								<span class="text-p-xs text-ink-gray-5">{{ m.hint }}</span>
+							</button>
+						</div>
+
+						<p v-if="!returning.can_cash" class="mt-1.5 text-p-xs text-ink-gray-5">
+							{{ returning.cash_reason }}
+						</p>
+
+						<!-- The account is not a separate question: it follows from the
+						     mode, the same way every other payment in the app works. -->
+						<div v-if="refundMethod === 'cash'" class="mt-2">
+							<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
+								Paid back through
+							</label>
+							<FormControl type="select" v-model="refundMode" :options="refundModeOptions" />
+							<p class="mt-1.5 text-p-xs text-ink-gray-5">
+								Goes into that mode's account, and onto this shift — the drawer is
+								expected to hold {{ fmtMoney(returnTotal) }} more at closing.
+							</p>
+						</div>
+					</div>
+
 					<div
 						v-if="returnLines.length"
 						class="flex items-center justify-between rounded-xl px-4 py-3"
@@ -294,7 +379,7 @@ async function load() {
 							class="text-p-base font-medium"
 							:class="returnTotal > 0 ? 'text-ink-amber-3' : 'text-ink-gray-6'"
 						>
-							Comes off what you owe
+							{{ refundMethod === 'cash' ? 'Coming back to you' : 'Comes off what you owe' }}
 						</span>
 						<span
 							class="tabular text-2xl font-semibold"

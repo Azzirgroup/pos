@@ -184,7 +184,16 @@ function submitClose() {
 const MOVEMENT_ICONS = {
 	Expense: LucideBanknote,
 	'Neighbour Purchase': LucideStore,
+	'Neighbour Refund': LucideStore,
 }
+
+/**
+ * Movements that put money back in rather than take it out — cash handed over
+ * when goods went back next door. Shown with a sign and a colour because the
+ * list is otherwise all one direction, and a refund reading as another payout
+ * is the sort of thing a cashier only notices when the count disagrees.
+ */
+const CASH_IN_TYPES = ['Neighbour Refund']
 
 </script>
 
@@ -558,6 +567,9 @@ const MOVEMENT_ICONS = {
 						<span class="text-p-sm font-medium text-ink-gray-7">This shift</span>
 						<span class="tabular text-p-sm font-semibold text-ink-gray-9">
 							{{ fmtMoney(movements.paid_out_total) }} out
+							<template v-if="movements.cash_in_total">
+								· {{ fmtMoney(movements.cash_in_total) }} back in
+							</template>
 						</span>
 					</div>
 					<div
@@ -581,9 +593,15 @@ const MOVEMENT_ICONS = {
 						</div>
 						<span
 							class="tabular shrink-0 text-p-base font-semibold"
-							:class="m.movement_type === 'Short' ? 'text-ink-red-3' : 'text-ink-gray-9'"
+							:class="
+								m.movement_type === 'Short'
+									? 'text-ink-red-3'
+									: CASH_IN_TYPES.includes(m.movement_type)
+										? 'text-ink-green-3'
+										: 'text-ink-gray-9'
+							"
 						>
-							{{ fmtMoney(m.amount) }}
+							{{ CASH_IN_TYPES.includes(m.movement_type) ? '+' : '' }}{{ fmtMoney(m.amount) }}
 						</span>
 						<!-- Voidable only while the shift is open, and never a short: a
 						     short is attributed at closing, against a counted figure. -->

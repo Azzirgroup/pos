@@ -10,10 +10,12 @@ them up in one place. `movement_type` is what differs; the arithmetic is the
 same — an amount, against a mode of payment, inside a shift.
 
 Expense and Neighbour Purchase take cash *out* and reduce what the drawer should
-hold. A Short is the opposite direction of causation: it is discovered by
-counting rather than recorded before it, so it never adjusts the expectation —
-it records who the discrepancy is against, which is the part ERPNext's own
-closing entry has nowhere to put.
+hold. A Neighbour Refund is the same trade running backwards — goods went back
+next door and the shop handed the money over the counter — so it puts cash *in*.
+A Short is the opposite direction of causation: it is discovered by counting
+rather than recorded before it, so it never adjusts the expectation — it records
+who the discrepancy is against, which is the part ERPNext's own closing entry has
+nowhere to put.
 """
 
 import frappe
@@ -24,6 +26,11 @@ from frappe.utils import flt, nowdate
 #: Types that take money out of the drawer. A Short is excluded deliberately —
 #: see the module docstring.
 PAID_OUT_TYPES = ("Expense", "Neighbour Purchase")
+
+#: Types that put money back in. Amounts stay positive on the record — the
+#: direction is the type's job, not the sign's, so a movement always reads as
+#: "this much moved" and validation can keep refusing zero and below.
+CASH_IN_TYPES = ("Neighbour Refund",)
 
 
 class CosmesticsShiftMovement(Document):
@@ -55,9 +62,10 @@ class CosmesticsShiftMovement(Document):
 		"""Book the ledger side, where this movement has one.
 
 		Only Expense posts its own entry. A Neighbour Purchase is already a
-		Purchase Invoice written by `sourcing.receive_from_neighbours`, and
-		posting a second document for the same money would double-count it — this
-		record only tells the closing screen that the cash left. A Short is
+		Purchase Invoice written by `sourcing.receive_from_neighbours`, and a
+		Neighbour Refund is the return invoice that reverses it — posting a
+		second document for the same money would double-count it, so those two
+		records only tell the closing screen which way the cash went. A Short is
 		booked by ERPNext's POS Closing Entry as the reconciliation difference.
 		"""
 		if self.movement_type != "Expense" or self.reference_name:
@@ -70,9 +78,9 @@ class CosmesticsShiftMovement(Document):
 	def on_cancel(self):
 		"""Cancel what we posted, and only what we posted.
 
-		A Neighbour Purchase's invoice is cancelled from the purchase side — it
-		receives stock, so reversing it from here would silently reverse a goods
-		movement the cashier was not asking about.
+		A Neighbour Purchase's or Refund's invoice is cancelled from the purchase
+		side — both move stock, so reversing one from here would silently reverse
+		a goods movement the cashier was not asking about.
 		"""
 		if self.reference_doctype == "Journal Entry" and self.reference_name:
 			doc = frappe.get_doc("Journal Entry", self.reference_name)

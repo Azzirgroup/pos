@@ -21,6 +21,18 @@ const emit = defineEmits(['update:modelValue', 'request-transfer', 'source', 'se
 // 'menu' → pick an approach; the other two are the detail forms.
 const mode = ref('menu')
 const qty = ref(1)
+/**
+ * How many to *buy*, which is not always how many to sell.
+ *
+ * The shop next door sells a carton, not a unit. Buying 100 to satisfy a sale
+ * of 10 is ordinary, and until now impossible: one quantity drove both the
+ * purchase and the cart line, so the shop could only ever buy exactly what it
+ * was selling and the other 90 could not be brought onto the shelf.
+ *
+ * Defaults to the sell quantity, because that is still the common case — and a
+ * cashier who does not touch this field gets exactly the old behaviour.
+ */
+const buyQty = ref(1)
 const warehouse = ref(null)
 const neighbour = ref(null)
 const buyRate = ref('')
@@ -42,6 +54,7 @@ watch(
 		// The gap, not one. A cashier who has just tried to sell six of the last
 		// two should not have to work out that they need four.
 		qty.value = Math.max(1, props.suggestedQty || 1)
+		buyQty.value = qty.value
 		warehouse.value = props.warehouses.find((w) => !w.is_default)?.name || null
 		neighbour.value = props.neighbours[0]?.name || null
 		paidNow.value = false
@@ -52,11 +65,26 @@ watch(
 )
 
 const buyRateNum = computed(() => Number(buyRate.value) || 0)
-const sellTotal = computed(() => round2((props.item?.price || 0) * qty.value))
-const costTotal = computed(() => round2(buyRateNum.value * qty.value))
-const margin = computed(() => round2(sellTotal.value - costTotal.value))
+const buyQtyNum = computed(() => Math.max(Number(buyQty.value) || 0, qty.value))
+/** What is bought but not sold now, and therefore stays on the shelf. */
+const keptQty = computed(() => round2(buyQtyNum.value - qty.value))
 
-const canSource = computed(() => neighbour.value && qty.value > 0 && buyRateNum.value > 0)
+const sellTotal = computed(() => round2((props.item?.price || 0) * qty.value))
+/** The whole outlay, including the part that becomes stock. */
+const costTotal = computed(() => round2(buyRateNum.value * buyQtyNum.value))
+/**
+ * Margin on *this sale*, not on the purchase.
+ *
+ * Costing the sale at the full carton would show a loss on every bulk buy,
+ * which is wrong: the rest is not spent, it is stock, and it earns its margin
+ * when it sells. The outlay is shown separately so nobody is surprised at the
+ * drawer.
+ */
+const margin = computed(() => round2(sellTotal.value - buyRateNum.value * qty.value))
+
+const canSource = computed(
+	() => neighbour.value && qty.value > 0 && buyQtyNum.value >= qty.value && buyRateNum.value > 0,
+)
 const canRequest = computed(() => warehouse.value && qty.value > 0)
 
 function close() {
@@ -83,6 +111,7 @@ function submitSource() {
 	emit('source', {
 		item: props.item,
 		qty: qty.value,
+		buyQty: buyQtyNum.value,
 		supplier: neighbour.value,
 		buyRate: buyRateNum.value,
 		paidNow: paidNow.value,
@@ -219,15 +248,31 @@ function submitSource() {
 					</select>
 				</div>
 
-				<div class="grid grid-cols-2 gap-3">
+				<div class="grid grid-cols-3 gap-3">
 					<div>
 						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
-							Quantity
+							Selling
 						</label>
 						<input
 							v-model.number="qty"
 							type="number"
 							min="1"
+							inputmode="numeric"
+							class="tabular h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-lg font-semibold text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
+							@focus="$event.target.select()"
+						/>
+					</div>
+					<!-- Separate from what is sold, because the shop next door sells a
+					     carton and the customer wants two. Defaults to the sell
+					     quantity, so leaving it alone behaves exactly as before. -->
+					<div>
+						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
+							Buying
+						</label>
+						<input
+							v-model.number="buyQty"
+							type="number"
+							:min="qty"
 							inputmode="numeric"
 							class="tabular h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-lg font-semibold text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
 							@focus="$event.target.select()"
@@ -261,8 +306,11 @@ function submitSource() {
 							{{ margin >= 0 ? 'Margin on this line' : 'You would lose money' }}
 						</div>
 						<div class="tabular mt-0.5 text-p-xs text-ink-gray-6">
-							Sell {{ fmtMoneyShort(sellTotal) }} · cost
+							Sell {{ fmtMoneyShort(sellTotal) }} · paying
 							{{ fmtMoneyShort(costTotal) }}
+							<template v-if="keptQty > 0">
+								· {{ keptQty }} stays on the shelf
+							</template>
 						</div>
 					</div>
 					<div

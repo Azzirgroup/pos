@@ -72,13 +72,23 @@ def request_transfer(
 
 
 def _default_warehouse(company):
-	settings = frappe.get_cached_doc("Cosmestics POS Settings")
-	if settings.default_source_warehouse:
-		return settings.default_source_warehouse
+	"""Where requested stock should be delivered to: this till's own shelf.
 
-	warehouse = frappe.db.get_value(
-		"Warehouse", {"company": company, "is_group": 0, "disabled": 0}, "name"
-	)
+	Shared with the sale rather than resolved again. Requesting a transfer *into*
+	a warehouse the till does not sell from is a request that arrives and changes
+	nothing — the shelf the cashier is standing at is still empty.
+
+	The old fallback of "any non-group warehouse on the company" could do exactly
+	that, and silently.
+	"""
+	from cosmestics.api.pos import selling_warehouse
+
+	warehouse = selling_warehouse()
 	if not warehouse:
-		frappe.throw(_("No warehouse configured for {0}").format(company))
+		frappe.throw(
+			_(
+				"No warehouse to request stock into. Give this till's POS Profile a "
+				"warehouse, or set a Sourcing Warehouse in Settings."
+			)
+		)
 	return warehouse

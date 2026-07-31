@@ -544,11 +544,15 @@ function sellAnyway({ item, qty }) {
 	notify(`${item.item_name} added — stock will go negative`, 'warn')
 }
 
-function sourceFromNeighbour({ item, qty, supplier, buyRate, paidNow }) {
-	cart.add(item, qty, { sourced: { supplier, buyRate, paidNow: !!paidNow } })
+function sourceFromNeighbour({ item, qty, buyQty, supplier, buyRate, paidNow }) {
+	const buying = Math.max(Number(buyQty) || qty, qty)
+	cart.add(item, qty, { sourced: { supplier, buyRate, paidNow: !!paidNow, buyQty: buying } })
+
+	const kept = buying - qty
 	notify(
-		`Sourcing ${qty} × ${item.item_name} from ${supplier}` +
-			(paidNow ? ` · ${fmtMoney(qty * buyRate)} out of the drawer` : ''),
+		`Sourcing ${buying} × ${item.item_name} from ${supplier}` +
+			(kept > 0 ? `, selling ${qty} · ${kept} to stock` : '') +
+			(paidNow ? ` · ${fmtMoney(buying * buyRate)} out of the drawer` : ''),
 		'ok',
 	)
 }

@@ -62,9 +62,11 @@ def context():
 		)
 		profile = candidates[0] if len(candidates) == 1 else None
 
-	warehouse = settings.default_source_warehouse or (
-		frappe.db.get_value("POS Profile", profile, "warehouse") if profile else None
-	)
+	# One resolver, shared with the sale — this header must never claim a
+	# warehouse the invoice does not use.
+	from cosmestics.api.pos import selling_warehouse
+
+	warehouse = selling_warehouse()
 
 	return {
 		"company": company,

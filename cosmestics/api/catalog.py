@@ -16,7 +16,11 @@ from frappe.utils import flt
 @frappe.whitelist()
 def get_catalog():
 	settings = frappe.get_cached_doc("Cosmestics POS Settings")
-	warehouse = settings.default_source_warehouse
+	# The same warehouse the sale will draw from, so a stock figure on a card is
+	# never a count of somewhere else's shelf.
+	from cosmestics.api.pos import selling_warehouse
+
+	warehouse = selling_warehouse()
 	price_list = settings.selling_price_list or frappe.db.get_value(
 		"Price List", {"selling": 1, "enabled": 1}, "name"
 	)

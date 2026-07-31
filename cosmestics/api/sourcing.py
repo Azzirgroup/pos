@@ -89,8 +89,19 @@ def _record_till_payments(invoices):
 	return recorded
 
 
+#: How the money comes back when goods do. Anything else is refused rather than
+#: guessed at — see `return_to_neighbour`.
+REFUND_METHODS = ("account", "cash")
+
+
 @frappe.whitelist(methods=["POST"])
-def return_to_neighbour(invoice: str, lines: list | str | None = None, reason: str | None = None) -> dict:
+def return_to_neighbour(
+	invoice: str,
+	lines: list | str | None = None,
+	reason: str | None = None,
+	refund_method: str = "account",
+	refund_mode: str | None = None,
+) -> dict:
 	"""Send stock back to the shop it was bought from.
 
 	Trade between neighbouring shops runs both ways: what was bought to complete
@@ -104,11 +115,29 @@ def return_to_neighbour(invoice: str, lines: list | str | None = None, reason: s
 	other direction, leaves both documents in the ledger, and nets the payable
 	down by exactly what went back.
 
+	## Where the money goes, which is the part the till has to ask about
+
+	`refund_method='account'` leaves it between the two shops: the return nets
+	the payable down, so the next thing bought from them is that much cheaper to
+	settle. This is right for the usual arrangement, where neighbours run a tab
+	and square up at the end of the week — and it is the only option at all when
+	the purchase was never paid for, because there is no money to hand back.
+
+	`refund_method='cash'` is the shop next door handing the money back over the
+	counter. It marks the return paid through `refund_mode` — the Mode of
+	Payment, which is what picks the account the money lands in — and tells the
+	open shift that cash came *in*, so the drawer is expected to hold that much
+	more at closing. Without that last part the count would come up over by
+	exactly the refund and read as an unexplained surplus.
+
 	`lines` is [{item_code, qty}] for a partial return; omit it to send back
 	everything on the invoice.
 	"""
 	if isinstance(lines, str):
 		lines = frappe.parse_json(lines)
+
+	if refund_method not in REFUND_METHODS:
+		frappe.throw(_("{0} is not a way to take a refund").format(refund_method))
 
 	original = frappe.get_doc("Purchase Invoice", invoice)
 	if original.docstatus != 1:
@@ -161,8 +190,36 @@ def return_to_neighbour(invoice: str, lines: list | str | None = None, reason: s
 	if not doc.items:
 		frappe.throw(_("Nothing left to return on {0}").format(invoice))
 
+	mode = None
+	if refund_method == "account":
+		# Book the debit note against the original rather than against itself,
+		# which is what "comes off what you owe them" means. ERPNext defaults the
+		# other way — the return carries its own negative outstanding and the
+		# purchase still reads as fully owed, so the shop next door appears to be
+		# owed money for goods sitting back on their shelf until somebody runs a
+		# payment reconciliation. It flips itself back if the return is worth more
+		# than is still owed, which is the one case where netting cannot work.
+		doc.update_outstanding_for_self = 0
+
+	if refund_method == "cash":
+		mode = refund_mode or original.mode_of_payment or _default_mode_of_payment(original.company)
+		doc.set_missing_values()
+		doc.calculate_taxes_and_totals()
+		_assert_cash_is_owed_back(original, abs(flt(doc.grand_total)))
+		doc.is_paid = 1
+		doc.mode_of_payment = mode
+		doc.cash_bank_account = _paid_from_account(original.company, mode)
+		# Set explicitly, and negative to match the document: ERPNext never fills
+		# `paid_amount` itself on a Purchase Invoice — the desk form does it in
+		# JavaScript — and an is_paid invoice with a zero paid amount books no
+		# payment at all while still reporting itself as settled.
+		doc.paid_amount = flt(doc.rounded_total or doc.grand_total)
+
 	doc.insert()
 	doc.submit()
+
+	total = abs(flt(doc.grand_total))
+	movement = _record_till_refund(doc, mode, total) if refund_method == "cash" else None
 
 	return {
 		"name": doc.name,
@@ -170,9 +227,78 @@ def return_to_neighbour(invoice: str, lines: list | str | None = None, reason: s
 		"supplier": doc.supplier,
 		# Negative on the document; reported as a positive magnitude because the
 		# cashier is being told how much went back, not signing a ledger.
-		"total": abs(flt(doc.grand_total)),
+		"total": total,
 		"items": len(doc.items),
+		"refund_method": refund_method,
+		"refund_mode": mode,
+		"movement": movement,
 	}
+
+
+def _assert_cash_is_owed_back(original, amount):
+	"""Refuse to take cash back that was never handed over.
+
+	A purchase still on the tab has nothing to refund — sending goods back just
+	reduces what is owed. Taking cash for it as well would have the shop next
+	door paying us for stock we never paid them for, and the drawer would come up
+	over with nothing to explain it.
+	"""
+	paid = flt(original.grand_total) - flt(original.outstanding_amount)
+	already_back = _cash_already_refunded(original.name)
+	left = flt(paid - already_back)
+
+	if left <= 0:
+		frappe.throw(
+			_(
+				"{0} has not been paid for, so there is no cash to take back. "
+				"Send the stock back against the account instead — it comes off what you owe."
+			).format(original.name)
+		)
+	if amount > left + 0.005:
+		frappe.throw(
+			_(
+				"Only {0} of {1} was paid in cash, so that is the most that can come "
+				"back. Return the rest against the account."
+			).format(frappe.format_value(left, {"fieldtype": "Currency"}), original.name)
+		)
+
+
+def _cash_already_refunded(invoice: str) -> float:
+	"""What earlier returns against this purchase already took back in cash."""
+	rows = frappe.get_all(
+		"Purchase Invoice",
+		filters={"return_against": invoice, "docstatus": 1, "is_return": 1, "is_paid": 1},
+		pluck="grand_total",
+	)
+	return flt(sum(abs(flt(r)) for r in rows))
+
+
+def _record_till_refund(doc, mode, total):
+	"""Tell the open shift that cash came back in for this return.
+
+	The mirror of `_record_till_payments`, and silent in the same way when no
+	shift is open: the goods and the refund are already posted, and a drawer
+	figure that has to be corrected at closing beats a return that fails after
+	the money has changed hands.
+	"""
+	from cosmestics.api.shift import get_open_shift, post_movement
+
+	if total <= 0 or not get_open_shift():
+		return None
+
+	try:
+		return post_movement(
+			movement_type="Neighbour Refund",
+			amount=total,
+			mode_of_payment=mode,
+			party=doc.supplier,
+			reason=_("{0} refunded for {1}").format(doc.supplier, doc.name),
+			reference_doctype="Purchase Invoice",
+			reference_name=doc.name,
+		)
+	except Exception:
+		frappe.log_error(f"Could not record the till refund for {doc.name}", "Cosmetics POS")
+		return None
 
 
 @frappe.whitelist(methods=["POST"])
@@ -271,7 +397,13 @@ def _already_returned(invoice: str) -> dict:
 
 @frappe.whitelist()
 def returnable(invoice: str) -> dict:
-	"""What is still on a neighbour purchase, ready to be sent back."""
+	"""What is still on a neighbour purchase, ready to be sent back.
+
+	Also says how the money can come back, before the cashier picks: cash is only
+	on offer for a purchase that was actually paid for, and the modes are the
+	ones this company has an account mapped for. Offering an option that then
+	throws on submit is the same as not offering it, only slower.
+	"""
 	original = frappe.get_doc("Purchase Invoice", invoice)
 	returned = _already_returned(invoice)
 
@@ -290,6 +422,13 @@ def returnable(invoice: str) -> dict:
 			}
 		)
 
+	paid_back = flt(
+		flt(original.grand_total)
+		- flt(original.outstanding_amount)
+		- _cash_already_refunded(original.name)
+	)
+	modes = _refund_modes(original.company)
+
 	return {
 		"name": original.name,
 		"supplier": original.supplier,
@@ -297,7 +436,49 @@ def returnable(invoice: str) -> dict:
 		"grand_total": flt(original.grand_total),
 		"outstanding": flt(original.outstanding_amount),
 		"items": items,
+		# How much of this was paid for and could therefore come back as cash.
+		"refundable_cash": max(paid_back, 0),
+		"can_cash": paid_back > 0,
+		"cash_reason": None
+		if paid_back > 0
+		else _("This purchase is still on the tab, so there is no cash to take back."),
+		"refund_modes": modes,
+		# Back the way it was paid, which is what the shop next door will do.
+		"default_refund_mode": original.mode_of_payment
+		or (modes[0]["name"] if modes else None),
 	}
+
+
+def _refund_modes(company: str) -> list[dict]:
+	"""Modes of payment the refund can arrive through, with where it lands.
+
+	The account is not a separate question: it follows from the mode, through the
+	same Mode of Payment Account mapping every other payment in the app uses. A
+	cashier picking "M-PESA" has picked the account, which is why the till asks
+	about the mode and not about the chart of accounts.
+
+	Only modes with an account on this company are offered — the rest would fall
+	back to the default cash account and quietly book a mobile-money refund as
+	notes in the drawer.
+	"""
+	rows = frappe.get_all(
+		"Mode of Payment Account",
+		filters={"company": company},
+		fields=["parent", "default_account"],
+	)
+	enabled = set(
+		frappe.get_all(
+			"Mode of Payment",
+			filters={"enabled": 1, "name": ("in", [r.parent for r in rows])},
+			pluck="name",
+		)
+	) if rows else set()
+
+	return [
+		{"name": r.parent, "account": r.default_account}
+		for r in rows
+		if r.parent in enabled and r.default_account
+	]
 
 
 @frappe.whitelist()
@@ -441,6 +622,14 @@ def _make_purchase_invoice(supplier, rows, company, warehouse, paid):
 		pi.is_paid = 1
 		pi.mode_of_payment = _default_mode_of_payment(company)
 		pi.cash_bank_account = _paid_from_account(company, pi.mode_of_payment)
+		# ERPNext leaves `paid_amount` to the desk form's JavaScript, so a
+		# server-made invoice was marked paid while paying nothing: no payment
+		# entry in the ledger, and `outstanding_amount` left at the full total
+		# because `is_paid` suppresses the update. The shop then appeared to owe
+		# money it had already handed over.
+		pi.set_missing_values()
+		pi.calculate_taxes_and_totals()
+		pi.paid_amount = flt(pi.rounded_total or pi.grand_total)
 
 	pi.insert()
 	pi.submit()
@@ -482,49 +671,33 @@ def _ensure_supplier(supplier):
 
 
 def _sourcing_warehouse(company):
-	"""Where neighbour-bought goods land — which must be where the sale draws.
+	"""Where neighbour-bought goods land.
 
-	This is the whole correctness condition of buying from next door: the
-	purchase receives stock and the invoice immediately consumes it, so the two
-	have to name the same shelf. They did not.
-
-	With a Sourcing Warehouse configured both used it and everything worked.
-	With it blank, this fell back to *any* non-group warehouse on the company —
-	in practice whichever the query returned first, which on a real site was a
-	per-customer van — while the sale fell through to the POS Profile's
-	warehouse. The goods arrived somewhere the sale could not see, and the
-	invoice died with
+	Exactly where the sale will draw from, because the purchase receives stock
+	that the invoice consumes seconds later. This used to resolve the warehouse
+	itself and could therefore differ from the sale's — which is what produced
 
 	    NegativeStockError: 2.0 units of Item … needed in Stores …
 
-	naming the selling warehouse, which is why it read as a stock problem rather
-	than a routing one.
+	naming the selling warehouse, while the goods sat in whichever warehouse a
+	bare `get_value` happened to return first. On a real site that was a
+	per-customer van.
 
-	So the fallback now mirrors `pos._build_invoice` exactly: settings first, then
-	the POS Profile of the open shift. A bare "first warehouse we find" is the
-	one answer guaranteed to be wrong.
+	There is no separate answer to give: the two are the same question.
 	"""
-	settings = frappe.get_cached_doc("Cosmestics POS Settings")
-	if settings.default_source_warehouse:
-		return settings.default_source_warehouse
+	from cosmestics.api.pos import selling_warehouse
 
-	from cosmestics.api.pos import _active_pos_profile
-
-	profile = _active_pos_profile()
-	if profile:
-		warehouse = frappe.db.get_value("POS Profile", profile, "warehouse")
-		if warehouse:
-			return warehouse
-
-	# Nothing configured and no shift open. Refuse rather than guess: a purchase
-	# received into an arbitrary warehouse is stock the shop cannot sell and will
-	# not find, which is worse than a sale that stops and says why.
-	frappe.throw(
-		_(
-			"No warehouse to receive neighbour stock into. Set a Sourcing Warehouse "
-			"in Settings, or give this till's POS Profile a warehouse."
+	warehouse = selling_warehouse()
+	if not warehouse:
+		# Refusing beats guessing: stock received into an arbitrary warehouse is
+		# stock the shop cannot sell and will not find.
+		frappe.throw(
+			_(
+				"No warehouse to receive neighbour stock into. Give this till's POS "
+				"Profile a warehouse, or set a Sourcing Warehouse in Settings."
+			)
 		)
-	)
+	return warehouse
 
 
 def _default_mode_of_payment(company):

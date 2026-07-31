@@ -4,6 +4,69 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 38. Sending stock back next door, and getting the money
+
+`return_to_neighbour` could send the goods back but had nothing to say about the
+money, which is the half a cashier actually asks about. It now takes a
+`refund_method`:
+
+- **`account`** nets it off what we owe them. This needed one non-obvious flag:
+  ERPNext defaults `update_outstanding_for_self` to 1, so the debit note carried
+  its own negative outstanding and the original purchase still read as fully
+  owed — the shop next door appearing to be owed money for goods back on their
+  own shelf until somebody ran a payment reconciliation. Set to 0, the two net.
+  ERPNext flips it back itself when the return is worth more than is still owed,
+  which is the one case where netting cannot work.
+- **`cash`** is them handing the money over the counter. The return is marked
+  paid through a Mode of Payment, and a **`Neighbour Refund`** movement tells the
+  open shift that cash came *in*.
+
+`refund_mode` is the Mode of Payment, and that is deliberately the only thing
+asked: the account follows from the Mode of Payment Account mapping every other
+payment in the app already uses. `returnable()` offers only modes that have an
+account mapped on the company — the rest would fall back to the default cash
+account and quietly book an M-Pesa refund as notes in the drawer.
+
+Cash is refused where there is no cash to give back: a purchase still on the tab
+has none, and taking it anyway leaves the drawer over with nothing to explain it.
+`returnable()` says so before the cashier picks, rather than throwing on submit.
+
+**A third movement direction.** `PAID_OUT_TYPES` gained a sibling,
+`CASH_IN_TYPES`, and `_paid_out_by_mode` — the one function both the closing
+summary and `close_shift` read — now returns a *net* figure. Amounts stay
+positive on the record; the type carries the direction, so validation can keep
+refusing zero and below and a movement always reads as "this much moved".
+
+`record_movement` still refuses `Neighbour Refund` from the client. The server
+raises it through `post_movement`, alongside the return invoice that justifies
+it — otherwise anyone with till access could add cash to the drawer's
+expectation out of nothing.
+
+Verified against a real shift: buy 100 paid → expected cash −100; return it for
+cash → back to 0, ledger showing cash out then cash back, stock in then out, and
+creditors netted. Eleven checks added to `smoke.py`.
+
+### 39. A neighbour purchase marked paid was paying nothing
+
+Found while building the refund. ERPNext leaves `paid_amount` to the desk form's
+JavaScript, so `is_paid=1` set from the server submitted an invoice that
+reported itself as paid, booked **no payment entry at all**, and — because
+`is_paid` suppresses the outstanding update — left `outstanding_amount` at the
+full total. The shop appeared to owe money it had already handed over, and the
+cash never left the ledger.
+
+Both `_make_purchase_invoice` and the cash refund now compute totals first and
+set `paid_amount` explicitly. This is why `can_cash` can be trusted: it is
+`grand_total − outstanding`, which was previously always zero.
+
+### 40. The account refund said no after the fact
+
+`ReturnSheet.vue` offered "On account" on every sale and let the server refuse it
+on submit — and most till sales are walk-ins, where a credit is one nobody can
+ever claim. `returnable_sale` now returns `can_credit` and `credit_reason`, the
+button is disabled with the reason under it, and the sheet lands on Cash rather
+than on an option that cannot be used.
+
 ### 33. Material requests never reached the WhatsApp group
 
 Reported as "the group is configured but nothing arrives". Nothing in the chain
@@ -747,7 +810,11 @@ really run — the same failure mode as the reorder investigation.
 
     bench --site <site> execute cosmestics.setup.smoke.run
 
-Rolls back, safe against a live site. Currently 347/347.
+Rolls back, safe against a live site. Currently 347/347 — *when the site has
+sellable stock*. It reports `5/5` and a SKIP line when nothing in the selling
+warehouse has ten units of a `is_sales_item` item, which is site state, not a
+regression: the whole sale-dependent half of the suite is skipped. Check the
+SKIP line before reading a small pass count as a small suite.
 
 Two failures this suite reported turned out to be **site state, not code**, and
 both are worth recognising if they come back:

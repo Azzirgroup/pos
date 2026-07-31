@@ -1424,6 +1424,92 @@ def _neighbour_sourcing(r, item):
 		f"is_paid={pi.is_paid} outstanding={pi.outstanding_amount}",
 	)
 
+	_neighbour_returns(r, item, novel)
+
+
+def _neighbour_returns(r, item, novel):
+	"""Sending it back, and getting the money — or not, when there was none.
+
+	The refund route is the only decision here that changes the books rather than
+	the screen, and it is the one the till can get wrong in a way nobody notices:
+	taking cash back for a purchase still on the tab leaves the drawer over with
+	nothing to explain it.
+	"""
+	from cosmestics.api.sourcing import receive_from_neighbours, return_to_neighbour, returnable
+
+	print()
+
+	# --- still on the tab: nothing to hand back ---
+	unpaid = frappe.get_all(
+		"Purchase Invoice", filters={"supplier": novel, "docstatus": 1}, pluck="name"
+	)[0]
+	info = returnable(unpaid)
+	r.check(
+		"an unpaid purchase offers no cash refund",
+		info["can_cash"] is False and bool(info["cash_reason"]),
+		str(info["cash_reason"]),
+	)
+	r.check(
+		"every offered refund mode has an account to land in",
+		all(m.get("account") for m in info["refund_modes"]),
+		str([m["name"] for m in info["refund_modes"]][:4]),
+	)
+	try:
+		return_to_neighbour(invoice=unpaid, refund_method="cash")
+		r.check("taking cash back for a purchase nobody paid for is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("taking cash back for a purchase nobody paid for is refused", True)
+
+	back = return_to_neighbour(invoice=unpaid, refund_method="account")
+	r.check("it can still go back against the account", bool(back["name"]), str(back))
+	r.check("no till movement is raised for an account return", back["movement"] is None)
+	r.check(
+		"the return nets the payable down",
+		flt(frappe.db.get_value("Purchase Invoice", unpaid, "outstanding_amount")) == 0,
+		str(frappe.db.get_value("Purchase Invoice", unpaid, "outstanding_amount")),
+	)
+
+	# --- paid for: the money comes back too ---
+	res = receive_from_neighbours(
+		lines=[{"item_code": item.item_code, "qty": 1, "buy_rate": 90, "supplier": novel}], paid=1
+	)
+	paid_name = res["invoices"][0]["name"]
+	paid_doc = frappe.get_doc("Purchase Invoice", paid_name)
+	# ERPNext leaves paid_amount to the desk form's JavaScript, so this used to
+	# submit as "paid" while paying nothing and still showing the full amount owed.
+	r.check(
+		"a purchase paid at the till actually books the payment",
+		flt(paid_doc.paid_amount) == flt(paid_doc.grand_total)
+		and flt(paid_doc.outstanding_amount) == 0,
+		f"paid={paid_doc.paid_amount} outstanding={paid_doc.outstanding_amount}",
+	)
+
+	info = returnable(paid_name)
+	r.check(
+		"a paid purchase offers the cash back",
+		info["can_cash"] and flt(info["refundable_cash"]) == flt(paid_doc.grand_total),
+		f"can_cash={info['can_cash']} refundable={info['refundable_cash']}",
+	)
+
+	cash_back = return_to_neighbour(invoice=paid_name, refund_method="cash")
+	ret_doc = frappe.get_doc("Purchase Invoice", cash_back["name"])
+	r.check(
+		"the refund is booked as money coming back, not another payable",
+		flt(ret_doc.paid_amount) == flt(ret_doc.grand_total) < 0,
+		f"paid={ret_doc.paid_amount} total={ret_doc.grand_total}",
+	)
+	try:
+		return_to_neighbour(invoice=paid_name, refund_method="cash")
+		r.check("the same cash cannot be taken back twice", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("the same cash cannot be taken back twice", True)
+
+	try:
+		return_to_neighbour(invoice=paid_name, refund_method="somehow")
+		r.check("an invented refund route is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("an invented refund route is refused", True)
+
 
 def _dashboard_tabs(r):
 	"""The five department tabs.
@@ -1907,6 +1993,7 @@ def _annotations(r):
 		(session.me, {}),
 		(session.context, {}),
 		(pos.get_payment_methods, {}),
+		(pos.selling_warehouse, {}),
 		(pos.receipt_url, {"invoice": "x", "print_format": None}),
 		(modules.inventory, {"warehouse": "x", "search": "y", "limit": 10}),
 		(modules.warehouses, {}),

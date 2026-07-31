@@ -269,26 +269,42 @@ def _movements_for(shift_names):
 
 
 def _paid_out_by_mode(movements):
-	"""Per mode, what these movements took out of the drawer.
+	"""Per mode, the *net* these movements took out of the drawer.
+
+	Net, because money moves both ways: a Neighbour Refund is cash handed back
+	over the counter when goods went next door, so it counts against what was
+	paid out. Returned as one figure rather than two because every caller wants
+	the same thing — how much less than the sales the drawer should hold — and
+	both the closing summary and `close_shift` read it from here, so the two can
+	never disagree about it.
+
+	A mode can end up negative, which is correct: refund more than you paid out
+	on that mode and the drawer should hold more than the sales alone say.
 
 	Shorts are excluded: a short is found by counting, so subtracting it from
 	the expectation would make the count agree with itself and the discrepancy
 	would vanish exactly when it is being recorded.
 	"""
 	from cosmestics.cosmestics.doctype.cosmestics_shift_movement.cosmestics_shift_movement import (
+		CASH_IN_TYPES,
 		PAID_OUT_TYPES,
 	)
 
 	out = {}
 	for m in movements:
-		if m.movement_type not in PAID_OUT_TYPES:
+		if m.movement_type in PAID_OUT_TYPES:
+			sign = 1
+		elif m.movement_type in CASH_IN_TYPES:
+			sign = -1
+		else:
 			continue
-		out[m.mode_of_payment] = out.get(m.mode_of_payment, 0) + flt(m.amount)
+		out[m.mode_of_payment] = out.get(m.mode_of_payment, 0) + sign * flt(m.amount)
 	return out
 
 
 def _movement_summary(movements):
 	from cosmestics.cosmestics.doctype.cosmestics_shift_movement.cosmestics_shift_movement import (
+		CASH_IN_TYPES,
 		PAID_OUT_TYPES,
 	)
 
@@ -308,16 +324,24 @@ def _movement_summary(movements):
 		for m in movements
 	]
 	paid_out = [r for r in rows if r["movement_type"] in PAID_OUT_TYPES]
+	cash_in = [r for r in rows if r["movement_type"] in CASH_IN_TYPES]
 	shorts = [r for r in rows if r["movement_type"] == "Short"]
 
 	return {
 		"rows": rows,
 		"count": len(rows),
-		"paid_out_total": flt(sum(r["amount"] for r in paid_out)),
+		# Net, to match the expected amounts: a refund from next door is cash
+		# that came back, so a screen showing gross paid-out beside a netted
+		# expectation would look like the two disagreed.
+		"paid_out_total": flt(
+			sum(r["amount"] for r in paid_out) - sum(r["amount"] for r in cash_in)
+		),
+		"cash_in_total": flt(sum(r["amount"] for r in cash_in)),
 		"expense_total": flt(sum(r["amount"] for r in rows if r["movement_type"] == "Expense")),
 		"neighbour_cash_total": flt(
 			sum(r["amount"] for r in rows if r["movement_type"] == "Neighbour Purchase")
 		),
+		"neighbour_refund_total": flt(sum(r["amount"] for r in cash_in)),
 		"shorts": shorts,
 		"short_total": flt(sum(r["amount"] for r in shorts)),
 	}
@@ -708,26 +732,57 @@ def record_movement(
 	what a shift should reconcile to, so one recorded outside a shift would be
 	accounting nobody ever counts against.
 	"""
+	if movement_type not in ("Expense", "Neighbour Purchase"):
+		# Shorts are attributed at closing, against a difference that has actually
+		# been counted — see `_record_shorts`. A Neighbour Refund is only ever
+		# raised alongside the return invoice that justifies it (see
+		# `sourcing.return_to_neighbour`); allowing it from here would let anyone
+		# with till access add cash to the drawer's expectation out of nothing.
+		frappe.throw(_("{0} is not something you can record during a shift").format(movement_type))
+
+	return post_movement(
+		movement_type=movement_type,
+		amount=amount,
+		mode_of_payment=mode_of_payment,
+		reason=reason,
+		person=person,
+		party=party,
+		expense_account=expense_account,
+	)
+
+
+def post_movement(
+	movement_type: str,
+	amount: float,
+	mode_of_payment: str | None = None,
+	reason: str | None = None,
+	person: str | None = None,
+	party: str | None = None,
+	expense_account: str | None = None,
+	reference_doctype: str | None = None,
+	reference_name: str | None = None,
+) -> dict:
+	"""Write the movement. Not whitelisted — see `record_movement` for why.
+
+	This is the path for movements the *server* raises on the back of a document
+	it has just written, which is why it takes a reference and asks no questions
+	about the type.
+	"""
 	shift = get_open_shift()
 	if not shift:
 		frappe.throw(_("Open a shift before recording money out of the till"))
 
-	if movement_type not in ("Expense", "Neighbour Purchase"):
-		# Shorts are attributed at closing, against a difference that has actually
-		# been counted — see `_record_shorts`.
-		frappe.throw(_("{0} is not something you can record during a shift").format(movement_type))
-
-	mode = mode_of_payment or _cash_mode(shift)
-
 	doc = frappe.new_doc("Cosmestics Shift Movement")
 	doc.shift = shift["name"]
 	doc.movement_type = movement_type
-	doc.mode_of_payment = mode
+	doc.mode_of_payment = mode_of_payment or _cash_mode(shift)
 	doc.amount = flt(amount)
 	doc.reason = reason
 	doc.person = person
 	doc.party = party
 	doc.expense_account = expense_account
+	doc.reference_doctype = reference_doctype
+	doc.reference_name = reference_name
 	doc.insert()
 	doc.submit()
 

@@ -49,6 +49,9 @@ watch(
 		loading.value = true
 		try {
 			sale.value = await getReturnableSale({ invoice: props.invoice })
+			// Cash is the only route open on a walk-in, so land on it rather than
+			// on an option that cannot be used.
+			if (!sale.value?.can_credit) method.value = 'cash'
 		} catch (e) {
 			error.value = e.message || 'Could not load that sale'
 		} finally {
@@ -193,15 +196,24 @@ async function submit() {
 						<button
 							v-for="m in [
 								{ key: 'cash', label: 'Cash back', icon: LucideBanknote, hint: 'Out of the drawer' },
-								{ key: 'credit', label: 'On account', icon: LucideNotebookPen, hint: 'Needs a customer' },
+								{
+									key: 'credit',
+									label: 'On account',
+									icon: LucideNotebookPen,
+									hint: sale?.can_credit ? sale.customer_name : 'No account to credit',
+								},
 							]"
 							:key="m.key"
 							class="flex min-h-touch flex-col items-start gap-0.5 rounded-xl border px-3 py-2.5 text-left transition-colors"
-							:class="
+							:class="[
 								method === m.key
 									? 'border-outline-gray-4 bg-surface-gray-3 text-ink-gray-9'
-									: 'border-outline-gray-2 bg-surface-white text-ink-gray-6 hover:bg-surface-gray-2'
-							"
+									: 'border-outline-gray-2 bg-surface-white text-ink-gray-6 hover:bg-surface-gray-2',
+								m.key === 'credit' && !sale?.can_credit
+									? 'cursor-not-allowed opacity-50'
+									: '',
+							]"
+							:disabled="m.key === 'credit' && !sale?.can_credit"
 							@click="method = m.key"
 						>
 							<span class="flex items-center gap-1.5 text-p-base font-medium">
@@ -211,6 +223,13 @@ async function submit() {
 							<span class="text-p-xs text-ink-gray-5">{{ m.hint }}</span>
 						</button>
 					</div>
+					<!-- Said here rather than discovered on submit. A credit against
+					     the shared walk-in customer is one nobody could ever claim,
+					     so the server refuses it — and most till sales are walk-ins. -->
+					<p v-if="!sale?.can_credit" class="mt-1.5 text-p-xs text-ink-amber-3">
+						{{ sale?.credit_reason }} Refund in cash, or put the sale against a
+						customer first.
+					</p>
 					<p class="mt-1.5 text-p-xs text-ink-gray-5">
 						Cash comes off what this shift expects to hold, so the close still
 						balances.

@@ -63,7 +63,12 @@ def submit_sale(
 				lines=[
 					{
 						"item_code": i["item_code"],
-						"qty": flt(i["qty"]),
+						# What is *bought*, which can exceed what is sold: the shop
+						# next door sells a carton and the customer wants two. The
+						# surplus is received into stock like any other purchase, and
+						# earns its margin when it sells. Falls back to the line
+						# quantity, which is what every existing caller sends.
+						"qty": max(flt(i["sourced"].get("buy_qty")), flt(i["qty"])),
 						"buy_rate": flt(i["sourced"]["buy_rate"]),
 						"supplier": i["sourced"]["supplier"],
 					}
@@ -130,7 +135,7 @@ def _build_invoice(items, payment, customer, company, settings):
 	if settings.selling_price_list:
 		si.selling_price_list = settings.selling_price_list
 
-	warehouse = settings.default_source_warehouse
+	warehouse = selling_warehouse()
 	if warehouse:
 		si.set_warehouse = warehouse
 
@@ -549,6 +554,51 @@ def _require_shift(settings):
 		),
 		title=_("No open shift"),
 	)
+
+
+@frappe.whitelist()
+def selling_warehouse() -> str | None:
+	"""The one warehouse this till sells from.
+
+	**The till's own POS Profile wins.** A warehouse is a property of the
+	counter, not of the installation: a shop with two branches has two profiles
+	pointing at two warehouses, and a single global setting that overrode both
+	made the second branch sell another branch's stock. The setting stays as the
+	fallback for a till with no profile warehouse, which is how a one-shop site
+	is usually configured.
+
+	Resolved in one place because five places resolved it independently —
+	`catalog`, `pos`, `session`, `stock` and `sourcing` — and they were free to
+	disagree. They did: neighbour-bought stock was received into one warehouse
+	while the sale drew from another, and the invoice died on negative stock
+	naming a warehouse that was never short. Anything that can drift will, so
+	the answer is computed once and shared.
+
+	Returns None when nothing is configured. Callers decide what that means: the
+	catalogue can show stock across everywhere, but sourcing has to refuse, and
+	each is a different kind of nothing.
+	"""
+	profile = _active_pos_profile()
+
+	if not profile:
+		# No shift open. A single enabled profile is unambiguous; several are not,
+		# and guessing between them is how the wrong branch gets sold down.
+		company = frappe.defaults.get_user_default("Company")
+		candidates = frappe.get_all(
+			"POS Profile",
+			filters={"disabled": 0, **({"company": company} if company else {})},
+			pluck="name",
+			limit_page_length=2,
+		)
+		profile = candidates[0] if len(candidates) == 1 else None
+
+	if profile:
+		warehouse = frappe.db.get_value("POS Profile", profile, "warehouse")
+		if warehouse:
+			return warehouse
+
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	return settings.default_source_warehouse or None
 
 
 def _active_pos_profile() -> str | None:

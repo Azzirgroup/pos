@@ -68,10 +68,21 @@ def returnable_sale(invoice: str) -> dict:
 			}
 		)
 
+	from cosmestics.api.pos import WALK_IN_CUSTOMER
+
+	# Whether a credit refund is even possible, said before the cashier picks it.
+	# It refuses for a walk-in — which is most till sales — and offering an option
+	# that then throws is the same as not having one, only slower.
+	can_credit = bool(doc.customer) and doc.customer != WALK_IN_CUSTOMER
+
 	return {
 		"invoice": doc.name,
 		"customer": doc.customer,
 		"customer_name": doc.customer_name or doc.customer,
+		"can_credit": can_credit,
+		"credit_reason": None
+		if can_credit
+		else _("This was a walk-in sale, so there is no account to credit."),
 		"posting_date": str(doc.posting_date),
 		"grand_total": flt(doc.grand_total),
 		"outstanding": flt(doc.outstanding_amount),

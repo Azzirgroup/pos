@@ -27,6 +27,10 @@ export function submitSale({ items, payment, customer }) {
 						supplier: l.sourced.supplier,
 						buy_rate: l.sourced.buyRate,
 						paid: l.sourced.paidNow ? 1 : 0,
+						// How many to buy, which can exceed how many are being sold —
+						// the shop next door sells a carton. Defaults to the line
+						// quantity on the server if absent.
+						buy_qty: l.sourced.buyQty || l.qty,
 					}
 				: null,
 		})),
@@ -81,11 +85,15 @@ export const listReturns = ({ days, limit } = {}) =>
 export const getReturnablePurchase = ({ invoice }) =>
 	call('cosmestics.api.sourcing.returnable', { invoice })
 
-export const returnToNeighbour = ({ invoice, lines, reason }) =>
+export const returnToNeighbour = ({ invoice, lines, reason, refundMethod, refundMode }) =>
 	call('cosmestics.api.sourcing.return_to_neighbour', {
 		invoice,
 		lines: lines || null,
 		reason: reason || null,
+		// 'account' comes off what we owe them; 'cash' is money handed back over
+		// the counter, and the mode is what picks the account it lands in.
+		refund_method: refundMethod || 'account',
+		refund_mode: refundMode || null,
 	})
 
 /* ---------- quotations ---------- */
