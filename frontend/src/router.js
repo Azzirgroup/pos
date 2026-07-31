@@ -75,6 +75,15 @@ const routes = [
 		component: () => import('@/views/Masters.vue'),
 	},
 	{
+		// The Items tab under Inventory. Same screen as Records, with the type
+		// already chosen and its picker hidden — arriving here from a module tab,
+		// the other record types are not what you came for.
+		path: '/items',
+		name: 'Items',
+		meta: { title: 'Items', masterKey: 'item', focusedMaster: true },
+		component: () => import('@/views/Masters.vue'),
+	},
+	{
 		path: '/barcodes',
 		name: 'Barcodes',
 		meta: { title: 'Barcodes' },

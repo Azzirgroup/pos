@@ -14,7 +14,7 @@
  */
 export const MODULE_TABS = {
 	inventory: [
-		{ label: 'Items', to: '/masters/item' },
+		{ label: 'Items', to: '/items' },
 		{ label: 'Item price', to: '/pricing' },
 		{ label: 'Stock levels', to: '/inventory' },
 		{ label: 'Barcodes', to: '/barcodes' },
@@ -87,7 +87,7 @@ export function moduleFor(path) {
 		path.startsWith('/inventory') ||
 		path.startsWith('/reorder') ||
 		path.startsWith('/pricing') ||
-		path.startsWith('/masters/item') ||
+		path.startsWith('/items') ||
 		path.startsWith('/barcodes')
 	)
 		return 'inventory'

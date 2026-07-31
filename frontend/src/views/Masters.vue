@@ -44,7 +44,19 @@ watch(newOpen, (open) => {
 	if (!open) editName.value = null
 })
 
-const activeKey = computed(() => route.params.key || types.value[0]?.key || null)
+/**
+ * Whether this is one record type rather than the Records index.
+ *
+ * Set by the route, so the same component serves both: `/masters` browses every
+ * type and needs the picker, while a module tab that already chose one does
+ * not. Guessing from the presence of a `:key` would be wrong — somebody
+ * arriving at `/masters/item` from the index still wants the way back.
+ */
+const focused = computed(() => Boolean(route.meta?.focusedMaster))
+
+const activeKey = computed(
+	() => route.meta?.masterKey || route.params.key || types.value[0]?.key || null,
+)
 const activeType = computed(() => types.value.find((t) => t.key === activeKey.value) || null)
 
 /**
@@ -107,7 +119,12 @@ function notify(message, tone = 'good') {
 
 <template>
 	<div class="flex min-h-0 flex-1 overflow-hidden">
+		<!-- The type picker, shown only when this screen is the Records index.
+		     Reached from a module tab — Inventory → Items, say — the type is
+		     already decided, so a column listing the other five is 200px spent
+		     offering to leave the page you just asked for. -->
 		<aside
+			v-if="!focused"
 			class="hidden w-[200px] shrink-0 overflow-y-auto border-r border-outline-gray-2 bg-surface-white py-2 lg:block"
 		>
 			<div class="px-3 pb-1 text-p-xs font-medium uppercase tracking-wide text-ink-gray-5">
@@ -137,7 +154,9 @@ function notify(message, tone = 'good') {
 		<div class="flex min-w-0 flex-1 flex-col overflow-hidden">
 			<PageHeader :title="activeType?.label || 'Records'" :subtitle="subtitle">
 				<template #actions>
-					<div class="w-[180px] lg:hidden">
+					<!-- The narrow-screen stand-in for the type rail, hidden for the
+					     same reason: on a focused route the type is already decided. -->
+					<div v-if="!focused" class="w-[180px] lg:hidden">
 						<FormControl
 							type="select"
 							:model-value="activeKey"
