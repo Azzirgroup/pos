@@ -86,12 +86,32 @@ Query count is now **constant in the row count**: 6 for 25 shifts or for 5, 3 fo
 20 customers or for 5. Warm timings: shifts 5 ms, customer search 3 ms,
 dashboard overview 31 ms.
 
-### 35. The bundle splits
+### 35. The bundle splits — app from vendor, and no further
 
 Everything was one ~536 kB chunk whose hash changed on any edit, so a one-line
 Vue fix made every till re-download Vue, the router and frappe-ui. `manualChunks`
-splits vendor / vue / frappe-ui / scanner, and a routine deploy now re-fetches
-the **43 kB app chunk** alone. Same bytes cold, far fewer warm.
+now puts **all** of `node_modules` in one vendor chunk, and a routine deploy
+re-fetches the **43 kB app chunk** alone.
+
+**It was first split four ways — vendor / vue / frappe-ui / scanner — and that
+broke production.** The build succeeded; the app then died on load with
+
+    ReferenceError: can't access lexical declaration 'X' before initialization
+    …  frappe-ui Presence.js
+
+frappe-ui and its own dependencies import each other. In separate chunks that is
+a cycle *between chunks*, so the browser evaluates one before the other has
+initialised its bindings — a temporal dead zone error, on a screen that never
+paints. One chunk makes the cycle impossible, because it is a single module
+scope as far as the loader is concerned.
+
+The split that mattered was always app-from-framework; sub-dividing the
+framework bought almost nothing and cost the app. Verified after the fix by
+walking the emitted chunks' import graph: the vendor chunk imports no other
+chunk, and there is no cycle among the 32.
+
+**Do not re-split vendor without loading the built app in a browser.** This
+failure is invisible to `yarn build` and to the smoke test — both pass.
 
 ### 36. Installable, with generated icons
 
