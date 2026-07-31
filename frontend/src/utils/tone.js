@@ -32,6 +32,9 @@ const DEBT_KEYS = new Set([
 	'overdue',
 	'payable',
 	'owed',
+	'unpaid',
+	'short_total',
+	'days_late',
 ])
 
 /**
@@ -71,8 +74,10 @@ const CREDIT_KEYS = new Set([
 	'expected_amount',
 	'taken',
 	'revenue',
-	'spend',
 	'stock_value',
+	// `spend` is deliberately absent. Money going out is not good news because
+	// it is large, and painting a big purchase green says the opposite of what
+	// it means. It stays uncoloured, like any other neutral figure.
 ])
 
 const NEGATIVE_ONLY_KEYS = new Set([
@@ -282,7 +287,27 @@ export const STATUS_KEYS = new Set([
  */
 export function rowTone(row) {
 	if (!row) return null
+	// An explicit tone from the server always wins: it knows things the shape of
+	// a row cannot say.
 	if (row._tone) return row._tone
+
 	if (row.below || row.below_cost) return 'bad'
+
+	// Rows that are genuinely wrong rather than merely notable: stock that has
+	// gone negative is a ledger error, and a shift that did not balance is money
+	// somebody has to account for.
+	if (Number(row.actual_qty) < 0) return 'bad'
+	if (row.difference !== undefined && Number(row.difference) < 0) return 'bad'
+
+	// Something owed and past its date. Both conditions together — an overdue
+	// flag on a settled invoice is noise, and a due date alone is just a date.
+	if (Number(row.outstanding_amount ?? row.outstanding) > 0 && row.status === 'Overdue') {
+		return 'bad'
+	}
+
+	// Deliberately no rule for "unpaid but not yet due", "partially received" or
+	// any other in-progress state. Those are the normal condition of a working
+	// shop, and a list where most rows are tinted is one where the tint has
+	// stopped meaning anything — which costs more than it gives.
 	return null
 }

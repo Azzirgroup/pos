@@ -33,11 +33,29 @@ function cycleRail() {
 	localStorage.setItem('cosmestics:rail', next)
 }
 const route = useRoute()
-// Sub-tabs only where a module has more than one activity.
-const moduleTabs = computed(() => MODULE_TABS[moduleFor(route.path)] || null)
 
-// Navigating is the whole point of the drawer, so it closes itself once you do.
-watch(() => route.path, () => (mobileNav.value = false))
+/**
+ * The module whose tab strip is showing.
+ *
+ * Held rather than derived fresh each time, so `moduleFor` can keep you where
+ * you are when the page you opened belongs to your current module as well as
+ * another one. Recomputed from the path alone whenever it does not.
+ */
+const currentModule = ref(null)
+
+watch(
+	() => route.path,
+	(path) => {
+		currentModule.value = moduleFor(path, currentModule.value)
+		// Navigating is the whole point of the drawer, so it closes itself once
+		// you do.
+		mobileNav.value = false
+	},
+	{ immediate: true },
+)
+
+// Sub-tabs only where a module has more than one activity.
+const moduleTabs = computed(() => MODULE_TABS[currentModule.value] || null)
 </script>
 
 <template>

@@ -55,16 +55,65 @@ export function rowToMessage(row, columns, { title } = {}) {
  * complete answer, which is how somebody ends up chasing nine of eleven
  * overdue invoices believing they are done.
  */
+/**
+ * A fixed-width table inside a WhatsApp code block.
+ *
+ * Triple backticks are the only way to get columns that line up on a phone —
+ * WhatsApp renders them monospace, and in proportional text any amount of
+ * padding comes out ragged. Mirrors `notifications._table` on the server so a
+ * shared list and a stock request look like the same application.
+ */
+function asTable(headers, rows) {
+	const widths = headers.map((h, i) =>
+		Math.max(h.length, ...rows.map((r) => String(r[i] ?? '').length)),
+	)
+	const line = (cells) =>
+		cells
+			.map((c, i) => (i === cells.length - 1 ? String(c) : String(c).padEnd(widths[i])))
+			.join('  ')
+			.trimEnd()
+
+	return [
+		'```',
+		line(headers),
+		line(widths.map((w) => '-'.repeat(w))),
+		...rows.map(line),
+		'```',
+	].join('\n')
+}
+
+/**
+ * A whole list as one message.
+ *
+ * Capped, and it says so when it caps. A silently truncated list reads as the
+ * complete answer, which is how somebody ends up chasing nine of eleven
+ * overdue invoices believing they are done.
+ *
+ * Rendered as a table rather than as repeated label/value blocks: a list is
+ * read by comparing rows, and twenty stacked blocks make that impossible.
+ * Columns are capped at four — a phone is narrow, and the fifth column is what
+ * makes the whole table wrap and stop lining up.
+ */
 export function rowsToMessage(rows, columns, { title, limit = 20 } = {}) {
 	const shown = rows.slice(0, limit)
-	const lines = title ? [`*${title}*`, ''] : []
+	const cols = columns.filter((c) => c.label && c.key !== '_actions').slice(0, 4)
 
-	for (const row of shown) {
-		lines.push(rowToMessage(row, columns))
-		lines.push('')
-	}
+	const lines = title ? [`*${title}*`, ''] : []
+	lines.push(
+		asTable(
+			cols.map((c) => c.label),
+			shown.map((row) =>
+				cols.map((c) => {
+					const v = formatValue(row, c)
+					// Long text breaks the column for every row beneath it.
+					return v.length <= 18 ? v : `${v.slice(0, 17)}…`
+				}),
+			),
+		),
+	)
 
 	if (rows.length > shown.length) {
+		lines.push('')
 		lines.push(`…and ${rows.length - shown.length} more not listed here.`)
 	}
 

@@ -108,6 +108,14 @@ def send_text(to: str, message: str, sender: str | None = None) -> bool:
 	if not to or not message:
 		return False
 
+	# A group is a different send, whoever is asking. Routed here rather than at
+	# each call site because every path that shares something — the documents
+	# hub, the row-action share sheet, the staff-group notice — ends up in this
+	# function, and fixing only the one that was reported would leave the others
+	# failing in exactly the same way.
+	if is_group(to):
+		return _send_to_group(to, message)
+
 	if not _integration_available():
 		frappe.log_error(
 			"whatsapp_integration is not installed; POS notification skipped",
@@ -153,6 +161,13 @@ def send_document(doctype: str, name: str, to: str, message: str | None = None, 
 	"""
 	if not to:
 		return False
+
+	# The integration's document send takes a `phone_number`, so it cannot reach
+	# a group at all. The summary still goes — a group getting the text and no
+	# PDF is a smaller failure than a group getting nothing, which is what
+	# happened before.
+	if is_group(to):
+		return _send_to_group(to, message or f"{doctype} {name}")
 
 	try:
 		from whatsapp_integration.api.whatsapp.whatsapp import send_document_via_whatsapp
@@ -579,29 +594,78 @@ def share(
 	}
 
 
+def app_url(path: str) -> str:
+	"""A link into this app, not into the desk.
+
+	`get_url_to_form` points at `/app/material-request/…`, which opens ERPNext's
+	desk — a screen most shop staff cannot use and some cannot even reach. The
+	people this message goes to live in the POS, so the link should land there.
+	"""
+	return f"{frappe.utils.get_url()}/pos{path}"
+
+
+def _table(headers: list, rows: list) -> str:
+	"""A fixed-width table, wrapped in a WhatsApp code block.
+
+	WhatsApp renders text between triple backticks in a monospace font, which is
+	the only way to get columns that line up on a phone — proportional text
+	turns any amount of padding into a ragged mess. Widths are measured from the
+	content so a long item name does not push the numbers out of alignment.
+
+	Long names are truncated rather than wrapped: a wrapped cell breaks the
+	column for every row beneath it, and the request already carries a link to
+	the full document.
+	"""
+	widths = [len(h) for h in headers]
+	for row in rows:
+		for i, cell in enumerate(row):
+			widths[i] = max(widths[i], len(str(cell)))
+
+	def line(cells):
+		# Last column is not padded — trailing spaces just widen the block.
+		out = []
+		for i, cell in enumerate(cells):
+			text = str(cell)
+			out.append(text if i == len(cells) - 1 else text.ljust(widths[i]))
+		return "  ".join(out).rstrip()
+
+	body = [line(headers), line(["-" * w for w in widths])]
+	body += [line(r) for r in rows]
+	return "```\n" + "\n".join(body) + "\n```"
+
+
 def format_material_request(doc) -> str:
-	"""Human-readable summary. Staff read this on a phone, so it leads with what
-	is needed and where, not with document metadata."""
+	"""What is needed, as a table.
+
+	Leads with the goods rather than with document metadata: the person reading
+	this on a phone is being asked to fetch something, and the reference number
+	only matters once they have decided to.
+	"""
+	rows = []
+	for item in doc.items:
+		name = item.item_name or item.item_code
+		rows.append(
+			[
+				f"{flt(item.qty):g}",
+				name if len(name) <= 24 else name[:23] + "…",
+				item.warehouse or "—",
+			]
+		)
+
 	lines = [
 		"*Stock request*",
 		f"{doc.name} · {doc.material_request_type}",
 		"",
+		_table(["Qty", "Item", "To"], rows),
 	]
 
-	for item in doc.items:
-		qty = flt(item.qty)
-		row = f"• {qty:g} × {item.item_name or item.item_code}"
-		if item.warehouse:
-			row += f" → {item.warehouse}"
-		lines.append(row)
-
 	if getattr(doc, "set_from_warehouse", None):
-		lines.append("")
 		lines.append(f"From: {doc.set_from_warehouse}")
 
-	lines.append("")
+	lines.append(f"Needed by: {doc.schedule_date or 'as soon as possible'}")
 	lines.append(f"Raised by {frappe.utils.get_fullname(doc.owner)}")
-	lines.append(get_url_to_form(doc.doctype, doc.name))
+	lines.append("")
+	lines.append(app_url("/documents/material-request"))
 
 	return "\n".join(lines)
 

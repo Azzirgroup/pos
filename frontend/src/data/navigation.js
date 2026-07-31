@@ -76,8 +76,28 @@ const DOCUMENT_MODULE = {
 	'stock-reconciliation': 'inventory',
 }
 
-/** Which module a route belongs to, so the right tab strip renders. */
-export function moduleFor(path) {
+/**
+ * Which module a route belongs to, so the right tab strip renders.
+ *
+ * `current` is the module you are already in, and it wins whenever the path you
+ * are opening is one of that module's own tabs. Some destinations genuinely
+ * belong to two modules — a material request is raised by whoever sees the empty
+ * shelf and read by whoever does the buying, so it is listed under both
+ * Inventory and Purchasing. Deriving the module from the path alone meant
+ * opening it from Inventory swapped the entire strip to Purchasing, which reads
+ * as the tabs changing under you the moment you touch one.
+ *
+ * Staying put is the right answer: you asked for a page, not for a different
+ * section.
+ */
+export function moduleFor(path, current = null) {
+	if (current && (MODULE_TABS[current] || []).some((tab) => tab.to === path)) {
+		return current
+	}
+	return _moduleForPath(path)
+}
+
+function _moduleForPath(path) {
 	if (path.startsWith('/documents/')) {
 		return DOCUMENT_MODULE[path.split('/')[2]] || null
 	}
