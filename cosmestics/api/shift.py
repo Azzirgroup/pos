@@ -159,7 +159,12 @@ def get_closing_summary():
 	paid_out = _paid_out_by_mode(movements)
 
 	rows = []
-	for mode in {*opening, *taken, *paid_out}:
+	# Every mode the till can take money through, not only the ones that did.
+	# A mode with no float and no sales still has to be counted — otherwise a
+	# cashier who took one Paybill payment on a mode the shift never listed has
+	# nowhere to declare it, and the drawer reconciles against a figure that
+	# quietly excludes it.
+	for mode in {*opening, *taken, *paid_out, *_till_modes(shift)}:
 		open_amt = opening.get(mode, 0)
 		out_amt = paid_out.get(mode, 0)
 		rows.append(
@@ -192,6 +197,33 @@ def get_closing_summary():
 		# a debt opened at this counter and are the reason this block exists.
 		"neighbour": _neighbour_summary(shift["period_start_date"], end),
 	}
+
+
+def _till_modes(shift) -> list:
+	"""Every Mode of Payment this till accepts.
+
+	Read from the shift's own POS Profile, which is what the shop said this
+	counter takes — including the M-Pesa channels split out separately, which is
+	the whole reason they were split. Falling back to the configured modes keeps
+	a site with no profile payment methods working.
+
+	Deduplicated: on a shop that has not split the channels they all resolve to
+	the generic M-Pesa mode, and asking a cashier to count the same drawer three
+	times is worse than not asking at all.
+	"""
+	modes = frappe.get_all(
+		"POS Payment Method",
+		filters={"parent": shift.get("pos_profile")},
+		pluck="mode_of_payment",
+	)
+
+	if not modes:
+		from cosmestics.api.pos import _mode_map
+
+		settings = frappe.get_cached_doc("Cosmestics POS Settings")
+		modes = [m for m in _mode_map(settings).values() if m]
+
+	return list(dict.fromkeys(modes))
 
 
 def _movements(shift_name):

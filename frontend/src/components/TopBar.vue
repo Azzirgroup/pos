@@ -66,7 +66,7 @@ watch(
 				class="hidden rounded-lg px-2 py-1 text-left leading-tight transition-colors hover:bg-surface-gray-2 lg:block"
 				@click="emit('openShift')"
 			>
-				<div class="text-p-sm font-semibold text-ink-gray-9">Cosmestics</div>
+				<div class="text-p-sm font-semibold text-ink-gray-9">Cosmetics</div>
 				<div class="flex items-center gap-1.5 text-p-xs">
 					<span
 						class="h-1.5 w-1.5 rounded-full"

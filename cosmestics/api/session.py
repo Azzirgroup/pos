@@ -75,4 +75,8 @@ def context():
 		else None,
 		"shift": {"name": shift.name, "since": str(shift.period_start_date)} if shift else None,
 		"price_list": settings.selling_price_list,
+		# So the till can say "open a shift first" up front rather than letting a
+		# cashier build a cart and be refused at checkout. The rule itself is
+		# enforced in `pos.submit_sale`; this is only what the screen reads.
+		"requires_shift": bool(settings.get("require_shift_to_sell")),
 	}

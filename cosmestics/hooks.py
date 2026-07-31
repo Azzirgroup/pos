@@ -1,7 +1,7 @@
 app_name = "cosmestics"
-app_title = "Cosmestics"
+app_title = "Cosmetics"
 app_publisher = "Rono"
-app_description = "ERPNext customizations for cosmstics shop"
+app_description = "ERPNext customizations for a cosmetics shop"
 app_email = "ronoelisha625@gmail.com"
 app_license = "mit"
 
@@ -26,7 +26,7 @@ after_migrate = "cosmestics.setup.install.after_migrate"
 # 	{
 # 		"name": "cosmestics",
 # 		"logo": "/assets/cosmestics/logo.png",
-# 		"title": "Cosmestics",
+# 		"title": "Cosmetics",
 # 		"route": "/cosmestics",
 # 		"has_permission": "cosmestics.api.permission.has_app_permission"
 # 	}

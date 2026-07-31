@@ -39,6 +39,7 @@ import ShiftSheet from '@/components/ShiftSheet.vue'
 import CustomerSheet from '@/components/CustomerSheet.vue'
 import ScanSheet from '@/components/ScanSheet.vue'
 import QuotationSheet from '@/components/QuotationSheet.vue'
+import ReturnSheet from '@/components/ReturnSheet.vue'
 import { cameraScanSupported } from '@/composables/useCameraScanner'
 import LucideTriangleAlert from '~icons/lucide/triangle-alert'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
@@ -51,6 +52,7 @@ import LucidePrinter from '~icons/lucide/printer'
 import LucideReceiptText from '~icons/lucide/receipt-text'
 import LucideSend from '~icons/lucide/send'
 import LucideFileText from '~icons/lucide/file-text'
+import LucideUndo from '~icons/lucide/undo-2'
 
 const catalog = useCatalogStore()
 const cart = useCartStore()
@@ -98,7 +100,16 @@ const scanFlash = ref(0)
 
 /* ---------- shift ---------- */
 
-const shift = ref(null)
+/**
+ * The open shift, from the shared store rather than a local copy.
+ *
+ * It used to be loaded here once on mount, which was correct while the till was
+ * the only place a shift could be opened. It is not any more — the Shifts page
+ * opens and closes them too — and a second copy fetched at a different moment
+ * is a copy that disagrees. That is the "the app is not loading the open shift"
+ * symptom: open a shift elsewhere, come back, and this screen still says none.
+ */
+const { shift } = storeToRefs(till)
 const profiles = ref([])
 const shiftSheet = ref(false)
 const shiftMode = ref('open')
@@ -139,11 +150,13 @@ const paymentMethods = ref([])
 onMounted(async () => {
 	catalog.load()
 	try {
-		const [s, p] = await Promise.all([getOpenShift(), getProfiles()])
-		shift.value = s
+		// The shift comes from the store, so it is the same one the header and
+		// the Shifts page are looking at.
+		const [, p] = await Promise.all([till.refreshShift(), getProfiles()])
 		profiles.value = p || []
 	} catch (e) {
-		// Shifts are a convenience, not a gate — never block selling on this.
+		// A failed lookup must not stop the catalogue loading; whether it stops
+		// the *sale* is the shop's decision, enforced on the server.
 		console.warn('[pos] shift lookup failed', e)
 	}
 
@@ -358,12 +371,12 @@ async function doVoidMovement(movement) {
 async function doOpenShift(payload) {
 	shiftBusy.value = true
 	try {
-		shift.value = await apiOpenShift(payload)
+		await apiOpenShift(payload)
 		shiftSheet.value = false
-		// The header chip reads the shift from the shared store, so it has to be
-		// told — otherwise it keeps saying "No shift" until the page reloads,
-		// which is the one moment it most needs to be right.
-		till.refresh()
+		// One refresh updates every screen reading the store — this one, the
+		// header chip, and the Shifts page. Assigning a local copy instead is
+		// what let them drift apart.
+		await till.refresh()
 		notify('Shift opened', 'ok')
 	} catch (e) {
 		notify(e.message || 'Could not open shift', 'warn')
@@ -376,10 +389,9 @@ async function doCloseShift(payload) {
 	shiftBusy.value = true
 	try {
 		const res = await apiCloseShift(payload)
-		shift.value = null
 		shiftSheet.value = false
 		closingSummary.value = null
-		till.refresh()
+		await till.refresh()
 		// Naming who a shortfall is against is the point of recording it, so the
 		// confirmation says so rather than reporting an anonymous number.
 		const named = (res.shorts_recorded || []).map((s) => s.person).join(', ')
@@ -694,8 +706,22 @@ useScanner(onScan, {
 	},
 })
 
+/**
+ * Whether this shop refuses to sell without an open shift.
+ *
+ * The server is what enforces it — this only avoids walking the cashier through
+ * a whole payment sheet to be refused at the end, with a customer waiting.
+ */
+const requiresShift = computed(() => Boolean(till.context?.requires_shift))
+const blockedByShift = computed(() => requiresShift.value && !shift.value)
+
 function openPay() {
 	if (isEmpty.value) return
+	if (blockedByShift.value) {
+		notify('Open a shift before selling — count the drawer first', 'warn')
+		openShiftSheet()
+		return
+	}
 	cartSheet.value = false
 	paySheet.value = true
 }
@@ -706,6 +732,36 @@ function holdSale() {
 		cartSheet.value = false
 		notify(`Sale ${ticket.id} held`, 'ok')
 	}
+}
+
+/* ---------- returns ---------- */
+
+/**
+ * Taking goods back, started from the sale they came from.
+ *
+ * Reached through Recent sales because that is where a customer with a receipt
+ * lands: the cashier finds the sale, then decides what is coming back. A blank
+ * return form would let somebody be refunded for something they never bought.
+ */
+const returnSheet = ref(false)
+const returnInvoice = ref('')
+
+function openReturn(row) {
+	returnInvoice.value = row.name
+	returnSheet.value = true
+}
+
+function onReturned(res) {
+	notify(
+		res.method === 'cash'
+			? `${fmtMoney(res.refunded)} refunded in cash · ${res.name}`
+			: `${fmtMoney(res.refunded)} credited to the account · ${res.name}`,
+		'ok',
+	)
+	// Stock came back and, for a cash refund, the drawer changed — both are
+	// stale on screen now.
+	catalog.refresh()
+	loadRecent()
 }
 
 /* ---------- quotations ---------- */
@@ -874,6 +930,7 @@ useShortcuts({
 		if (shiftSheet.value) return (shiftSheet.value = false)
 		if (stockSheet.value) return (stockSheet.value = false)
 		if (paySheet.value) return (paySheet.value = false)
+		if (returnSheet.value) return (returnSheet.value = false)
 		if (quotationSheet.value) return (quotationSheet.value = false)
 		if (heldSheet.value) return (heldSheet.value = false)
 		if (cartSheet.value) return (cartSheet.value = false)
@@ -912,6 +969,21 @@ useShortcuts({
 			<span class="min-w-0">
 				This shift was opened on an earlier day, so sales cannot be posted. Close it and
 				open a new one — tap here.
+			</span>
+		</button>
+
+		<!-- This shop requires a shift and there is none. Said before anything is
+		     rung up, because the alternative is a full cart and a refusal at the
+		     moment the customer is handing money over. -->
+		<button
+			v-if="blockedByShift"
+			class="flex w-full shrink-0 items-center gap-2.5 bg-surface-amber-3 px-4 py-2 text-left text-p-sm font-medium text-ink-white"
+			@click="openShiftSheet()"
+		>
+			<LucideSunrise class="h-4 w-4 shrink-0" />
+			<span class="min-w-0">
+				No shift is open, so sales cannot be completed. Count the drawer and open one
+				— tap here.
 			</span>
 		</button>
 
@@ -1230,19 +1302,25 @@ useShortcuts({
 					No sales yet.
 				</p>
 
-				<button
+				<div
 					v-for="row in recent.rows"
 					:key="row.name"
-					class="flex items-center gap-3 rounded-xl border border-outline-gray-2 p-3 text-left transition-colors hover:bg-surface-gray-1"
-					@click="printReceipt(row.name)"
+					class="flex items-center gap-3 rounded-xl border border-outline-gray-2 p-3 transition-colors hover:bg-surface-gray-1"
 				>
+					<button class="flex min-w-0 flex-1 items-center gap-3 text-left" @click="printReceipt(row.name)">
 					<div class="min-w-0 flex-1">
 						<div class="truncate text-p-base font-medium text-ink-gray-9">
 							{{ row.customer }}
 						</div>
 						<div class="truncate text-p-xs text-ink-gray-5">
 							{{ row.name }} · {{ row.posting_date }}
-							<span v-if="!row.is_pos"> · off-till</span>
+							<!-- Named rather than left to be inferred from a negative
+							     total: a credit note beside a sale of the same value is
+							     otherwise indistinguishable at a glance. -->
+							<span v-if="row.is_return" class="font-medium text-ink-amber-3">
+								· return of {{ row.return_against }}
+							</span>
+							<span v-else-if="!row.is_pos"> · off-till</span>
 						</div>
 					</div>
 					<div class="shrink-0 text-right">
@@ -1257,7 +1335,22 @@ useShortcuts({
 						</div>
 					</div>
 					<LucidePrinter class="h-4 w-4 shrink-0 text-ink-gray-5" />
-				</button>
+					</button>
+					<!-- Kept a separate control: a customer wanting a reprint and one
+					     wanting their money back must not be one mis-tap apart.
+					     Absent on a credit note — a return is not itself returnable,
+					     and the endpoint refuses one anyway, so offering the button
+					     would only promise something that cannot happen. -->
+					<button
+						v-if="!row.is_return"
+						class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-gray-5 transition-colors hover:bg-surface-amber-2 hover:text-ink-amber-3"
+						:aria-label="`Return goods from ${row.name}`"
+						title="Take goods back"
+						@click="openReturn(row)"
+					>
+						<LucideUndo class="h-4 w-4" />
+					</button>
+				</div>
 			</div>
 		</BottomSheet>
 
@@ -1294,6 +1387,8 @@ useShortcuts({
 		/>
 
 		<ScanSheet v-model="scanSheet" :last-result="scanResult" @scan="onCameraScan" />
+
+		<ReturnSheet v-model="returnSheet" :invoice="returnInvoice" @returned="onReturned" />
 
 		<QuotationSheet
 			v-model="quotationSheet"

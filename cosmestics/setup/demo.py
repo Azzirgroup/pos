@@ -39,7 +39,7 @@ def maybe_seed_demo():
 	if not flag and frappe.db.count("Item") > 0:
 		frappe.msgprint(
 			_(
-				"Cosmestics: skipped demo catalog because this site already has items. "
+				"Cosmetics: skipped demo catalog because this site already has items. "
 				"Run <code>bench --site {0} execute cosmestics.setup.demo.seed_demo_data</code> "
 				"to seed it anyway."
 			).format(frappe.local.site),
@@ -53,7 +53,7 @@ def maybe_seed_demo():
 def seed_demo_data():
 	"""Idempotent: safe to re-run, creates only what is missing."""
 	if not frappe.db.exists("DocType", "Item"):
-		frappe.throw(_("ERPNext is required to seed the Cosmestics demo catalog"))
+		frappe.throw(_("ERPNext is required to seed the Cosmetics demo catalog"))
 
 	company = _company()
 	if not company:

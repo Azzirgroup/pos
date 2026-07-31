@@ -83,7 +83,7 @@ def _record_till_payments(invoices):
 			# waiting. A drawer figure that has to be corrected at closing is a
 			# far smaller problem than a sale that fails here.
 			frappe.log_error(
-				f"Could not record the till movement for {inv['name']}", "Cosmestics POS"
+				f"Could not record the till movement for {inv['name']}", "Cosmetics POS"
 			)
 
 	return recorded

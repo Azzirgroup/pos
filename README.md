@@ -1,4 +1,4 @@
-### Cosmestics
+### Cosmetics
 
 ERPNext customizations for cosmstics shop
 

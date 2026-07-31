@@ -61,6 +61,33 @@ export const closeShift = ({ counted, shorts }) =>
 
 /* ---------- money out of the till ---------- */
 
+/* ---------- returns ---------- */
+
+export const getReturnableSale = ({ invoice }) =>
+	call('cosmestics.api.returns.returnable_sale', { invoice })
+
+export const createSalesReturn = ({ invoice, lines, refundMethod, reason }) =>
+	call('cosmestics.api.returns.create_sales_return', {
+		invoice,
+		lines: lines || null,
+		refund_method: refundMethod || 'cash',
+		reason: reason || null,
+	})
+
+export const listReturns = ({ days, limit } = {}) =>
+	call('cosmestics.api.returns.list_returns', { days: days || 30, limit: limit || 50 })
+
+/** Send neighbour-sourced stock back to the shop it came from. */
+export const getReturnablePurchase = ({ invoice }) =>
+	call('cosmestics.api.sourcing.returnable', { invoice })
+
+export const returnToNeighbour = ({ invoice, lines, reason }) =>
+	call('cosmestics.api.sourcing.return_to_neighbour', {
+		invoice,
+		lines: lines || null,
+		reason: reason || null,
+	})
+
 /* ---------- quotations ---------- */
 
 export const createQuotation = ({ items, customer, validDays, notes }) =>

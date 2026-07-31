@@ -195,9 +195,9 @@ const MOVEMENT_ICONS = {
 		@update:model-value="emit('update:modelValue', $event)"
 	>
 		<!-- ---------- Open ---------- -->
-		<div v-if="mode === 'open'" class="flex flex-col gap-4 px-4 pb-5 pt-1">
+		<div v-if="mode === 'open'" class="flex flex-col gap-2.5 px-4 pb-4 pt-1">
 			<div class="flex items-center gap-3">
-				<div class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-surface-amber-2">
+				<div class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface-amber-2">
 					<LucideSunrise class="h-5 w-5 text-ink-amber-3" />
 				</div>
 				<div>
@@ -212,7 +212,7 @@ const MOVEMENT_ICONS = {
 					<button
 						v-for="p in profiles"
 						:key="p.name"
-						class="min-h-touch rounded-lg border px-3 py-2.5 text-left text-p-base transition-colors"
+						class="min-h-touch rounded-lg border px-3 py-2 text-left text-p-base transition-colors"
 						:class="
 							profile === p.name
 								? 'border-outline-gray-4 bg-surface-gray-3 font-medium text-ink-gray-9'
@@ -225,7 +225,7 @@ const MOVEMENT_ICONS = {
 				</div>
 			</div>
 
-			<div class="flex flex-col gap-3">
+			<div class="flex flex-col gap-2">
 				<label class="text-p-sm font-medium text-ink-gray-7">Opening float</label>
 				<div v-for="m in paymentModes" :key="m" class="flex items-center gap-3">
 					<span class="w-24 shrink-0 text-p-base text-ink-gray-7">{{ m }}</span>
@@ -234,14 +234,14 @@ const MOVEMENT_ICONS = {
 						type="number"
 						inputmode="decimal"
 						placeholder="0"
-						class="tabular h-12 min-w-0 flex-1 rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-lg font-semibold text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
+						class="tabular h-11 min-w-0 flex-1 rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-lg font-semibold text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
 						@focus="$event.target.select()"
 					/>
 				</div>
 			</div>
 
 			<button
-				class="min-h-touch w-full rounded-xl bg-surface-gray-7 py-4 text-p-lg font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
+				class="min-h-touch w-full rounded-xl bg-surface-gray-7 py-3 text-p-lg font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
 				:disabled="!profile || busy"
 				@click="submitOpen"
 			>
@@ -251,9 +251,9 @@ const MOVEMENT_ICONS = {
 		</div>
 
 		<!-- ---------- Close ---------- -->
-		<div v-else class="flex flex-col gap-4 px-4 pb-5 pt-1">
+		<div v-else class="flex flex-col gap-2.5 px-4 pb-4 pt-1">
 			<div class="flex items-center gap-3">
-				<div class="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-surface-gray-3">
+				<div class="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-surface-gray-3">
 					<LucideSunset class="h-5 w-5 text-ink-gray-7" />
 				</div>
 				<div class="min-w-0 flex-1">
@@ -296,11 +296,11 @@ const MOVEMENT_ICONS = {
 
 			<!-- ---------- Count ---------- -->
 			<template v-if="tab === 'count'">
-				<div class="flex flex-col gap-3">
+				<div class="flex flex-col gap-2">
 					<div
 						v-for="r in rows"
 						:key="r.mode_of_payment"
-						class="rounded-xl border border-outline-gray-2 p-3"
+						class="rounded-xl border border-outline-gray-2 p-2.5"
 					>
 						<div class="flex items-baseline justify-between gap-2">
 							<span class="text-p-base font-medium text-ink-gray-8">
@@ -317,7 +317,7 @@ const MOVEMENT_ICONS = {
 								</template>
 							</span>
 						</div>
-						<div class="mt-2 flex items-center gap-3">
+						<div class="mt-1.5 flex items-center gap-3">
 							<div class="min-w-0 flex-1">
 								<div class="text-p-xs text-ink-gray-5">Expected</div>
 								<div class="tabular text-p-lg font-semibold text-ink-gray-9">
@@ -330,7 +330,7 @@ const MOVEMENT_ICONS = {
 									v-model="counted[r.mode_of_payment]"
 									type="number"
 									inputmode="decimal"
-									class="tabular h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-lg font-semibold text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
+									class="tabular h-10 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base font-semibold text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
 									@focus="$event.target.select()"
 								/>
 							</div>
@@ -384,7 +384,7 @@ const MOVEMENT_ICONS = {
 				</button>
 
 				<div
-					class="flex items-center justify-between rounded-xl px-4 py-3"
+					class="flex items-center justify-between rounded-xl px-4 py-2.5"
 					:class="
 						totalDifference === 0
 							? 'bg-surface-green-2'
@@ -426,7 +426,7 @@ const MOVEMENT_ICONS = {
 				</div>
 
 				<button
-					class="flex min-h-touch w-full items-center justify-center gap-2 rounded-xl bg-surface-gray-7 py-4 text-p-lg font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
+					class="flex min-h-touch w-full items-center justify-center gap-2 rounded-xl bg-surface-gray-7 py-3 text-p-lg font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
 					:disabled="busy"
 					@click="submitClose"
 				>
@@ -437,7 +437,7 @@ const MOVEMENT_ICONS = {
 
 			<!-- ---------- Money out ---------- -->
 			<template v-else-if="tab === 'money'">
-				<div class="rounded-xl border border-outline-gray-2 p-3">
+				<div class="rounded-xl border border-outline-gray-2 p-2.5">
 					<div class="mb-3 flex gap-1 rounded-lg bg-surface-gray-2 p-1">
 						<button
 							v-for="k in ['Expense', 'Neighbour Purchase']"

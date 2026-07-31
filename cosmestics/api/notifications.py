@@ -111,7 +111,7 @@ def send_text(to: str, message: str, sender: str | None = None) -> bool:
 	if not _integration_available():
 		frappe.log_error(
 			"whatsapp_integration is not installed; POS notification skipped",
-			"Cosmestics POS",
+			"Cosmetics POS",
 		)
 		return False
 
@@ -135,7 +135,7 @@ def send_text(to: str, message: str, sender: str | None = None) -> bool:
 
 	frappe.log_error(
 		f"WhatsApp send to {to} failed after {SEND_ATTEMPTS} attempts: {last_error}",
-		"Cosmestics POS",
+		"Cosmetics POS",
 	)
 	return False
 
@@ -173,7 +173,7 @@ def send_document(doctype: str, name: str, to: str, message: str | None = None, 
 		)
 		return _succeeded(result)
 	except Exception as e:
-		frappe.log_error(f"WhatsApp document send of {doctype} {name} to {to} failed: {e}", "Cosmestics POS")
+		frappe.log_error(f"WhatsApp document send of {doctype} {name} to {to} failed: {e}", "Cosmetics POS")
 		return False
 
 
@@ -263,7 +263,7 @@ def list_groups() -> dict:
 		)
 		payload = resp.json()
 	except (requests.RequestException, ValueError) as e:
-		frappe.log_error(f"Could not list WhatsApp groups: {e}", "Cosmestics POS")
+		frappe.log_error(f"Could not list WhatsApp groups: {e}", "Cosmetics POS")
 		return {"groups": [], "reason": _("The WhatsApp bridge did not answer.")}
 
 	return {"groups": _parse_groups(payload), "reason": None}
@@ -370,7 +370,7 @@ def test_whatsapp(to: str, message: str | None = None):
 	groups = list_groups()
 	sent = send_text(
 		to,
-		message or "Cosmestics POS test message — if you can read this, sending works.",
+		message or "Cosmetics POS test message — if you can read this, sending works.",
 	)
 	return {
 		"integration_installed": installed,
@@ -492,7 +492,7 @@ def on_material_request_submit(doc, method=None):
 		# is unavailable, which inverts this module's whole premise: the request
 		# matters, the message about it does not.
 		frappe.log_error(
-			f"Could not queue the WhatsApp notice for {doc.name}: {e}", "Cosmestics POS"
+			f"Could not queue the WhatsApp notice for {doc.name}: {e}", "Cosmetics POS"
 		)
 
 

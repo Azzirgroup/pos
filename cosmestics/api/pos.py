@@ -43,6 +43,8 @@ def submit_sale(
 	if not company:
 		frappe.throw(_("No company configured"))
 
+	_require_shift(settings)
+
 	# 1. Buy the neighbour-sourced lines first so the stock exists.
 	purchases = []
 	sourced = [i for i in items if i.get("sourced")]
@@ -453,6 +455,11 @@ def recent_sales(limit: int = 20, mine: int = 1, this_shift: int = 1) -> dict:
 			"grand_total",
 			"outstanding_amount",
 			"is_pos",
+			# A return is a Sales Invoice too, so credit notes appear in this list
+			# alongside sales. Without the flag the till cannot tell them apart —
+			# and would offer to return something that already is one.
+			"is_return",
+			"return_against",
 			"status",
 		],
 		order_by="creation desc",
@@ -514,6 +521,34 @@ def _payment_account(mode, company) -> str | None:
 		"Mode of Payment Account", {"parent": mode, "company": company}, "default_account"
 	)
 	return account or frappe.db.get_value("Company", company, "default_cash_account")
+
+
+def _require_shift(settings):
+	"""Refuse the sale when the shop insists on shifts and none is open.
+
+	Enforced here rather than only in the browser: this endpoint is reachable
+	directly, and a rule only the UI applies is not a rule.
+
+	Off by default. A shop that does not run shifts must still be able to sell,
+	and a till that refuses is worse than one that reconciles nowhere — which is
+	why this is a setting rather than the behaviour.
+
+	The message names the fix: "no open shift" to a cashier with a customer
+	waiting is a dead end rather than an instruction.
+	"""
+	if not settings.get("require_shift_to_sell"):
+		return
+
+	if _active_pos_profile():
+		return
+
+	frappe.throw(
+		_(
+			"Open a shift before selling. Count the drawer first, and this sale can "
+			"then be reconciled against it."
+		),
+		title=_("No open shift"),
+	)
 
 
 def _active_pos_profile() -> str | None:

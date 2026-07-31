@@ -35,6 +35,7 @@ POS_SETTINGS_FIELDS = (
 	"neighbour_supplier_group",
 	"default_source_warehouse",
 	"default_expense_account",
+	"require_shift_to_sell",
 )
 
 #: POS Profile fields a shop actually retargets. Deliberately excludes the

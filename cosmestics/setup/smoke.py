@@ -109,6 +109,9 @@ def _run(r):
 	_catalog(r)
 	_partial_payment(r, item)
 	_shift_and_credit(r, item)
+	# That section closes its shift as part of what it tests, so anything below
+	# that posts a sale needs one opened again.
+	_ensure_sellable_shift()
 	_till(r, item)
 	_neighbour_sourcing(r, item)
 	_transfer_request(r, item)
@@ -262,6 +265,45 @@ def _clear_stale_shift(r):
 	if shift:
 		close_shift()
 		print(f"  (closed {shift['name']} so the test can post sales; rolled back after)")
+
+	# A shop can require an open shift to sell. The sales below have to run under
+	# that rule rather than around it — testing the till in a configuration the
+	# shop is not in is how a check passes while the counter cannot trade.
+	needed = _ensure_sellable_shift()
+	r.check(
+		"a shift can be opened when the shop requires one to sell",
+		needed is not False,
+		"no till profile — selling is impossible while a shift is required",
+	)
+
+
+def _ensure_sellable_shift():
+	"""Open a shift if this shop refuses to sell without one.
+
+	Returns None when no shift is needed, True when one is open, False when the
+	site cannot provide one. Called again after `_shift_and_credit`, which closes
+	its shift on purpose — every later section that posts a sale would otherwise
+	be testing a till the shop has configured itself out of using.
+	"""
+	if not frappe.db.get_single_value("Cosmestics POS Settings", "require_shift_to_sell"):
+		return None
+
+	from cosmestics.api.shift import get_open_shift, get_profiles, open_shift
+
+	if get_open_shift():
+		return True
+
+	profiles = get_profiles()
+	if not profiles:
+		return False
+
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	opened = open_shift(
+		pos_profile=profiles[0]["name"],
+		balances=[{"mode_of_payment": settings.mode_cash, "opening_amount": 0}],
+	)
+	print(f"  (this shop requires a shift; opened {opened['name']})")
+	return True
 
 
 def _modules_and_reports(r):
@@ -1816,6 +1858,7 @@ def _annotations(r):
 		quotations,
 		reorder,
 		reports,
+		returns,
 		session,
 		settings,
 		shift,
@@ -1852,6 +1895,12 @@ def _annotations(r):
 			{"days": 30, "status": None, "search": None, "limit": 50},
 		),
 		(quotations.get, {"name": "x"}),
+		(returns.returnable_sale, {"invoice": "x"}),
+		(
+			returns.create_sales_return,
+			{"invoice": "x", "lines": None, "refund_method": "cash", "reason": None},
+		),
+		(returns.list_returns, {"days": 30, "limit": 50}),
 		(catalog.get_catalog, {}),
 		(session.me, {}),
 		(session.context, {}),

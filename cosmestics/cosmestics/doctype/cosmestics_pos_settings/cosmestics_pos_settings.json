@@ -23,7 +23,9 @@
   "column_break_src",
   "default_source_warehouse",
   "till_section",
-  "default_expense_account"
+  "default_expense_account",
+  "column_break_till",
+  "require_shift_to_sell"
  ],
  "fields": [
   {
@@ -146,6 +148,17 @@
    "fieldtype": "Link",
    "label": "Default Expense Account",
    "options": "Account"
+  },
+  {
+   "fieldname": "column_break_till",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "0",
+   "description": "Refuse to complete a sale unless the cashier has an open shift. Leave off in a shop that does not run shifts \u2014 a till that cannot sell is worse than one that reconciles nowhere.",
+   "fieldname": "require_shift_to_sell",
+   "fieldtype": "Check",
+   "label": "Require an Open Shift to Sell"
   }
  ],
  "index_web_pages_for_search": 1,

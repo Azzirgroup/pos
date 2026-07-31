@@ -20,6 +20,29 @@ app.use(router)
 // boot call is hanging is worse than one running on stale defaults.
 app.mount('#app')
 
+/**
+ * Register the asset-shell service worker.
+ *
+ * Production only: in `yarn dev` a worker caching hashed assets would serve
+ * yesterday's build back after every edit.
+ *
+ * Registered at its own directory scope, which is all a worker served from
+ * `/assets/…` is permitted. Asking for a wider scope throws a SecurityError
+ * unless the server sends `Service-Worker-Allowed`, so this does not ask — the
+ * assets get cached, and offline *navigation* waits for that header to exist.
+ *
+ * Failure is swallowed on purpose. A worker is an optimisation; a till that
+ * refuses to start because caching is unavailable would be a much worse bug
+ * than a slow first load.
+ */
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+	window.addEventListener('load', () => {
+		navigator.serviceWorker
+			.register('/assets/cosmestics/frontend/sw.js')
+			.catch((e) => console.warn('[pos] service worker not registered:', e.message))
+	})
+}
+
 // In `yarn dev` the page is served by vite rather than Jinja, so window.boot is
 // absent and has to be fetched. Production gets it inlined by jinjaBootData.
 if (import.meta.env.DEV && !window.boot) {

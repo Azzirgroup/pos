@@ -186,7 +186,7 @@ const POS_GROUPS = [
 	{
 		title: 'Till movements',
 		hint: 'Where cash taken out of the drawer for a non-sales expense is booked.',
-		fields: ['default_expense_account'],
+		fields: ['default_expense_account', 'require_shift_to_sell'],
 	},
 	{
 		title: 'WhatsApp',
