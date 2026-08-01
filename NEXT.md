@@ -4,6 +4,59 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 42. A deploy under an open tab looked like a broken app
+
+Every screen is a lazily imported hashed chunk, so a rebuild renames all of
+them. A till left open across a deploy is running an index chunk that asks for
+`Masters-BB8x8YCo.js` when the server now has `Masters-wNK3hWmT.js`, and the
+navigation dies with "error loading dynamically imported module" — the tab looks
+broken to a cashier who did nothing wrong, and the fix is a hard reload nobody
+would guess.
+
+`router.onError` now catches that one class of error and reloads. **In place,
+not to the route that failed**: the first attempt navigated to
+`` `/pos${to.fullPath}` ``, which means building the app's own base by hand, and
+the report that came back was "it leaves the app". A reload cannot leave, the
+address bar never changed, and the tap works the second time. A session flag
+stops it looping, so a genuinely missing chunk still fails visibly.
+
+Every stat tile now carries an icon — the ones written in the front end were the
+ones without, because the server-built tiles have had them since they were
+written. `utils/icons.js` gained `store`, `location` and `wallet`.
+
+### 41. Seven things the shop asked for after using it
+
+From a marked-up walkthrough. Small individually; three of them changed shared
+components, so they landed everywhere at once rather than screen by screen.
+
+- **The blue bulk-price button is black and bold.** `font-bold` alone did
+  nothing: frappe-ui puts `font-medium` on the Button's size class and Tailwind
+  emits `.font-medium` *after* `.font-bold`, so the override needs `!font-bold`.
+  Checked in the built CSS rather than assumed — this is the failure mode where
+  the build is green and the screen is unchanged.
+- **Counts read green.** `cellTone` now takes the column's declared type,
+  because `Number('500')` is a whole number whether it is five hundred shillings
+  or five hundred bottles and nothing else could tell them apart. Money keeps
+  the full vocabulary; a count is green when there is some and muted at zero.
+  Stock on the shelf joined them — it was the only count left deliberately
+  plain, which made a column of black cells with two red ones look like the
+  absence of a rule. `reserved_qty` left `STOCK_KEYS` on the way past: zero
+  reserved is the ordinary state, and amber on a column of zeroes is noise.
+- **The stat tiles are framed in violet.** Violet is the one hue the status
+  vocabulary does not use, so tinting every tile costs nothing — a red figure
+  inside a violet card still reads as the exception. More gap, more padding.
+- **Tile icons are coloured chips** rather than grey outlines, toned in
+  agreement with the number above them.
+- **The module tabs and master chips are spaced out** and the active one is
+  violet. Same control in two files; both changed so they still match.
+- **The hold button undoes itself.** With items in the cart it holds; with an
+  empty cart and a held ticket it brings the last one back. The mistake it
+  fixes happens with a customer at the counter, so the recovery has to be the
+  control they just pressed, not a list of tickets to go and find. Ticket
+  numbering became a counter on the way: it was `held.length + 1`, which went
+  backwards on resume and handed a live ticket's number to the next hold —
+  and `resume` takes the first match, so the wrong cart could come back.
+
 ### 38. Sending stock back next door, and getting the money
 
 `return_to_neighbour` could send the goods back but had nothing to say about the

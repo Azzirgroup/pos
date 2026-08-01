@@ -740,11 +740,27 @@ function openPay() {
 	paySheet.value = true
 }
 
+/**
+ * Park the sale — or bring the last one back.
+ *
+ * One button, because the mistake it undoes happens at the counter with a
+ * customer waiting: a cashier who taps hold by accident is looking at an empty
+ * cart, and the recovery has to be the control they just pressed rather than a
+ * list of tickets they have to go and find. With items in the cart it holds, as
+ * it always did; with none, it resumes the most recent ticket.
+ */
 function holdSale() {
+	if (cart.isEmpty && cart.held.length) {
+		const ticket = cart.held[cart.held.length - 1]
+		cart.resume(ticket.id)
+		notify(`Sale ${ticket.id} is back in the cart`, 'ok')
+		return
+	}
+
 	const ticket = cart.hold()
 	if (ticket) {
 		cartSheet.value = false
-		notify(`Sale ${ticket.id} held`, 'ok')
+		notify(`Sale ${ticket.id} held — tap again to undo`, 'ok')
 	}
 }
 

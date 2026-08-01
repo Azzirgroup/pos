@@ -143,7 +143,45 @@ const routes = [
 	},
 ]
 
-export default createRouter({
+const router = createRouter({
 	history: createWebHistory('/pos'),
 	routes,
 })
+
+/**
+ * Recover from a deploy that happened under an open tab.
+ *
+ * Every screen is a dynamic import of a hashed chunk, and a rebuild renames all
+ * of them. A till left open all day is therefore running an index chunk that
+ * asks for `Masters-BB8x8YCo.js` when the server now has `Masters-Ba2H_eUg.js`,
+ * and the navigation dies with "error loading dynamically imported module" —
+ * the tab looks broken to a cashier who has done nothing wrong, and the fix is
+ * a hard reload nobody would think of.
+ *
+ * Reloading lands on the freshly rendered page (`pos.html` is `no_cache`), which
+ * carries the new chunk names. Guarded by a session flag so a genuinely missing
+ * chunk — a bad deploy rather than a stale tab — fails visibly instead of
+ * reloading forever; the flag clears on the next successful navigation.
+ */
+const RELOAD_FLAG = 'cosmetics:chunk-reload'
+
+router.onError((error) => {
+	const message = String(error?.message || '')
+	const isChunkMiss =
+		/dynamically imported module|Importing a module script failed|Failed to fetch/i.test(message)
+
+	if (!isChunkMiss || sessionStorage.getItem(RELOAD_FLAG)) return
+
+	sessionStorage.setItem(RELOAD_FLAG, '1')
+	// Reload where we stand rather than navigating to the route that failed.
+	// Building a URL here means constructing the app's own base by hand, and
+	// getting that wrong sends a cashier out of the app entirely — a far worse
+	// outcome than the tab they are already looking at reloading itself. The
+	// failed navigation never changed the address bar, so this comes back to the
+	// same screen with the new chunks, and the tap works the second time.
+	window.location.reload()
+})
+
+router.afterEach(() => sessionStorage.removeItem(RELOAD_FLAG))
+
+export default router

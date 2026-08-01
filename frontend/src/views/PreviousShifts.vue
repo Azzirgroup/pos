@@ -75,13 +75,14 @@ const rows = computed(() => data.value.rows || [])
 const stats = computed(() => {
 	const t = data.value.totals || {}
 	return [
-		{ label: 'Shifts closed', value: t.shifts, type: 'number' },
-		{ label: 'Taken', value: t.taken, type: 'currency' },
-		{ label: 'Paid out', value: t.paid_out, type: 'currency' },
+		{ label: 'Shifts closed', value: t.shifts, type: 'number', icon: 'lock' },
+		{ label: 'Taken', value: t.taken, type: 'currency', icon: 'money' },
+		{ label: 'Paid out', value: t.paid_out, type: 'currency', icon: 'wallet' },
 		{
 			label: 'Short',
 			value: t.short,
 			type: 'currency',
+			icon: 'alert',
 			tone: t.short > 0 ? 'bad' : 'good',
 			hint: t.unbalanced ? `${t.unbalanced} did not balance` : 'Every shift balanced',
 		},

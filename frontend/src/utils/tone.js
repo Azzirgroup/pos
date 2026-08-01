@@ -143,8 +143,13 @@ function num(row, ...keys) {
  *              be right without it — a due date is only late if something is
  *              still owed, and "every past due date is red" would light up the
  *              entire history of a paid-up customer.
+ * @param type  the column's declared type. Only 'currency' and 'number' differ,
+ *              and only for figures the rules above do not claim: a count reads
+ *              green, money stays neutral. Without it the two are
+ *              indistinguishable — `Number('500')` is a whole number whether it
+ *              is five hundred shillings or five hundred bottles.
  */
-export function cellTone(key, value, row = null) {
+export function cellTone(key, value, row = null, type = null) {
 	if (value === null || value === undefined || value === '') return ''
 
 	if (DUE_KEYS.has(key)) return dueTone(value, row)
@@ -182,6 +187,12 @@ export function cellTone(key, value, row = null) {
 
 	if (STOCK_KEYS.has(key)) return stockTone(n)
 
+	// A plain count: green when there is some of it, muted at zero. Asked for by
+	// the shop, and it survives the rule at the top of this file because a count
+	// has only those two states — there is no "large count" that means trouble
+	// the way a large sum of money can.
+	if (type === 'number') return n > 0 ? GREEN : MUTED
+
 	/**
 	 * Every remaining figure still gets colour, on request.
 	 *
@@ -209,7 +220,10 @@ const STOCK_KEYS = new Set([
 	'projected_qty',
 	'total_stock',
 	'stock_qty',
-	'reserved_qty',
+	// `reserved_qty` is deliberately absent. Zero here means nothing is spoken
+	// for, which is the ordinary state of most stock — the amber that "zero on
+	// the shelf" earns would have lit up an entire column that is nearly always
+	// zeroes. It falls through to the plain-count rule instead.
 	'received',
 	'issued',
 	'on_hand',
@@ -224,7 +238,11 @@ const STOCK_KEYS = new Set([
 function stockTone(n) {
 	if (n < 0) return RED
 	if (n === 0) return AMBER
-	return ''
+	// Stock on the shelf is a count like any other, and reads green with the
+	// rest of them. It was left plain when only the two problem states were
+	// coloured; a column where most cells are black and a few are red made the
+	// ordinary case look like the absence of a rule rather than the good one.
+	return GREEN
 }
 
 function dueTone(value, row) {

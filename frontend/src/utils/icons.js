@@ -18,6 +18,7 @@ import LucideClipboard from '~icons/lucide/clipboard-list'
 import LucideFile from '~icons/lucide/file-text'
 import LucideHourglass from '~icons/lucide/hourglass'
 import LucideLandmark from '~icons/lucide/landmark'
+import LucideLocation from '~icons/lucide/map-pin'
 import LucideLock from '~icons/lucide/lock'
 import LucideMoney from '~icons/lucide/banknote'
 import LucidePackage from '~icons/lucide/package'
@@ -27,7 +28,9 @@ import LucideScale from '~icons/lucide/scale'
 import LucideTrendingUp from '~icons/lucide/trending-up'
 import LucideTruck from '~icons/lucide/truck'
 import LucideUnlock from '~icons/lucide/lock-open'
+import LucideStore from '~icons/lucide/store'
 import LucideUsers from '~icons/lucide/users'
+import LucideWallet from '~icons/lucide/wallet'
 
 const ICONS = {
 	alert: LucideAlert,
@@ -38,16 +41,19 @@ const ICONS = {
 	file: LucideFile,
 	hourglass: LucideHourglass,
 	landmark: LucideLandmark,
+	location: LucideLocation,
 	lock: LucideLock,
 	money: LucideMoney,
 	package: LucidePackage,
 	pencil: LucidePencil,
 	receipt: LucideReceipt,
 	scale: LucideScale,
+	store: LucideStore,
 	'trending-up': LucideTrendingUp,
 	truck: LucideTruck,
 	unlock: LucideUnlock,
 	users: LucideUsers,
+	wallet: LucideWallet,
 }
 
 /** Accepts a name or an already-resolved component, so callers can pass either. */

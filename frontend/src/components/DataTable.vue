@@ -135,7 +135,7 @@ const isVoid = (row) => row.docstatus === 2
 						class="px-3 py-2 text-ink-gray-8"
 						:class="[
 							isNumeric(c) ? 'tabular text-right' : 'text-left',
-							isVoid(row) ? 'text-ink-gray-5' : cellTone(c.key, row[c.key], row),
+							isVoid(row) ? 'text-ink-gray-5' : cellTone(c.key, row[c.key], row, c.type),
 						]"
 					>
 						<slot :name="`cell-${c.key}`" :row="row" :value="row[c.key]">

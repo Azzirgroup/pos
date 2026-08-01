@@ -78,15 +78,16 @@ const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
 const stats = computed(() => {
 	const t = data.value.totals || {}
 	return [
-		{ label: 'Spend', value: t.spend, type: 'currency' },
+		{ label: 'Spend', value: t.spend, type: 'currency', icon: 'money' },
 		{
 			label: 'Owed to suppliers',
 			value: t.owed,
 			type: 'currency',
+			icon: 'truck',
 			tone: t.owed > 0 ? 'warn' : 'good',
 		},
-		{ label: 'Open orders', value: t.open_orders, type: 'number' },
-		{ label: 'Open requests', value: t.open_requests, type: 'number' },
+		{ label: 'Open orders', value: t.open_orders, type: 'number', icon: 'clipboard' },
+		{ label: 'Open requests', value: t.open_requests, type: 'number', icon: 'file' },
 	]
 })
 

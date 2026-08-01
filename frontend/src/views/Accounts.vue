@@ -25,18 +25,20 @@ const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
 })
 
 const stats = computed(() => [
-	{ label: 'Cash on hand', value: data.value.cash_total, type: 'currency' },
-	{ label: 'In the bank', value: data.value.bank_total, type: 'currency' },
+	{ label: 'Cash on hand', value: data.value.cash_total, type: 'currency', icon: 'money' },
+	{ label: 'In the bank', value: data.value.bank_total, type: 'currency', icon: 'landmark' },
 	{
 		label: 'Customers owe us',
 		value: data.value.receivable,
 		type: 'currency',
+		icon: 'users',
 		tone: data.value.receivable > 0 ? 'warn' : 'good',
 	},
 	{
 		label: 'We owe suppliers',
 		value: data.value.payable,
 		type: 'currency',
+		icon: 'truck',
 		tone: data.value.payable > 0 ? 'bad' : 'good',
 	},
 ])

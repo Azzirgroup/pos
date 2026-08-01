@@ -226,9 +226,12 @@ function marginTone(pct) {
 			<div class="w-[150px]">
 				<FormControl type="select" v-model="rounding" :options="ROUNDING" label="Rounding" />
 			</div>
+			<!-- Black rather than blue: this is the one button on the bar that
+			     changes prices, and the shop reads black as "this is the action". -->
 			<Button
-				theme="blue"
+				theme="gray"
 				variant="solid"
+				class="!font-bold"
 				:icon-left="LucideCalculator"
 				:disabled="!!blocker"
 				:label="blocker || `Preview on ${selected.size} item${selected.size === 1 ? '' : 's'}`"
@@ -346,9 +349,9 @@ function marginTone(pct) {
 			</template>
 			<template #actions>
 				<Button
-					theme="blue"
+					theme="gray"
 					variant="solid"
-					class="w-full"
+					class="w-full !font-bold"
 					:loading="applying"
 					:label="`Apply to ${preview?.count || 0} items`"
 					@click="apply"

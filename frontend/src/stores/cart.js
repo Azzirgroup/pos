@@ -19,6 +19,15 @@ export const useCartStore = defineStore('cart', () => {
 	/** Line id most recently touched — drives the flash/scroll-into-view affordance. */
 	const lastTouched = ref(null)
 	const held = ref([])
+	/**
+	 * Ticket numbering, counted rather than derived from `held.length`.
+	 *
+	 * Length went backwards whenever a ticket was resumed or dropped, so the next
+	 * hold reused a live ticket's number — and `resume` takes the first match, so
+	 * the wrong cart could come back. It matters more now that the hold button
+	 * undoes itself: holding, undoing and holding again is one tap each.
+	 */
+	let ticketSeq = 0
 
 	/**
 	 * `sourced` marks a line bought from a neighbouring shop for this sale:
@@ -136,7 +145,7 @@ export const useCartStore = defineStore('cart', () => {
 	function hold() {
 		if (isEmpty.value) return null
 		const ticket = {
-			id: `H${String(held.value.length + 1).padStart(3, '0')}`,
+			id: `H${String((ticketSeq += 1)).padStart(3, '0')}`,
 			at: Date.now(),
 			customer: customer.value,
 			lines: JSON.parse(JSON.stringify(lines.value)),

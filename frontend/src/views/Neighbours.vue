@@ -57,13 +57,14 @@ const rows = computed(() => data.value.rows || [])
 const stats = computed(() => {
 	const t = data.value.totals || {}
 	return [
-		{ label: 'Purchases', value: t.count, type: 'number' },
-		{ label: 'Shops used', value: t.shops, type: 'number' },
-		{ label: 'Spent', value: t.spend, type: 'currency' },
+		{ label: 'Purchases', value: t.count, type: 'number', icon: 'cart' },
+		{ label: 'Shops used', value: t.shops, type: 'number', icon: 'store' },
+		{ label: 'Spent', value: t.spend, type: 'currency', icon: 'money' },
 		{
 			label: 'Still owed',
 			value: t.owed,
 			type: 'currency',
+			icon: 'hourglass',
 			tone: t.owed > 0 ? 'warn' : 'good',
 		},
 	]

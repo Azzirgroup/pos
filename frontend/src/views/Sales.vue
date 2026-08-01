@@ -34,15 +34,16 @@ const COLUMNS = [
 ]
 
 const stats = computed(() => [
-	{ label: 'Revenue', value: totals.value.revenue, type: 'currency' },
-	{ label: 'Invoices', value: totals.value.count, type: 'number' },
+	{ label: 'Revenue', value: totals.value.revenue, type: 'currency', icon: 'money' },
+	{ label: 'Invoices', value: totals.value.count, type: 'number', icon: 'receipt' },
 	{
 		label: 'Unpaid',
 		value: totals.value.outstanding,
 		type: 'currency',
+		icon: 'hourglass',
 		tone: totals.value.outstanding > 0 ? 'warn' : 'good',
 	},
-	{ label: 'Over the counter', value: totals.value.pos, type: 'number' },
+	{ label: 'Over the counter', value: totals.value.pos, type: 'number', icon: 'cart' },
 ])
 
 /**

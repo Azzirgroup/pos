@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch, nextTick } from 'vue'
+import { computed, ref, watch, nextTick } from 'vue'
 import { storeToRefs } from 'pinia'
 import { useCartStore } from '@/stores/cart'
 import { fmtMoney, fmtMoneyShort } from '@/utils/format'
@@ -7,6 +7,7 @@ import CartLine from './CartLine.vue'
 import LucideShoppingBag from '~icons/lucide/shopping-bag'
 import LucideUserPlus from '~icons/lucide/user-plus'
 import LucidePause from '~icons/lucide/pause'
+import LucideUndo from '~icons/lucide/undo-2'
 import LucideTrash2 from '~icons/lucide/trash-2'
 
 defineProps({
@@ -38,6 +39,15 @@ const {
 	sourcedCost,
 	sourcedMargin,
 } = storeToRefs(cart)
+
+/**
+ * The hold button becomes an undo button once there is nothing left to hold.
+ *
+ * Only with an empty cart: with items in it, "hold" is unambiguous, and turning
+ * the same control into a restore that would have to merge two carts is a worse
+ * trade than asking the cashier to finish or clear the one in front of them.
+ */
+const canUnhold = computed(() => isEmpty.value && cart.held.length > 0)
 
 const scroller = ref(null)
 
@@ -152,13 +162,23 @@ watch(
 				>
 					<LucideTrash2 class="h-[18px] w-[18px]" />
 				</button>
+				<!-- The same button undoes itself. A cashier who parks a sale by
+				     accident is looking at an empty cart with the customer still
+				     standing there, and the fix has to be where the mistake was —
+				     not in a list of held tickets they have to go and find. -->
 				<button
-					class="grid h-12 w-12 shrink-0 place-items-center rounded-xl border border-outline-gray-2 text-ink-gray-6 transition-colors hover:bg-surface-gray-2 disabled:opacity-40"
-					:disabled="isEmpty"
-					aria-label="Hold sale"
+					class="grid h-12 w-12 shrink-0 place-items-center rounded-xl border transition-colors disabled:opacity-40"
+					:class="
+						canUnhold
+							? 'border-outline-amber-2 bg-surface-amber-1 text-ink-amber-3 hover:bg-surface-amber-2'
+							: 'border-outline-gray-2 text-ink-gray-6 hover:bg-surface-gray-2'
+					"
+					:disabled="isEmpty && !canUnhold"
+					:aria-label="canUnhold ? 'Undo hold' : 'Hold sale'"
+					:title="canUnhold ? `Bring ${cart.held[cart.held.length - 1].id} back` : 'Hold sale'"
 					@click="emit('hold')"
 				>
-					<LucidePause class="h-[18px] w-[18px]" />
+					<component :is="canUnhold ? LucideUndo : LucidePause" class="h-[18px] w-[18px]" />
 				</button>
 				<!-- The pay button carries the amount: the cashier reads one number
 				     and presses one target, and it is the largest thing on screen. -->

@@ -69,17 +69,19 @@ function remind(row) {
 const stats = computed(() => {
 	const owing = rows.value.filter((r) => Number(r.outstanding) > 0)
 	return [
-		{ label: 'Customers', value: rows.value.length, type: 'number' },
+		{ label: 'Customers', value: rows.value.length, type: 'number', icon: 'users' },
 		{
 			label: 'Owing money',
 			value: owing.length,
 			type: 'number',
+			icon: 'hourglass',
 			tone: owing.length ? 'warn' : 'good',
 		},
 		{
 			label: 'Total owed',
 			value: owing.reduce((s, r) => s + Number(r.outstanding || 0), 0),
 			type: 'currency',
+			icon: 'money',
 			tone: owing.length ? 'warn' : 'good',
 		},
 	]

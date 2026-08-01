@@ -38,18 +38,20 @@ const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
 })
 
 const stats = computed(() => [
-	{ label: 'Stock value', value: totals.value.value, type: 'currency' },
-	{ label: 'Stock lines', value: totals.value.lines, type: 'number' },
+	{ label: 'Stock value', value: totals.value.value, type: 'currency', icon: 'money' },
+	{ label: 'Stock lines', value: totals.value.lines, type: 'number', icon: 'boxes' },
 	{
 		label: 'Reserved',
 		value: rows.value.reduce((s, r) => s + Number(r.reserved_qty || 0), 0),
 		type: 'number',
+		icon: 'lock',
 		tone: 'warn',
 	},
 	{
 		label: 'Locations',
 		value: new Set(rows.value.map((r) => r.warehouse)).size,
 		type: 'number',
+		icon: 'location',
 	},
 ])
 

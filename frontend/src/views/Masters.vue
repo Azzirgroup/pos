@@ -158,15 +158,15 @@ function notify(message, tone = 'good') {
 			     is nothing to pick, so it is absent entirely. -->
 			<div
 				v-if="!focused && types.length > 1"
-				class="flex shrink-0 flex-wrap items-center gap-1 border-b border-outline-gray-2 bg-surface-white px-4 py-2"
+				class="flex shrink-0 flex-wrap items-center gap-4 border-b border-outline-gray-2 bg-surface-white px-4 py-2.5"
 			>
 				<button
 					v-for="t in types"
 					:key="t.key"
-					class="flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-p-sm transition-colors"
+					class="flex items-center gap-1.5 rounded-lg px-4 py-2 text-p-sm transition-colors"
 					:class="
 						activeKey === t.key
-							? 'bg-surface-gray-3 font-medium text-ink-gray-9'
+							? 'bg-surface-violet-1 font-medium text-violet-600 ring-1 ring-violet-200'
 							: 'text-ink-gray-6 hover:bg-surface-gray-2 hover:text-ink-gray-8'
 					"
 					@click="router.push(`/masters/${t.key}`)"
