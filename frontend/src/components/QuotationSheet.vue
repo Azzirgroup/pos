@@ -293,9 +293,13 @@ async function loadQuote(row) {
 				</p>
 
 				<div v-else class="flex flex-col gap-2">
+					<!-- One element per quote, wrapping both the row and its actions.
+					     The `v-for` used to sit on the row button alone, which left the
+					     Print/WhatsApp strip below it outside the loop referring to a
+					     `q` that does not exist there — the tab threw on render as soon
+					     as there was a single saved quote to list. -->
+					<div v-for="q in rows" :key="q.name" class="flex flex-col">
 					<button
-						v-for="q in rows"
-						:key="q.name"
 						class="flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors"
 						:class="
 							q.expired
@@ -357,6 +361,7 @@ async function loadQuote(row) {
 							placeholder="2547… then tap WhatsApp"
 							class="h-8 min-w-0 flex-1 rounded-md border border-outline-gray-2 bg-surface-gray-2 px-2 text-p-xs text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
 						/>
+					</div>
 					</div>
 				</div>
 			</template>

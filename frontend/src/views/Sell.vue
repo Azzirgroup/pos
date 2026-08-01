@@ -150,24 +150,34 @@ const paymentMethods = ref([])
 
 onMounted(async () => {
 	catalog.load()
-	try {
+
+	// All three at once. They were two awaits in sequence, which cost the till an
+	// extra round trip on every open for no reason — none of them depends on
+	// another. `allSettled` keeps the independence that the sequence had: a
+	// failed payment-methods lookup must not cost us the shift, and neither must
+	// stop the catalogue.
+	const [shiftResult, profilesResult, methodsResult] = await Promise.allSettled([
 		// The shift comes from the store, so it is the same one the header and
 		// the Shifts page are looking at.
-		const [, p] = await Promise.all([till.refreshShift(), getProfiles()])
-		profiles.value = p || []
-	} catch (e) {
-		// A failed lookup must not stop the catalogue loading; whether it stops
-		// the *sale* is the shop's decision, enforced on the server.
-		console.warn('[pos] shift lookup failed', e)
+		till.refreshShift(),
+		getProfiles(),
+		getPaymentMethods(),
+	])
+
+	if (shiftResult.status === 'rejected') {
+		// Whether a failed lookup stops the *sale* is the shop's decision, and it
+		// is enforced on the server rather than here.
+		console.warn('[pos] shift lookup failed', shiftResult.reason)
 	}
 
-	// Separately: a failure here must not cost us the shift lookup above.
-	try {
-		const methods = await getPaymentMethods()
+	profiles.value = profilesResult.status === 'fulfilled' ? profilesResult.value || [] : []
+
+	if (methodsResult.status === 'fulfilled') {
+		const methods = methodsResult.value
 		if (methods?.methods?.length) paymentMethods.value = methods.methods
 		if (methods?.mpesa_channels?.length) mpesaChannels.value = methods.mpesa_channels
-	} catch (e) {
-		console.warn('[pos] payment methods lookup failed', e)
+	} else {
+		console.warn('[pos] payment methods lookup failed', methodsResult.reason)
 	}
 })
 

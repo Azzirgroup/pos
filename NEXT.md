@@ -4,6 +4,55 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 44. Saved quotes threw on render
+
+`v-for` sat on the quote row button, and the Print/WhatsApp strip below it —
+which reads the same `q` — sat *after* the closing tag, outside the loop. It
+rendered once against a `q` that does not exist there and died with
+
+    TypeError: can't access property "name", q is undefined
+
+as soon as there was a single saved quote to list. Both are wrapped in one
+element per quote now. **The build never had a chance of catching this**: the
+template compiles perfectly, `q` is just an undefined lookup at runtime.
+
+### 45. Speed: the round trip, not the query
+
+Measured before changing anything. Warm server timings on this site:
+
+    catalog.get_catalog        91 ms      dashboard.overview     112 ms
+    modules.sales              13 ms      documents.list         18 ms
+    shift.get_open_shift       11 ms      modules.purchasing     13 ms
+
+Nothing there is worth optimising — the queries are already set-based and there
+are no N+1s left. The cost a cashier in Nairobi actually feels is the *round
+trip* to Frankfurt, a few hundred milliseconds, paid again every time a tab is
+opened, including the tab that was open ten seconds ago.
+
+So `data/cache.js` does **stale-while-revalidate** over a named list of read
+endpoints: a cached answer returns immediately, a fresh one is fetched behind
+it, and the screen corrects itself within one round trip. It also deduplicates
+identical in-flight reads, so two components asking at once make one request.
+
+Three rules, all load-bearing:
+
+- **The list is explicit.** The cost of a wrong guess is asymmetric — a stale
+  dashboard is a non-event, a stale drawer total is a cashier deciding on a
+  number that is not true. Nothing under `pos.*`, `shift.*`, `returns.*` or
+  `sourcing.*` is on it.
+- **Anything not on the list is treated as a write and empties the cache**,
+  including on failure. Invalidating by doctype instead would need a second map
+  of which endpoint touches what, and the first missing entry serves stale data
+  with no clue why.
+- **Nothing that feeds an editable table is cached** (`pricing.get_prices`,
+  `master.list_records`). A cache hands every caller the same object, so a
+  screen mutating a row in place would rewrite what the next screen reads.
+
+Separately, the till's own start-up was three requests in two sequential
+awaits with no dependency between them; it is one `allSettled` now, one round
+trip shorter, and still independent — a failed payment-methods lookup must not
+cost the shift.
+
 ### 43. The price preview is where prices are edited
 
 "One value for all items" was the whole model: pick a percentage, preview it,

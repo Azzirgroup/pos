@@ -1,17 +1,24 @@
 import { frappeRequest } from 'frappe-ui'
+import { withCache } from './cache'
 
 /**
  * Thin wrapper over the POS endpoints.
  *
- * Kept deliberately dumb: no caching, no retry policy. The outbox that makes
- * checkout feel instant belongs in the cart flow, not here.
+ * Still no retry policy — the outbox that makes checkout feel instant belongs
+ * in the cart flow, not here. It does now go through `withCache`, which
+ * remembers a named list of read endpoints for a minute and serves them while
+ * refetching. Everything not on that list, including every write, goes straight
+ * to the server and clears what was remembered; see `cache.js` for why the list
+ * is explicit and why nothing from the till is on it.
  */
 function call(method, args) {
-	return frappeRequest({
-		url: `/api/method/${method}`,
-		method: 'POST',
-		params: args,
-	})
+	return withCache(method, args, () =>
+		frappeRequest({
+			url: `/api/method/${method}`,
+			method: 'POST',
+			params: args,
+		}),
+	)
 }
 
 /** Submit a completed sale. Resolves with {invoice, grand_total, change, …}. */
