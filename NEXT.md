@@ -4,6 +4,30 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 43. The price preview is where prices are edited
+
+"One value for all items" was the whole model: pick a percentage, preview it,
+apply it. That gets a supplier's brand-wide increase right and nothing else —
+most of a brand goes up 8% and two lines go somewhere else, and the only way to
+say that was three separate bulk runs.
+
+The preview is now the working surface. Every "Now" cell is an input, the change
+column and the below-cost warning recompute as you type, and an edited row can
+be put back with one tap without discarding the rest. **Type each price** opens
+the same table with nothing changed, for the case where there is no single
+figure to apply at all — it runs the same endpoint at 0%, so cost and margin
+come back resolved exactly as they do for a bulk change rather than through a
+second code path.
+
+Two details that matter more than they look:
+
+- The typed value is held as a **string** and converted once, in the computed.
+  Coercing on each keystroke rewrites the field under the cursor, so "12."
+  becomes "12" and the decimal is unreachable.
+- Apply sends **only the rows that differ**. Sending all of them had the shop
+  told "3 updated, 47 already at that price" after editing three prices, which
+  reads as though something went wrong.
+
 ### 42. A deploy under an open tab looked like a broken app
 
 Every screen is a lazily imported hashed chunk, so a rebuild renames all of
