@@ -13,6 +13,13 @@ navigation dies with "error loading dynamically imported module" — the tab loo
 broken to a cashier who did nothing wrong, and the fix is a hard reload nobody
 would guess.
 
+**The report that followed it — "Items opens outside the app" — was a different
+bug entirely, and a real one.** `/items` is the only route that names its record
+type in `meta` rather than in the URL, and `Masters.vue` decided "nothing is
+chosen" by looking for a `:key` route param. So arriving at Items immediately
+`router.replace`d to `/masters/customer`: out of Inventory, onto Records, showing
+customers. It now reads both, and only the bare index redirects.
+
 `router.onError` now catches that one class of error and reloads. **In place,
 not to the route that failed**: the first attempt navigated to
 `` `/pos${to.fullPath}` ``, which means building the app's own base by hand, and

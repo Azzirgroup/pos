@@ -77,7 +77,13 @@ const subtitle = computed(() => {
 
 onMounted(async () => {
 	types.value = await listMasterTypes().catch(() => [])
-	if (!route.params.key && types.value.length) {
+	// Only the bare index has nothing chosen, and only it should be sent
+	// somewhere. A focused route carries its type in `meta` and has no `:key`
+	// param, so this used to redirect it too: the Items tab under Inventory
+	// arrived at /items and was immediately replaced with /masters/customer,
+	// which reads as the app throwing you out of the module you were in.
+	const chosen = route.meta?.masterKey || route.params.key
+	if (!chosen && types.value.length) {
 		router.replace(`/masters/${types.value[0].key}`)
 		return
 	}
