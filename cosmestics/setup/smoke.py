@@ -114,6 +114,7 @@ def _run(r):
 	_ensure_sellable_shift()
 	_till(r, item)
 	_neighbour_sourcing(r, item)
+	_till_shorts(r)
 	_transfer_request(r, item)
 	_documents(r, item, wh)
 	_dashboard(r)
@@ -674,12 +675,28 @@ def _shift_and_credit(r, item):
 		r.check("attributed short is the counted difference (100)",
 		        flt(recorded[0]["amount"]) == 100, str(recorded[0]["amount"]))
 		short_doc = frappe.get_doc("Cosmestics Shift Movement", recorded[0]["name"])
-		r.check("short links back to the closing entry",
-		        short_doc.reference_name == closed["name"], str(short_doc.reference_name))
 		r.check("short is submitted", short_doc.docstatus == 1, str(short_doc.docstatus))
-		r.check("a short posts no journal entry of its own",
-		        short_doc.reference_doctype == "POS Closing Entry",
-		        str(short_doc.reference_doctype))
+		# It used to reference the closing entry and post nothing. A POS Closing
+		# Entry writes no GL at all, so the cash was gone from the drawer and
+		# still on the books — the reference is now what this record *posted*,
+		# which is what anybody chasing the figure needs.
+		r.check("a short posts its own journal entry",
+		        short_doc.reference_doctype == "Journal Entry" and bool(short_doc.reference_name),
+		        f"{short_doc.reference_doctype} {short_doc.reference_name}")
+		r.check("the journal entry credits the drawer for the shortfall",
+		        _credits_drawer(short_doc.reference_name, flt(recorded[0]["amount"])),
+		        str(recorded[0]["amount"]))
+
+
+def _credits_drawer(journal_entry, amount):
+	"""The cash side of a short: money credited out of a real account."""
+	rows = frappe.get_all(
+		"GL Entry", filters={"voucher_no": journal_entry}, fields=["account", "debit", "credit"]
+	)
+	return (
+		abs(flt(sum(flt(g.credit) for g in rows)) - amount) < 0.005
+		and abs(flt(sum(flt(g.debit) for g in rows)) - amount) < 0.005
+	)
 
 
 def _till_movements(r, shift, before):
@@ -1396,8 +1413,17 @@ def _neighbour_sourcing(r, item):
 	from cosmestics.api.sourcing import receive_from_neighbours
 
 	print()
-	novel = "Smoke Test Corner Shop"
-	r.check("the test neighbour does not exist yet", not frappe.db.exists("Supplier", novel))
+	# A name not already in use, rather than a fixed one. A run that commits
+	# part-way — a submit deep in ERPNext can — leaves the shop behind, and a
+	# fixed name then fails this check for ever against data no longer under
+	# test. What is being tested is the *create* path, which needs a name the
+	# site has not seen, not one particular string.
+	novel = next(
+		name
+		for name in ("Smoke Test Corner Shop", *(f"Smoke Test Corner Shop {i}" for i in range(2, 50)))
+		if not frappe.db.exists("Supplier", name)
+	)
+	r.check("the test neighbour does not exist yet", not frappe.db.exists("Supplier", novel), novel)
 
 	res = receive_from_neighbours(
 		lines=[{"item_code": item.item_code, "qty": 1, "buy_rate": 120, "supplier": novel}]
@@ -1425,6 +1451,193 @@ def _neighbour_sourcing(r, item):
 	)
 
 	_neighbour_returns(r, item, novel)
+
+
+def _till_shorts(r):
+	"""A counted shortfall, split across people, with the rest written off.
+
+	The invariant this exists to hold: the amounts recorded always add up to the
+	difference. Before, naming a person filed the *whole* mode shortfall against
+	them — two names meant twice the money owed — and naming nobody recorded
+	nothing at all while the cash was gone.
+
+	Tested against `_split` and a movement directly rather than by closing a
+	shift. Submitting a POS Closing Entry commits, which would break this
+	suite's "nothing persisted" guarantee for everything that ran before it —
+	and the split is pure arithmetic, which is the part worth pinning anyway.
+	"""
+	from cosmestics.api.shift import _split
+
+	print()
+	closing = frappe._dict({"name": "TEST-CLOSING"})
+
+	def total(lines):
+		return flt(sum(l["amount"] for l in lines))
+
+	# --- an even split, including the rounding remainder ---
+	lines = _split("Cash", 100, [{"person": p, "amount": None, "reason": None} for p in ("A", "B", "C")], closing)
+	r.check(
+		"a shortfall splits evenly across everyone named",
+		len(lines) == 3 and abs(total(lines) - 100) < 0.005,
+		f"{len(lines)} people, {total(lines)} total",
+	)
+	r.check(
+		"the rounding remainder lands on somebody rather than vanishing",
+		sorted(l["amount"] for l in lines) == [33.33, 33.33, 33.34],
+		str(sorted(l["amount"] for l in lines)),
+	)
+
+	# --- a stated amount, and a remainder nobody claims ---
+	lines = _split(
+		"Cash",
+		500,
+		[{"person": "Jane", "amount": 200, "reason": None}],
+		closing,
+	)
+	named = [l for l in lines if not l["unattributed"]]
+	spare = [l for l in lines if l["unattributed"]]
+	r.check(
+		"a stated amount is honoured and the rest is written off",
+		len(named) == 1 and named[0]["amount"] == 200 and len(spare) == 1 and spare[0]["amount"] == 300,
+		str(lines),
+	)
+	r.check("the split still adds up to the difference", abs(total(lines) - 500) < 0.005)
+
+	# --- one stated, one sharing what is left ---
+	lines = _split(
+		"Cash",
+		500,
+		[
+			{"person": "Jane", "amount": 200, "reason": None},
+			{"person": "Otieno", "amount": None, "reason": None},
+		],
+		closing,
+	)
+	r.check(
+		"somebody sharing takes exactly what is left",
+		abs(total(lines) - 500) < 0.005
+		and any(l["person"] == "Otieno" and l["amount"] == 300 for l in lines),
+		str(lines),
+	)
+
+	# --- nobody named at all ---
+	lines = _split("Cash", 250, [], closing)
+	r.check(
+		"a shortfall nobody is named for is still recorded, not dropped",
+		len(lines) == 1 and lines[0]["unattributed"] and lines[0]["amount"] == 250,
+		str(lines),
+	)
+
+	try:
+		_split("Cash", 100, [{"person": "Jane", "amount": 400, "reason": None}], closing)
+		r.check("attributing more than is missing is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("attributing more than is missing is refused", True)
+
+	_short_accounts(r)
+	_tagged_short_account(r)
+
+
+def _tagged_short_account(r):
+	"""A short tagged with somebody's own account uses it, not the till's."""
+	from cosmestics.api.shift import _split
+
+	closing = frappe._dict({"name": "TEST-CLOSING"})
+	lines = _split(
+		"Cash",
+		300,
+		[
+			{"person": "Jane", "amount": 100, "reason": None, "account": "SOME-ACCOUNT"},
+			{"person": "Otieno", "amount": None, "reason": None, "account": None},
+		],
+		closing,
+	)
+	tagged = next((l for l in lines if l["person"] == "Jane"), None)
+	shared = next((l for l in lines if l["person"] == "Otieno"), None)
+	r.check(
+		"a short can be tagged with the person's own account",
+		tagged and tagged["account"] == "SOME-ACCOUNT",
+		str(tagged),
+	)
+	r.check(
+		"an untagged short falls back to the till's account",
+		shared and shared["account"] is None and shared["amount"] == 200,
+		str(shared),
+	)
+
+
+def _short_accounts(r):
+	"""Named and unattributed shortfalls hit different accounts.
+
+	Two accounts on purpose: "owed by staff" and "lost" are different facts, and
+	one account holding both answers neither at month end.
+	"""
+	from cosmestics.cosmestics.doctype.cosmestics_shift_movement.cosmestics_shift_movement import (
+		_short_account,
+	)
+
+	profile = frappe.db.get_value("POS Profile", {"disabled": 0}, "name")
+	company = frappe.defaults.get_global_default("company")
+	if not (profile and company):
+		print("SKIP: no POS Profile to attribute shortfalls against")
+		return
+
+	staff = frappe.db.get_value(
+		"Account",
+		{
+			"company": company,
+			"is_group": 0,
+			"root_type": "Asset",
+			"account_type": ("not in", ("Receivable", "Payable")),
+		},
+		"name",
+	)
+	writeoff = frappe.db.get_value(
+		"Account", {"company": company, "is_group": 0, "root_type": "Expense"}, "name"
+	)
+	if not (staff and writeoff):
+		print("SKIP: no accounts to charge shortfalls to")
+		return
+
+	frappe.db.set_value("POS Profile", profile, "cosmestics_short_account", staff)
+	frappe.db.set_single_value("Cosmestics POS Settings", "company_short_account", writeoff)
+	frappe.clear_cache(doctype="Cosmestics POS Settings")
+
+	named_account, _kind = _short_account(profile, company, named=True)
+	spare_account, _kind = _short_account(profile, company, named=False)
+	r.check(
+		"a named shortfall goes to the till's own account",
+		named_account == staff,
+		f"{named_account}",
+	)
+	r.check(
+		"an unattributed shortfall is written off to the company account",
+		spare_account == writeoff,
+		f"{spare_account}",
+	)
+
+	# A party account would need an Employee this app has no way to supply, and
+	# failing inside ERPNext's validation would report it as a missing party on a
+	# Journal Entry the shop never made.
+	party_account = frappe.db.get_value(
+		"Account", {"company": company, "is_group": 0, "account_type": "Receivable"}, "name"
+	)
+	if party_account:
+		frappe.db.set_value("POS Profile", profile, "cosmestics_short_account", party_account)
+		try:
+			_short_account(profile, company, named=True)
+			r.check("a party account is refused for shortfalls", False, "no error raised")
+		except frappe.ValidationError:
+			r.check("a party account is refused for shortfalls", True)
+
+	frappe.db.set_value("POS Profile", profile, "cosmestics_short_account", None)
+	frappe.db.set_single_value("Cosmestics POS Settings", "company_short_account", None)
+	frappe.clear_cache(doctype="Cosmestics POS Settings")
+	try:
+		_short_account(profile, company, named=True)
+		r.check("a shortfall with nowhere to go is refused", False, "no error raised")
+	except frappe.ValidationError:
+		r.check("a shortfall with nowhere to go is refused", True)
 
 
 def _neighbour_returns(r, item, novel):

@@ -49,8 +49,15 @@ const emit = defineEmits([
 const profile = ref(null)
 const floats = ref({})
 const counted = ref({})
-/** mode_of_payment → who a shortfall on it is against. */
-const shortPerson = ref({})
+/**
+ * mode_of_payment → [{ person, amount }] — who a shortfall is against.
+ *
+ * A list, because a counter is rarely one person: two cashiers on a till and
+ * 500 missing is two names, not a choice between them. An empty `amount` means
+ * "share what is left evenly", which is the usual answer when nobody knows
+ * whose it was.
+ */
+const shortPeople = ref({})
 
 /**
  * One tab per kind of money, which is the only division a cashier can hold in
@@ -60,10 +67,20 @@ const shortPerson = ref({})
  */
 const TABS = [
 	{ label: 'Count', value: 'count' },
-	{ label: 'Expenses', value: 'money' },
-	{ label: 'Neighbours', value: 'neighbours' },
 	{ label: 'Credit', value: 'credit' },
 ]
+
+/**
+ * Expenses and neighbour payments are no longer tabs here — they are their own
+ * pages, reached from the till strip. Both are done several times a day
+ * mid-shift, and this sheet's main action is "Close shift": recording bus fare
+ * should never be one mis-tap from ending a cashier's day.
+ *
+ * Credit stays because settling a credit sale is money arriving that the
+ * closing count has to know about, and the person doing it is already counting.
+ * The 'money' and 'neighbours' branches below are unreachable now and come out
+ * with the next pass over this file.
+ */
 const tab = ref('count')
 
 watch(
@@ -73,7 +90,7 @@ watch(
 		tab.value = props.initialTab || 'count'
 		profile.value = props.profiles[0]?.name || null
 		floats.value = Object.fromEntries(props.paymentModes.map((m) => [m, '']))
-		shortPerson.value = {}
+		shortPeople.value = {}
 		resetExpense()
 	},
 )
@@ -106,6 +123,58 @@ const totalDifference = computed(() => rows.value.reduce((sum, r) => sum + diffe
 
 /** Only shortfalls get a name — an overage is not somebody's debt. */
 const shortRows = computed(() => rows.value.filter((r) => differenceFor(r) < 0))
+
+function claimsFor(mode) {
+	return shortPeople.value[mode] || []
+}
+
+function addClaim(mode) {
+	shortPeople.value = {
+		...shortPeople.value,
+		[mode]: [...claimsFor(mode), { person: '', amount: '', account: null }],
+	}
+}
+
+function removeClaim(mode, index) {
+	const next = claimsFor(mode).filter((_, i) => i !== index)
+	shortPeople.value = { ...shortPeople.value, [mode]: next }
+}
+
+function setClaim(mode, index, patch) {
+	const next = claimsFor(mode).map((c, i) => (i === index ? { ...c, ...patch } : c))
+	shortPeople.value = { ...shortPeople.value, [mode]: next }
+}
+
+/**
+ * What is left of a shortfall after the amounts somebody has typed.
+ *
+ * Shown live and always, because it is the number the cashier is deciding
+ * about: anything still unclaimed is written off to the company rather than
+ * charged to a person, and that should be a choice rather than a surprise.
+ * Names with no amount will share this evenly, so it reads as "and the rest
+ * between them".
+ */
+function unclaimedFor(mode) {
+	const shortfall = Math.abs(differenceFor(rows.value.find((r) => r.mode_of_payment === mode) || {}))
+	const stated = claimsFor(mode)
+		.filter((c) => String(c.amount).trim() !== '')
+		.reduce((sum, c) => sum + (Number(c.amount) || 0), 0)
+	return Math.round((shortfall - stated) * 100) / 100
+}
+
+function sharingFor(mode) {
+	return claimsFor(mode).filter((c) => c.person.trim() && String(c.amount).trim() === '').length
+}
+
+/** Over-attribution is refused by the server; say so before they submit. */
+const shortProblem = computed(() => {
+	for (const r of shortRows.value) {
+		if (unclaimedFor(r.mode_of_payment) < -0.005) {
+			return `More is attributed on ${r.mode_of_payment} than is actually missing`
+		}
+	}
+	return null
+})
 
 /* ---------- money out ---------- */
 
@@ -234,15 +303,22 @@ function submitClose() {
 			mode_of_payment: r.mode_of_payment,
 			closing_amount: Number(counted.value[r.mode_of_payment]) || 0,
 		})),
-		// Sent for every mode that is short and has a name typed against it. The
-		// server drops any that balanced by the time it closes, so a name left
-		// behind by an edited count never becomes a debt.
-		shorts: shortRows.value
-			.filter((r) => (shortPerson.value[r.mode_of_payment] || '').trim())
-			.map((r) => ({
-				mode_of_payment: r.mode_of_payment,
-				person: shortPerson.value[r.mode_of_payment].trim(),
-			})),
+		// Every named claim on every mode that is short. The server drops names
+		// against a mode that balanced by the time it closes — so a name left
+		// behind by an edited count never becomes a debt — and records whatever
+		// nobody claimed as an unattributed short rather than losing it.
+		shorts: shortRows.value.flatMap((r) =>
+			claimsFor(r.mode_of_payment)
+				.filter((c) => c.person.trim())
+				.map((c) => ({
+					mode_of_payment: r.mode_of_payment,
+					person: c.person.trim(),
+					amount: String(c.amount).trim() === '' ? null : Number(c.amount),
+					// Their own account, when the shop keeps one per person. Left
+					// null, it goes to the till's Till Short Account.
+					account: c.account || null,
+				})),
+		),
 	})
 }
 
@@ -416,12 +492,88 @@ const CASH_IN_TYPES = ['Neighbour Refund', 'Credit Payment']
 							<label class="mb-1.5 block text-p-xs font-medium text-ink-red-3">
 								Short {{ fmtMoney(Math.abs(differenceFor(r))) }} — who is it against?
 							</label>
-							<input
-								v-model="shortPerson[r.mode_of_payment]"
-								type="text"
-								placeholder="Name (optional)"
-								class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
-							/>
+
+							<div
+								v-for="(c, i) in claimsFor(r.mode_of_payment)"
+								:key="i"
+								class="mb-2 flex items-center gap-2"
+							>
+								<input
+									:value="c.person"
+									type="text"
+									placeholder="Name"
+									class="h-11 min-w-0 flex-1 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+									@input="setClaim(r.mode_of_payment, i, { person: $event.target.value })"
+								/>
+								<!-- Blank means "share what is left". Most shortfalls are not
+								     divided by anyone knowing whose they were. -->
+								<input
+									:value="c.amount"
+									type="number"
+									inputmode="decimal"
+									placeholder="Share"
+									class="tabular h-11 w-24 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base font-semibold text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+									@input="setClaim(r.mode_of_payment, i, { amount: $event.target.value })"
+									@focus="$event.target.select()"
+								/>
+								<!-- Their account, when the shop keeps one per person. Left as
+								     "the till's account", every named short goes to the one on
+								     the POS Profile, which is right for a shop with a single
+								     "owed by staff" account. -->
+								<select
+									:value="c.account"
+									class="h-11 w-[150px] shrink-0 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-2 text-p-xs text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+									:aria-label="`Account for ${c.person || 'this person'}`"
+									@change="setClaim(r.mode_of_payment, i, { account: $event.target.value || null })"
+								>
+									<option :value="''">The till's account</option>
+									<option v-for="a in options?.accounts || []" :key="a.name" :value="a.name">
+										{{ a.label }}
+									</option>
+								</select>
+								<button
+									class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-gray-5 hover:bg-surface-red-2 hover:text-ink-red-3"
+									aria-label="Remove this name"
+									@click="removeClaim(r.mode_of_payment, i)"
+								>
+									<LucideX class="h-4 w-4" />
+								</button>
+							</div>
+
+							<button
+								class="flex min-h-touch w-full items-center justify-center gap-1.5 rounded-lg border border-dashed border-outline-gray-3 py-2 text-p-sm font-medium text-ink-gray-6 hover:bg-surface-gray-2"
+								@click="addClaim(r.mode_of_payment)"
+							>
+								<LucidePlus class="h-4 w-4" />
+								{{ claimsFor(r.mode_of_payment).length ? 'Another person' : 'Name someone' }}
+							</button>
+
+							<!-- The remainder, always visible. It is the number being
+							     decided about: anything unclaimed is written off to the
+							     company rather than charged to anybody, and that should be a
+							     choice rather than something noticed at month end. -->
+							<p
+								v-if="unclaimedFor(r.mode_of_payment) > 0.005"
+								class="mt-2 text-p-xs"
+								:class="sharingFor(r.mode_of_payment) ? 'text-ink-gray-6' : 'text-ink-amber-3'"
+							>
+								<template v-if="sharingFor(r.mode_of_payment)">
+									{{ fmtMoney(unclaimedFor(r.mode_of_payment)) }} split evenly between
+									{{ sharingFor(r.mode_of_payment) }}
+									{{ sharingFor(r.mode_of_payment) === 1 ? 'person' : 'people' }}
+								</template>
+								<template v-else>
+									{{ fmtMoney(unclaimedFor(r.mode_of_payment)) }} nobody is named for —
+									written off to the shop
+								</template>
+							</p>
+							<p
+								v-else-if="unclaimedFor(r.mode_of_payment) < -0.005"
+								class="mt-2 text-p-xs font-medium text-ink-red-3"
+							>
+								That is {{ fmtMoney(Math.abs(unclaimedFor(r.mode_of_payment))) }} more than
+								is missing
+							</p>
 						</div>
 					</div>
 				</div>
@@ -501,11 +653,11 @@ const CASH_IN_TYPES = ['Neighbour Refund', 'Credit Payment']
 
 				<button
 					class="flex min-h-touch w-full items-center justify-center gap-2 rounded-xl bg-surface-gray-7 py-3 text-p-lg font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
-					:disabled="busy"
+					:disabled="busy || !!shortProblem"
 					@click="submitClose"
 				>
 					<LucideCheck class="h-5 w-5" />
-					{{ busy ? 'Closing…' : 'Close shift' }}
+					{{ busy ? 'Closing…' : shortProblem || 'Close shift' }}
 				</button>
 			</template>
 

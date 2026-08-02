@@ -55,6 +55,43 @@ def setup_prerequisites():
 	ensure_pos_profile_payment_methods()
 	ensure_pos_settings()
 	ensure_partial_payment_allowed()
+	ensure_short_account_field()
+
+
+def ensure_short_account_field():
+	"""Give POS Profile somewhere to say where a till shortfall is charged.
+
+	A Custom Field rather than a setting on this app's own doctype because the
+	answer genuinely differs per till: a branch whose staff carry the loss and a
+	branch that writes it off are the same shop with two POS Profiles, and one
+	company-wide account cannot express that.
+
+	Created here rather than shipped as a fixture so it survives a migrate on a
+	site that already has the app — see `after_migrate`.
+	"""
+	if not frappe.db.exists("DocType", "POS Profile"):
+		return
+
+	if frappe.db.exists("Custom Field", {"dt": "POS Profile", "fieldname": "cosmestics_short_account"}):
+		return
+
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	create_custom_field(
+		"POS Profile",
+		{
+			"fieldname": "cosmestics_short_account",
+			"label": "Till Short Account",
+			"fieldtype": "Link",
+			"options": "Account",
+			"insert_after": "write_off_account",
+			"description": (
+				"Where a shortfall a cashier is named for is charged — usually a "
+				"receivable from staff. Anything nobody is named for goes to the "
+				"Unattributed Short Account in Cosmetics POS Settings."
+			),
+		},
+	)
 
 
 def ensure_pos_settings():

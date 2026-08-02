@@ -1,7 +1,16 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { Button, Badge, FormControl } from 'frappe-ui'
-import { listNeighbourPurchases, getReturnablePurchase, returnToNeighbour } from '@/data/api'
+import {
+	listNeighbourPurchases,
+	getReturnablePurchase,
+	returnToNeighbour,
+	getMovementOptions,
+	listMovements,
+	recordMovement,
+	voidMovement,
+	getOpenShift,
+} from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
@@ -10,6 +19,7 @@ import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideSend from '~icons/lucide/send'
 import LucideUndo from '~icons/lucide/undo-2'
+import LucideX from '~icons/lucide/x'
 import BottomSheet from '@/components/BottomSheet.vue'
 import { fmtMoney } from '@/utils/format'
 
@@ -24,7 +34,86 @@ import { fmtMoney } from '@/utils/format'
  * Unpaid is the default filter, because that is the only part of this anybody
  * has to act on. The rest is history.
  */
+/**
+ * Everything to do with the shops next door, on one screen.
+ *
+ * The till used to carry a Neighbours tab inside the closing sheet — a modal
+ * whose main action was "Close shift" — so paying the shop next door meant
+ * opening the screen for ending your day. Reading what was owed and settling it
+ * were also two different places. Both live here now: what has been bought, what
+ * is still owed, what went back, and the payment itself.
+ */
 const data = ref({ rows: [], totals: {}, suppliers: [], reason: null })
+
+/* ---------- paying a neighbour from the drawer ---------- */
+
+const shift = ref(null)
+const movementOptions = ref(null)
+const movements = ref(null)
+const payAmount = ref('')
+const payMode = ref(null)
+const payParty = ref(null)
+const payBusy = ref(false)
+
+const payAmountNum = computed(() => Number(payAmount.value) || 0)
+const canPay = computed(
+	() => payAmountNum.value > 0 && !!payMode.value && !!payParty.value && !payBusy.value && !!shift.value,
+)
+
+/** Neighbour movements only — money out to a shop, and refunds back from one. */
+const NEIGHBOUR_KINDS = ['Neighbour Purchase', 'Neighbour Refund']
+const CASH_IN_KINDS = ['Neighbour Refund']
+
+const tillRows = computed(() =>
+	(movements.value?.rows || []).filter((m) => NEIGHBOUR_KINDS.includes(m.movement_type)),
+)
+
+async function loadTill() {
+	try {
+		const [s, o, m] = await Promise.all([getOpenShift(), getMovementOptions(), listMovements({})])
+		shift.value = s
+		movementOptions.value = o
+		movements.value = m
+		if (!payMode.value) payMode.value = o?.modes?.[0] || null
+		if (!payParty.value) payParty.value = o?.neighbours?.[0] || null
+	} catch (e) {
+		console.warn('[neighbours] till lookup failed', e)
+	}
+}
+
+async function payNeighbour() {
+	if (!canPay.value) return
+	payBusy.value = true
+	try {
+		const res = await recordMovement({
+			movementType: 'Neighbour Purchase',
+			amount: payAmountNum.value,
+			modeOfPayment: payMode.value,
+			party: payParty.value,
+			reason: `Paid ${payParty.value}`,
+		})
+		payAmount.value = ''
+		await Promise.all([loadTill(), load()])
+		notify(`${fmtMoney(res.amount)} paid to ${payParty.value}`, 'good')
+	} catch (e) {
+		notify(e.message || 'Could not record that', 'bad')
+	} finally {
+		payBusy.value = false
+	}
+}
+
+async function voidTill(m) {
+	payBusy.value = true
+	try {
+		await voidMovement({ name: m.name })
+		await loadTill()
+		notify(`${fmtMoney(m.amount)} put back`, 'good')
+	} catch (e) {
+		notify(e.message || 'Could not undo that', 'bad')
+	} finally {
+		payBusy.value = false
+	}
+}
 const days = ref(30)
 const status = ref('unpaid')
 const loading = ref(false)
@@ -191,7 +280,10 @@ function notify(message, tone = 'good') {
 	toastTimer = setTimeout(() => (toast.value = null), 2600)
 }
 
-onMounted(load)
+onMounted(() => {
+	load()
+	loadTill()
+})
 watch([days, status], load)
 
 async function load() {
@@ -244,6 +336,79 @@ async function load() {
 		</p>
 
 		<StatTiles :stats="stats" />
+
+		<!-- Paying the shop next door, on the screen that shows what is owed to
+		     them. It was on a tab inside the closing sheet, so settling a debt
+		     meant opening the screen for ending the day. -->
+		<div class="shrink-0 border-b border-outline-gray-2 bg-surface-white px-4 pb-3">
+			<div class="flex flex-wrap items-end gap-2">
+				<div>
+					<label class="mb-1.5 block text-p-xs font-medium text-ink-gray-7">Pay a shop</label>
+					<select
+						v-model="payParty"
+						class="h-11 w-[190px] rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					>
+						<option v-for="n in movementOptions?.neighbours || []" :key="n" :value="n">
+							{{ n }}
+						</option>
+					</select>
+				</div>
+				<div>
+					<label class="mb-1.5 block text-p-xs font-medium text-ink-gray-7">Amount</label>
+					<input
+						v-model="payAmount"
+						type="number"
+						inputmode="decimal"
+						placeholder="0"
+						class="tabular h-11 w-32 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base font-semibold text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						@focus="$event.target.select()"
+					/>
+				</div>
+				<div>
+					<label class="mb-1.5 block text-p-xs font-medium text-ink-gray-7">Out of</label>
+					<select
+						v-model="payMode"
+						class="h-11 w-[150px] rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					>
+						<option v-for="m in movementOptions?.modes || []" :key="m" :value="m">{{ m }}</option>
+					</select>
+				</div>
+				<button
+					class="min-h-touch rounded-lg bg-surface-gray-7 px-4 text-p-sm font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
+					:disabled="!canPay"
+					@click="payNeighbour"
+				>
+					{{ payBusy ? 'Recording…' : 'Pay from the drawer' }}
+				</button>
+				<span v-if="!shift" class="text-p-xs text-ink-amber-3">
+					No shift is open, so cash out of the drawer cannot be recorded.
+				</span>
+			</div>
+
+			<!-- Both directions, because trade next door runs both ways. -->
+			<div v-if="tillRows.length" class="mt-3 flex flex-wrap gap-2">
+				<div
+					v-for="m in tillRows"
+					:key="m.name"
+					class="flex items-center gap-2 rounded-lg border border-outline-gray-2 px-2.5 py-1.5"
+				>
+					<span class="text-p-xs text-ink-gray-6">{{ m.party || m.movement_type }}</span>
+					<span
+						class="tabular text-p-sm font-semibold"
+						:class="CASH_IN_KINDS.includes(m.movement_type) ? 'text-ink-green-3' : 'text-ink-gray-9'"
+					>
+						{{ CASH_IN_KINDS.includes(m.movement_type) ? '+' : '−' }}{{ fmtMoney(m.amount) }}
+					</span>
+					<button
+						class="grid h-6 w-6 place-items-center rounded text-ink-gray-5 hover:bg-surface-red-2 hover:text-ink-red-3"
+						:aria-label="`Void ${m.name}`"
+						@click="voidTill(m)"
+					>
+						<LucideX class="h-3.5 w-3.5" />
+					</button>
+				</div>
+			</div>
+		</div>
 
 		<DataTable
 			:columns="COLUMNS"

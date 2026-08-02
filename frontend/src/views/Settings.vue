@@ -8,6 +8,7 @@ import {
 	saveUserSettings,
 	assignProfile,
 	getSettingsLinkOptions,
+	createPosProfile,
 	getWhatsappGroups,
 } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
@@ -150,8 +151,44 @@ const PROFILE_FIELDS = [
 	{ key: 'allow_discount_change', label: 'Allow discounts', type: 'check' },
 	{ key: 'allow_rate_change', label: 'Allow price edits at the till', type: 'check' },
 	{ key: 'hide_unavailable_items', label: 'Hide out-of-stock items', type: 'check' },
+	{
+		key: 'cosmestics_short_account',
+		label: 'Till short account',
+		link: 'Account',
+		help: 'Where a shortfall a cashier is named for is charged. Anything nobody is named for goes to the Unattributed Short Account below.',
+	},
 ]
 const PROFILE_LINKS = PROFILE_FIELDS.filter((f) => f.link).map((f) => f.link)
+
+/* ---------- adding a till ---------- */
+
+const addingTill = ref(false)
+const newTillName = ref('')
+const newTillWarehouse = ref(null)
+const creatingTill = ref(false)
+
+const warehouseOptions = computed(() => (options.value['Warehouse'] || []).map((o) => o.name || o))
+
+async function createTill() {
+	if (!newTillName.value.trim()) return
+	creatingTill.value = true
+	try {
+		const res = await createPosProfile({
+			profileName: newTillName.value.trim(),
+			values: newTillWarehouse.value ? { warehouse: newTillWarehouse.value } : {},
+		})
+		newTillName.value = ''
+		newTillWarehouse.value = null
+		addingTill.value = false
+		await load()
+		selectProfile(res.name)
+		notify(res.message, 'good')
+	} catch (e) {
+		notify(e.message || 'Could not add that till', 'bad')
+	} finally {
+		creatingTill.value = false
+	}
+}
 
 const profiles = computed(() => data.value?.profiles || [])
 const activeProfile = computed(() => profiles.value.find((p) => p.name === profileName.value) || null)
@@ -385,11 +422,63 @@ function notify(message, tone = 'good') {
 			<!-- ---------- The POS Profile behind this till ---------- -->
 			<div v-else-if="tab === 'profile'" class="flex max-w-3xl flex-col gap-4">
 				<p v-if="!profiles.length" class="rounded-lg bg-surface-amber-2 px-3 py-2 text-p-sm text-ink-amber-3">
-					You are not on any POS Profile, so you cannot open a shift. Somebody with
-					permission has to add you to one.
+					You are not on any POS Profile, so you cannot open a shift. Add one below, or
+					ask somebody with permission to put you on an existing till.
 				</p>
 
-				<section v-else class="rounded-lg border border-outline-gray-2 bg-surface-white">
+				<!-- Adding a till, rather than sending a shopkeeper to the desk for it.
+				     A second counter or a new branch needs one, and the payment methods
+				     and write-off accounts it cannot exist without are filled in from
+				     the company — see `settings.create_profile`. -->
+				<section class="rounded-lg border border-outline-gray-2 bg-surface-white">
+					<header class="flex items-center justify-between border-b border-outline-gray-2 px-4 py-2.5">
+						<div>
+							<h2 class="text-p-sm font-semibold text-ink-gray-8">Add a till</h2>
+							<p class="mt-0.5 text-p-xs text-ink-gray-5">
+								You are put on it, so you can open a shift on it straight away.
+							</p>
+						</div>
+						<Button
+							variant="subtle"
+							:label="addingTill ? 'Cancel' : 'New till'"
+							@click="addingTill = !addingTill"
+						/>
+					</header>
+					<div v-if="addingTill" class="flex flex-wrap items-end gap-2 p-4">
+						<div class="min-w-[200px] flex-1">
+							<label class="mb-1.5 block text-p-xs font-medium text-ink-gray-7">Name</label>
+							<input
+								v-model="newTillName"
+								type="text"
+								placeholder="Counter 2, Kitengela…"
+								class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+							/>
+						</div>
+						<div class="min-w-[200px] flex-1">
+							<label class="mb-1.5 block text-p-xs font-medium text-ink-gray-7">
+								Sells from
+							</label>
+							<select
+								v-model="newTillWarehouse"
+								class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+							>
+								<option :value="null">This shop's default</option>
+								<option v-for="w in warehouseOptions" :key="w" :value="w">{{ w }}</option>
+							</select>
+						</div>
+						<Button
+							theme="gray"
+							variant="solid"
+							class="!font-bold"
+							:loading="creatingTill"
+							:disabled="!newTillName.trim()"
+							label="Create"
+							@click="createTill"
+						/>
+					</div>
+				</section>
+
+				<section v-if="profiles.length" class="rounded-lg border border-outline-gray-2 bg-surface-white">
 					<header class="border-b border-outline-gray-2 px-4 py-2.5">
 						<h2 class="text-p-sm font-semibold text-ink-gray-8">Which till</h2>
 						<p class="mt-0.5 text-p-xs text-ink-gray-5">

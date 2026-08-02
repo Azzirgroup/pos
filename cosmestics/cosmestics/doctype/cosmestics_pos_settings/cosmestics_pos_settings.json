@@ -24,6 +24,7 @@
   "default_source_warehouse",
   "till_section",
   "default_expense_account",
+  "company_short_account",
   "column_break_till",
   "require_shift_to_sell"
  ],
@@ -147,6 +148,13 @@
    "fieldname": "default_expense_account",
    "fieldtype": "Link",
    "label": "Default Expense Account",
+   "options": "Account"
+  },
+  {
+   "description": "Where a shortfall nobody is named for is written off. The part a person is named for goes to the Short Account on their POS Profile instead.",
+   "fieldname": "company_short_account",
+   "fieldtype": "Link",
+   "label": "Unattributed Short Account",
    "options": "Account"
   },
   {

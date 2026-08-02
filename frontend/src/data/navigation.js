@@ -103,6 +103,7 @@ function _moduleForPath(path) {
 	if (path.startsWith('/documents/')) {
 		return DOCUMENT_MODULE[path.split('/')[2]] || null
 	}
+	if (path.startsWith('/expenses')) return 'pos'
 	if (path.startsWith('/suppliers')) return 'purchasing'
 	if (path.startsWith('/masters/account')) return 'accounts'
 	if (

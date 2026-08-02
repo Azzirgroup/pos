@@ -442,11 +442,16 @@ def close_shift(counted: list | str | None = None, shorts: list | str | None = N
 	`counted` is [{mode_of_payment, closing_amount}]. Anything not counted is
 	assumed to match expectation, so a quiet till closes in one tap.
 
-	`shorts` is [{mode_of_payment, person, reason}] — who each shortfall is
-	against. ERPNext's closing entry books the difference but has nowhere to put
-	a name, and a shortfall nobody is named on is a number nobody can act on.
-	Recorded after the entry submits, so a rejected close leaves no orphan
-	attribution behind.
+	`shorts` is [{mode_of_payment, person, amount, reason}] — who each shortfall
+	is against, and how much of it each. `amount` is optional; people named
+	without one share what is left evenly. Whatever nobody is named for is
+	recorded as an unattributed short rather than dropped, so the amounts always
+	add up to the difference — see `_record_shorts`.
+
+	ERPNext's closing entry books the difference on the document and posts
+	nothing to the ledger, so each short raises its own Journal Entry. Recorded
+	after the entry submits, so a rejected close leaves no orphan attribution
+	behind.
 	"""
 	if isinstance(counted, str):
 		counted = frappe.parse_json(counted)
@@ -511,45 +516,171 @@ def close_shift(counted: list | str | None = None, shorts: list | str | None = N
 
 
 def _record_shorts(shift, closing, shorts):
-	"""Put a name against each shortfall the cashier attributed.
+	"""Account for every shortfall, in full, against whoever carries it.
 
-	Only shortfalls: an overage is not somebody's debt, and asking who a surplus
-	belongs to would invite a guess. Only modes that are actually short are
-	recorded, so a name typed against a mode that then balanced is dropped
-	rather than filed as a debt that does not exist.
+	## The invariant
+
+	For each mode that came up short, the amounts recorded here add up to
+	*exactly* the difference. Not "as much as somebody was named for" — the whole
+	thing. What nobody is named for becomes one unattributed short, which books
+	to the company's account instead of a person's.
+
+	That invariant is the point of the rewrite. Before it, naming a person filed
+	the *entire* mode shortfall against them — so two people named on one mode
+	were each charged the full amount, and 500 missing became 1,000 owed. Naming
+	nobody recorded nothing at all, and the money left the drawer having never
+	existed on the books.
+
+	## Splitting
+
+	`shorts` is [{mode_of_payment, person, amount, reason}]. `amount` is
+	optional: entries without one share whatever is left on that mode evenly,
+	which is the common case — two people on the counter, nobody knows which of
+	them, so they split it. Entries with an amount are honoured first, because
+	somebody who says "it was my 200" has given information an even split would
+	throw away.
+
+	Over-attribution is refused rather than scaled down. If the named amounts
+	come to more than the shortfall, one of them is wrong, and quietly shrinking
+	them to fit would hide which.
 	"""
-	if not shorts:
-		return []
-
 	by_mode = {
-		r.mode_of_payment: flt(r.difference)
+		r.mode_of_payment: abs(flt(r.difference))
 		for r in closing.payment_reconciliation
 		if flt(r.difference) < 0
 	}
+	if not by_mode:
+		return []
 
-	recorded = []
-	for entry in shorts:
+	claims = {}
+	for entry in shorts or []:
 		mode = entry.get("mode_of_payment")
-		person = (entry.get("person") or "").strip()
-		if not person or mode not in by_mode:
+		if mode not in by_mode:
+			# A name against a mode that then balanced. Dropped rather than filed
+			# as a debt that does not exist.
 			continue
-
-		doc = frappe.new_doc("Cosmestics Shift Movement")
-		doc.shift = shift["name"]
-		doc.movement_type = "Short"
-		doc.mode_of_payment = mode
-		doc.amount = abs(by_mode[mode])
-		doc.person = person
-		doc.reason = entry.get("reason") or _("Shortfall on {0}").format(closing.name)
-		doc.reference_doctype = "POS Closing Entry"
-		doc.reference_name = closing.name
-		doc.insert()
-		doc.submit()
-		recorded.append(
-			{"name": doc.name, "mode_of_payment": mode, "amount": flt(doc.amount), "person": person}
+		person = (entry.get("person") or "").strip()
+		if not person:
+			continue
+		claims.setdefault(mode, []).append(
+			{
+				"person": person,
+				"amount": flt(entry.get("amount")) if entry.get("amount") not in (None, "") else None,
+				"reason": entry.get("reason"),
+				# Whose account this one lands in. Optional: without it the short
+				# goes to the till's own short account, which is the right answer
+				# for a shop that keeps one "owed by staff" account. A shop that
+				# keeps an account per person tags it here.
+				"account": entry.get("account") or None,
+			}
 		)
 
+	recorded = []
+	for mode, shortfall in by_mode.items():
+		for row in _split(mode, shortfall, claims.get(mode, []), closing):
+			recorded.append(_write_short(shift, closing, mode, row))
+
 	return recorded
+
+
+def _split(mode, shortfall, claims, closing):
+	"""Turn "these people, this much missing" into lines that add up.
+
+	Returns [{person, amount, reason, unattributed}] summing to `shortfall`.
+	"""
+	stated = [c for c in claims if c["amount"] is not None]
+	unstated = [c for c in claims if c["amount"] is None]
+
+	claimed = flt(sum(c["amount"] for c in stated))
+	if claimed > shortfall + 0.005:
+		frappe.throw(
+			_("{0} attributed on {1} is more than the {2} actually missing").format(
+				frappe.format_value(claimed, {"fieldtype": "Currency"}),
+				mode,
+				frappe.format_value(shortfall, {"fieldtype": "Currency"}),
+			)
+		)
+
+	lines = [
+		{
+			"person": c["person"],
+			"amount": flt(c["amount"]),
+			"reason": c["reason"],
+			"account": c.get("account"),
+			"unattributed": 0,
+		}
+		for c in stated
+		if flt(c["amount"]) > 0
+	]
+
+	remaining = flt(shortfall - claimed, 2)
+
+	if unstated and remaining > 0:
+		# An even split, with the rounding remainder on the first person rather
+		# than lost. Three people and 100 missing is 33.34 / 33.33 / 33.33, and
+		# the total is still 100 — which is the whole invariant.
+		each = flt(remaining / len(unstated), 2)
+		for i, c in enumerate(unstated):
+			amount = each if i else flt(remaining - each * (len(unstated) - 1), 2)
+			if amount <= 0:
+				continue
+			lines.append(
+				{
+					"person": c["person"],
+					"amount": amount,
+					"reason": c["reason"],
+					"account": c.get("account"),
+					"unattributed": 0,
+				}
+			)
+		remaining = 0
+
+	if remaining > 0.005:
+		# Nobody named for this part. Recorded anyway, and said out loud — a
+		# shortfall that is written off is a fact the shop should be able to see
+		# and add up, not an absence of records.
+		lines.append(
+			{
+				"person": None,
+				"amount": remaining,
+				"reason": _("Shortfall on {0} nobody was named for").format(closing.name),
+				# Never tagged: nobody is named, so there is no "their account" to
+				# tag. It goes to the company's write-off account by definition.
+				"account": None,
+				"unattributed": 1,
+			}
+		)
+
+	return lines
+
+
+def _write_short(shift, closing, mode, row):
+	doc = frappe.new_doc("Cosmestics Shift Movement")
+	doc.shift = shift["name"]
+	doc.movement_type = "Short"
+	doc.mode_of_payment = mode
+	doc.amount = row["amount"]
+	doc.person = row["person"]
+	doc.unattributed = row["unattributed"]
+	# Reuses the movement's existing account field, which is "where this books
+	# to" for an expense and means exactly the same thing here. A second Link to
+	# Account holding the same idea would be one more field to keep in step.
+	doc.expense_account = row.get("account")
+	doc.reason = row["reason"] or _("Shortfall on {0}").format(closing.name)
+	doc.insert()
+	doc.submit()
+
+	return {
+		"name": doc.name,
+		"mode_of_payment": mode,
+		"amount": flt(doc.amount),
+		"person": doc.person,
+		"unattributed": bool(doc.unattributed),
+		"account": doc.expense_account,
+		# What it posted, which is new — a short used to be a note with no ledger
+		# entry behind it.
+		"journal_entry": doc.reference_name,
+	}
 
 
 # ---------------------------------------------------------------------------

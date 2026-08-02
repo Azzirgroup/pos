@@ -1,5 +1,6 @@
 <script setup>
 import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 
 import { useCatalogStore } from '@/stores/catalog'
@@ -57,6 +58,7 @@ import LucideSend from '~icons/lucide/send'
 import LucideFileText from '~icons/lucide/file-text'
 import LucideUndo from '~icons/lucide/undo-2'
 
+const router = useRouter()
 const catalog = useCatalogStore()
 const cart = useCartStore()
 const till = useTillStore()
@@ -78,15 +80,18 @@ const MODES = [
 	{ label: 'Menu', value: 'menu' },
 	{ label: 'Customer', value: 'customer' },
 	{ label: 'Expenses', value: 'expenses' },
+	{ label: 'Neighbours', value: 'neighbours' },
 ]
 const mode = ref('menu')
 
 watch(mode, (m) => {
 	if (m === 'customer') pickCustomer(false)
-	// The same sheet, opened on the tab that matters. Money out of the drawer is
-	// frequent enough to deserve its own door, but it belongs to the shift, and
-	// a second screen that recorded it would be a second place to reconcile.
-	if (m === 'expenses') openShiftSheet('money')
+	// Their own pages, not tabs in the closing sheet. Both are done several
+	// times a day, mid-shift, and both used to live on a screen whose main
+	// action was "Close shift" — one mis-tap from ending the day of a cashier
+	// who wanted to write down bus fare.
+	if (m === 'expenses') router.push('/expenses')
+	if (m === 'neighbours') router.push('/neighbours')
 	// The tabs are actions, not destinations; snap back so the label never lies
 	// about which view you are on.
 	if (m !== 'menu') setTimeout(() => (mode.value = 'menu'), 150)
@@ -318,7 +323,7 @@ watch([recentMine, recentThisShift, recentDate], () => {
 	if (recentSheet.value) loadRecent()
 })
 
-const SHIFT_TABS = ['count', 'money', 'neighbours', 'credit']
+const SHIFT_TABS = ['count', 'credit']
 
 async function openShiftSheet(initialTab = 'count') {
 	// Guarded because a bare `@click="openShiftSheet"` hands this the click

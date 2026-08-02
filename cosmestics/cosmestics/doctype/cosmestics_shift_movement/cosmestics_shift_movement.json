@@ -13,6 +13,7 @@
   "amount",
   "details_section",
   "person",
+  "unattributed",
   "party",
   "column_break_detail",
   "expense_account",
@@ -84,6 +85,13 @@
    "fieldname": "person",
    "fieldtype": "Data",
    "label": "Person"
+  },
+  {
+   "depends_on": "eval:doc.movement_type=='Short'",
+   "description": "A shortfall recorded without a name, written off to the company's short account.",
+   "fieldname": "unattributed",
+   "fieldtype": "Check",
+   "label": "Nobody Named"
   },
   {
    "depends_on": "eval:doc.movement_type == 'Neighbour Purchase'",

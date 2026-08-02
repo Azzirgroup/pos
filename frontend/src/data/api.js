@@ -209,6 +209,13 @@ export const getSettings = () => call('cosmestics.api.settings.get')
 export const savePosSettings = (values) =>
 	call('cosmestics.api.settings.save_pos_settings', { values })
 
+/** Add a till. The payment methods and write-off accounts come from the company. */
+export const createPosProfile = ({ profileName, values }) =>
+	call('cosmestics.api.settings.create_profile', {
+		profile_name: profileName,
+		values: values || {},
+	})
+
 export const saveProfileSettings = ({ name, values }) =>
 	call('cosmestics.api.settings.save_profile', { name, values })
 

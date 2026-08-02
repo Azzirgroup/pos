@@ -52,6 +52,10 @@ PROFILE_FIELDS = (
 	"allow_rate_change",
 	"allow_discount_change",
 	"print_receipt_on_order",
+	# Where a shortfall a cashier is named for is charged. It lives on the
+	# profile rather than in one company-wide setting because two branches of the
+	# same shop can answer "do staff carry the loss" differently.
+	"cosmestics_short_account",
 )
 
 #: What the user can set for themselves. Kept small on purpose: this is a till,
@@ -187,6 +191,142 @@ def save_profile(name: str, values: dict | str) -> dict:
 		doc.save()
 
 	return {"saved": changed, "message": _("{0} updated").format(name) if changed else _("Nothing changed")}
+
+
+@frappe.whitelist(methods=["POST"])
+def create_profile(profile_name: str, values: dict | str | None = None) -> dict:
+	"""Add a till.
+
+	A second counter, a new branch, a phone used as a till at the door — all of
+	them need a POS Profile, and until now that meant the desk. The form here is
+	the same short list `save_profile` writes, plus the two things a profile
+	cannot exist without: a company and a name.
+
+	Two things are done for the shop rather than asked of it, because getting
+	either wrong produces a till that looks configured and cannot sell:
+
+	- **The payment methods table.** A POS Profile with no payment method
+	  refuses every sale, and the error names a child table a shopkeeper has
+	  never heard of. Seeded from the modes this app already maps.
+	- **The user.** Whoever creates a till is put on it, so they can open a shift
+	  on it immediately rather than meeting "no POS profile available".
+	"""
+	if isinstance(values, str):
+		values = frappe.parse_json(values)
+	values = values or {}
+
+	if not _can_write("POS Profile"):
+		frappe.throw(_("You do not have permission to add a till"))
+
+	profile_name = (profile_name or "").strip()
+	if not profile_name:
+		frappe.throw(_("Give the till a name"))
+	if frappe.db.exists("POS Profile", profile_name):
+		frappe.throw(_("A till called {0} already exists").format(profile_name))
+
+	company = values.get("company") or frappe.defaults.get_user_default("Company")
+	if not company:
+		frappe.throw(_("No company to create this till under"))
+
+	doc = frappe.new_doc("POS Profile")
+	doc.name = profile_name
+	doc.company = company
+	for field in PROFILE_FIELDS:
+		if field in values and doc.meta.has_field(field) and values[field] not in (None, ""):
+			doc.set(field, values[field])
+
+	for mode in _till_modes(company):
+		doc.append("payments", {"mode_of_payment": mode, "default": 1 if mode == _cash_mode() else 0})
+
+	doc.append("applicable_for_users", {"user": frappe.session.user})
+	_fill_profile_defaults(doc, company)
+	doc.insert()
+
+	return {
+		"name": doc.name,
+		"message": _("{0} created — you can open a shift on it now").format(doc.name),
+	}
+
+
+def _fill_profile_defaults(doc, company):
+	"""The fields ERPNext insists on that a shopkeeper cannot be asked for.
+
+	`warehouse`, `write_off_account` and `write_off_cost_center` are mandatory on
+	a POS Profile. The first is a real question and is on the form; the other two
+	are accounting plumbing — a till's write-off account is the company's, always,
+	and asking would be asking somebody to guess. Taken from the company, and
+	refused with a plain sentence when the company has not set them, because a
+	blank there is a real configuration gap rather than something to invent.
+	"""
+	if not doc.warehouse:
+		from cosmestics.api.pos import selling_warehouse
+
+		doc.warehouse = selling_warehouse() or frappe.db.get_value(
+			"Warehouse", {"company": company, "is_group": 0, "disabled": 0}, "name"
+		)
+	if not doc.warehouse:
+		frappe.throw(_("Pick the warehouse this till sells from"))
+
+	values = frappe.db.get_value(
+		"Company", company, ["write_off_account", "cost_center", "default_cash_account"], as_dict=True
+	) or frappe._dict()
+
+	if not doc.write_off_account:
+		doc.write_off_account = values.write_off_account
+	if not doc.write_off_cost_center:
+		doc.write_off_cost_center = values.cost_center
+
+	missing = [
+		label
+		for field, label in (
+			("write_off_account", _("a write-off account")),
+			("write_off_cost_center", _("a cost centre")),
+		)
+		if not doc.get(field)
+	]
+	if missing:
+		frappe.throw(
+			_("{0} has no {1}. Set it on the Company before adding a till.").format(
+				company, _(" and ").join(missing)
+			)
+		)
+
+
+def _cash_mode():
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	return settings.mode_cash or frappe.db.get_value(
+		"Mode of Payment", {"type": "Cash", "enabled": 1}, "name"
+	)
+
+
+def _till_modes(company):
+	"""Modes this company can actually settle into.
+
+	Only modes with an account mapped: a profile offering a tender that has
+	nowhere to post is a sale that fails at submit, after the customer has paid.
+	"""
+	rows = frappe.get_all(
+		"Mode of Payment Account",
+		filters={"company": company},
+		fields=["parent", "default_account"],
+	)
+	enabled = set(
+		frappe.get_all(
+			"Mode of Payment",
+			filters={"enabled": 1, "name": ("in", [r.parent for r in rows])},
+			pluck="name",
+		)
+	) if rows else set()
+	modes = [r.parent for r in rows if r.parent in enabled and r.default_account]
+
+	if not modes:
+		frappe.throw(
+			_(
+				"No mode of payment has an account on {0}, so a till created here "
+				"could not take money. Map one first."
+			).format(company)
+		)
+	return list(dict.fromkeys(modes))
 
 
 @frappe.whitelist(methods=["POST"])

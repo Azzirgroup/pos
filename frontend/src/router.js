@@ -144,6 +144,14 @@ const routes = [
 		component: () => import('@/views/Suppliers.vue'),
 	},
 	{
+		// Money out of the drawer that is not a purchase. Its own page rather than
+		// a tab inside the closing sheet — see the component for why.
+		path: '/expenses',
+		name: 'TillExpenses',
+		meta: { title: 'Expenses' },
+		component: () => import('@/views/TillExpenses.vue'),
+	},
+	{
 		path: '/neighbours',
 		name: 'Neighbours',
 		meta: { title: 'Neighbour purchases' },

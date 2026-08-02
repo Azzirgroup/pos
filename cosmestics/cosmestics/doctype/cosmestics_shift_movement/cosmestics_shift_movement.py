@@ -16,6 +16,13 @@ A Short is the opposite direction of causation: it is discovered by counting
 rather than recorded before it, so it never adjusts the expectation — it records
 who the discrepancy is against, which is the part ERPNext's own closing entry has
 nowhere to put.
+
+**And the part it has nowhere to post.** A POS Closing Entry writes no GL entries
+at all: `difference` is a reconciliation note on the document and nothing more.
+Checked, not assumed — closing a shift 500 short produced zero GL entries against
+the closing entry. So money that physically left the drawer was missing from the
+till and present in the ledger, for ever. A Short now posts its own Journal
+Entry, which is safe precisely because nothing else posts one.
 """
 
 import frappe
@@ -59,10 +66,13 @@ class CosmesticsShiftMovement(Document):
 		self.company = opening.company
 		self.cashier = self.cashier or opening.user
 
-		if self.movement_type == "Short" and not self.person:
-			# The entire point of recording a short here rather than leaving it on
-			# the closing entry is that it carries a name.
-			frappe.throw(_("Say who the short is against"))
+		if self.movement_type == "Short" and not self.person and not self.unattributed:
+			# The point of recording a short here rather than leaving it on the
+			# closing entry is that it carries a name. A short with no name is
+			# allowed only when it says so out loud — `unattributed` is set by
+			# `_record_shorts` for the part of a difference nobody was named for,
+			# and it books to a different account precisely because of that.
+			frappe.throw(_("Say who the short is against, or record it as unattributed"))
 
 	def on_submit(self):
 		"""Book the ledger side, where this movement has one.
@@ -72,9 +82,20 @@ class CosmesticsShiftMovement(Document):
 		Refund the return that reverses it, a Credit Payment its Payment Entry —
 		and posting a second one for the same money would double-count it, so
 		those records only tell the closing screen which way the cash went. A
-		Short is booked by ERPNext's POS Closing Entry as the reconciliation
-		difference.
+		Short posts one too, and has to: ERPNext's POS Closing Entry records the
+		difference on the document without ever touching the ledger, so the cash
+		was gone from the drawer and still on the books.
 		"""
+		if self.movement_type == "Short":
+			entry = self._make_short_entry()
+			# Overwrites the closing entry reference deliberately: the JE is what
+			# this record *posted*, and the closing entry it came from is on the
+			# movement's reason. Only one of the two can be the reference, and the
+			# posting is the one anybody chasing this figure needs.
+			self.db_set("reference_doctype", "Journal Entry")
+			self.db_set("reference_name", entry)
+			return
+
 		if self.movement_type != "Expense" or self.reference_name:
 			return
 
@@ -93,6 +114,65 @@ class CosmesticsShiftMovement(Document):
 			doc = frappe.get_doc("Journal Entry", self.reference_name)
 			if doc.docstatus == 1:
 				doc.cancel()
+
+	def _make_short_entry(self) -> str:
+		"""Charge a counted shortfall to whoever carries it.
+
+		Credit the drawer, because the cash is genuinely not there. Debit either
+		the till's own short account — a receivable from the person named, which
+		is what a shop means by "it is on them" — or, when nobody is named, the
+		company's unattributed account, which is a write-off.
+
+		The two are separate accounts on purpose. "Owed by staff" and "lost" are
+		different facts with different consequences, and a single account holding
+		both cannot answer either question at month end.
+		"""
+		credit_to = _mode_account(self.mode_of_payment, self.company)
+
+		if self.expense_account:
+			# Tagged at closing: this person has their own account. Checked here
+			# too rather than trusted from the form — the same party-account rule
+			# applies however the account arrived.
+			debit_to, kind = _assert_postable(self.expense_account), "tagged"
+		else:
+			debit_to, kind = _short_account(self.pos_profile, self.company, bool(self.person))
+
+		je = frappe.new_doc("Journal Entry")
+		je.voucher_type = "Cash Entry"
+		je.company = self.company
+		je.posting_date = nowdate()
+		je.user_remark = (
+			_("Till short on shift {0}, against {1}").format(self.shift, self.person)
+			if self.person
+			else _("Till short on shift {0}, nobody named").format(self.shift)
+		)
+
+		cost_center = frappe.db.get_value("Company", self.company, "cost_center")
+
+		je.append(
+			"accounts",
+			{
+				"account": debit_to,
+				"debit_in_account_currency": flt(self.amount),
+				"cost_center": cost_center,
+				# Carried on the line as well as the remark: a receivable account
+				# read on its own shows a column of identical amounts otherwise.
+				"user_remark": self.person or _("Unattributed"),
+			},
+		)
+		je.append(
+			"accounts",
+			{
+				"account": credit_to,
+				"credit_in_account_currency": flt(self.amount),
+				"cost_center": cost_center,
+			},
+		)
+
+		je.insert()
+		je.submit()
+		frappe.logger().info(f"Short {self.name}: {flt(self.amount)} to {debit_to} ({kind})")
+		return je.name
 
 	def _make_journal_entry(self) -> str:
 		"""Debit the expense, credit the drawer.
@@ -163,6 +243,65 @@ def _mode_account(mode_of_payment: str, company: str) -> str:
 			)
 		)
 	return account
+
+
+def _assert_postable(account: str) -> str:
+	"""An account a Journal Entry can actually post to without a party.
+
+	A Receivable or Payable account demands one, and this app has no Employee to
+	hand — the name on a short is text a cashier typed. Refused with the reason
+	rather than failing inside ERPNext's validation, which would report it as a
+	missing party on an entry the shop never made.
+	"""
+	account_type = frappe.db.get_value("Account", account, "account_type")
+	if account_type in ("Receivable", "Payable"):
+		frappe.throw(
+			_(
+				"{0} is a {1} account, which needs a party on every entry. Use a plain "
+				"asset or expense account for till shortfalls."
+			).format(account, account_type)
+		)
+	return account
+
+
+def _short_account(pos_profile: str, company: str, named: bool) -> tuple[str, str]:
+	"""Where a shortfall is charged, and which of the two answers it is.
+
+	A named short goes to the till's own account, because which till it was is
+	what decides whether staff carry the loss — two branches of one shop can
+	answer that differently, which is why it lives on the POS Profile rather
+	than in one company-wide setting.
+
+	Both fall back to each other rather than to a guess. Booking a shortfall to
+	whatever account happened to be lying around is worse than refusing: it is a
+	number in the wrong place that nobody will ever question, and the refusal
+	names the setting to fill in.
+	"""
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	company_account = settings.company_short_account
+	profile_account = (
+		frappe.db.get_value("POS Profile", pos_profile, "cosmestics_short_account")
+		if pos_profile
+		else None
+	)
+
+	if named:
+		account = profile_account or company_account
+		kind = "profile" if profile_account else "company fallback"
+	else:
+		account = company_account or profile_account
+		kind = "company" if company_account else "profile fallback"
+
+	if not account:
+		frappe.throw(
+			_(
+				"No account to charge this shortfall to. Set a Till Short Account on "
+				"the POS Profile {0}, or an Unattributed Short Account in Cosmetics "
+				"POS Settings."
+			).format(pos_profile or "")
+		)
+
+	return _assert_postable(account), kind
 
 
 def _default_expense_account(company: str) -> str | None:

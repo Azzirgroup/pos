@@ -4,6 +4,40 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 47. Shorts: what nobody was posting
+
+The deferred item, settled by checking rather than assuming. **A POS Closing
+Entry writes no GL entries at all** — closing a shift 500 short produced an
+empty ledger against the closing entry, and the Short movement referenced it
+while posting nothing itself. So the cash was gone from the drawer and still on
+the books, permanently. There was nothing to double-count and nothing to
+reclassify: the short simply had to post its own Journal Entry, which it now
+does.
+
+**Two accounts, because they are two different facts.** A shortfall somebody is
+named for goes to the **Till Short Account** on their POS Profile — a receivable
+from staff, and per-profile because one branch can carry losses while another
+writes them off. What nobody is named for goes to the **Unattributed Short
+Account** in settings, which is a write-off. One account holding both answers
+neither question at month end. Both refuse rather than guess when unset, and a
+Receivable/Payable account is refused outright — it needs a party this app has
+no way to supply.
+
+**The invariant: the amounts always add up to the difference.** Before, naming a
+person filed the *entire* mode shortfall against them, so two names on one mode
+meant twice the money owed, and naming nobody recorded nothing at all. Now
+stated amounts are honoured first, anyone named without one shares what is left
+evenly — rounding remainder included, so 100 across three is 33.34/33.33/33.33 —
+and whatever remains becomes one unattributed short. Over-attribution is refused
+rather than scaled to fit, because scaling hides which figure was wrong.
+
+**A test that committed.** The first version of this closed a real shift, and
+submitting a POS Closing Entry commits — which broke the suite's "nothing
+persisted" guarantee for everything that ran before it and left eight purchase
+invoices on the site. The split is pure arithmetic, so it is tested directly
+now, and the neighbour test picks a supplier name the site has not seen instead
+of a fixed one that fails for ever after a part-committed run.
+
 ### 46. A batch of eighteen, from a walkthrough
 
 Sixteen landed. Two things worth recording about the ones that did:
