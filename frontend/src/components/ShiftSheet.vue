@@ -32,6 +32,9 @@ const props = defineProps({
 	movementBusy: { type: Boolean, default: false },
 	/** Which tab to land on. The Expenses entry in the till opens 'money'. */
 	initialTab: { type: String, default: 'count' },
+	/** Sales still owed for — {rows, totals}. Loaded by the till, not here. */
+	creditSales: { type: Object, default: null },
+	creditBusy: { type: Boolean, default: false },
 })
 
 const emit = defineEmits([
@@ -40,6 +43,7 @@ const emit = defineEmits([
 	'close-shift',
 	'record-movement',
 	'void-movement',
+	'pay-credit',
 ])
 
 const profile = ref(null)
@@ -48,10 +52,17 @@ const counted = ref({})
 /** mode_of_payment → who a shortfall on it is against. */
 const shortPerson = ref({})
 
+/**
+ * One tab per kind of money, which is the only division a cashier can hold in
+ * their head. "Money out" used to carry expenses *and* neighbour purchases
+ * behind a toggle, so the Expenses tab was never only expenses and the
+ * Neighbours tab could not record the payment it was reporting on.
+ */
 const TABS = [
 	{ label: 'Count', value: 'count' },
-	{ label: 'Money out', value: 'money' },
+	{ label: 'Expenses', value: 'money' },
 	{ label: 'Neighbours', value: 'neighbours' },
+	{ label: 'Credit', value: 'credit' },
 ]
 const tab = ref('count')
 
@@ -98,6 +109,12 @@ const shortRows = computed(() => rows.value.filter((r) => differenceFor(r) < 0))
 
 /* ---------- money out ---------- */
 
+/**
+ * What the money-out form is recording, decided by the tab rather than by a
+ * toggle inside it. The two live on different tabs now, so a toggle would be a
+ * second way to say the same thing — and the one that disagreed with the tab
+ * heading would win silently.
+ */
 const expenseKind = ref('Expense')
 const expenseAmount = ref('')
 const expenseMode = ref(null)
@@ -125,7 +142,55 @@ watch(
 	},
 )
 
+watch(tab, (t) => {
+	if (t === 'money') expenseKind.value = 'Expense'
+	if (t === 'neighbours') expenseKind.value = 'Neighbour Purchase'
+})
+
 const expenseAmountNum = computed(() => Number(expenseAmount.value) || 0)
+
+/* ---------- movements, split by what they are ---------- */
+
+const NEIGHBOUR_KINDS = ['Neighbour Purchase', 'Neighbour Refund']
+
+const movementRows = computed(() => movements.value?.rows || [])
+const expenseMovements = computed(() =>
+	movementRows.value.filter((m) => m.movement_type === 'Expense'),
+)
+const neighbourMovements = computed(() =>
+	movementRows.value.filter((m) => NEIGHBOUR_KINDS.includes(m.movement_type)),
+)
+const creditMovements = computed(() =>
+	movementRows.value.filter((m) => m.movement_type === 'Credit Payment'),
+)
+
+const expenseTotal = computed(() => movements.value?.expense_total || 0)
+
+/* ---------- credit sales ---------- */
+
+const payAmount = ref({})
+const payingFor = ref(null)
+
+function payFull(row) {
+	payAmount.value = { ...payAmount.value, [row.name]: row.outstanding }
+	submitPayment(row)
+}
+
+function submitPayment(row) {
+	const raw = payAmount.value[row.name]
+	const amount = raw === '' || raw === undefined ? row.outstanding : Number(raw)
+	if (!(amount > 0)) return
+	payingFor.value = row.name
+	emit('pay-credit', { invoice: row.name, amount })
+}
+
+watch(
+	() => props.creditSales,
+	() => {
+		payingFor.value = null
+		payAmount.value = {}
+	},
+)
 
 const canRecord = computed(
 	() =>
@@ -193,7 +258,7 @@ const MOVEMENT_ICONS = {
  * list is otherwise all one direction, and a refund reading as another payout
  * is the sort of thing a cashier only notices when the count disagrees.
  */
-const CASH_IN_TYPES = ['Neighbour Refund']
+const CASH_IN_TYPES = ['Neighbour Refund', 'Credit Payment']
 
 </script>
 
@@ -447,22 +512,6 @@ const CASH_IN_TYPES = ['Neighbour Refund']
 			<!-- ---------- Money out ---------- -->
 			<template v-else-if="tab === 'money'">
 				<div class="rounded-xl border border-outline-gray-2 p-2.5">
-					<div class="mb-3 flex gap-1 rounded-lg bg-surface-gray-2 p-1">
-						<button
-							v-for="k in ['Expense', 'Neighbour Purchase']"
-							:key="k"
-							class="min-h-touch flex-1 rounded-md px-2 py-2 text-p-sm font-medium transition-colors"
-							:class="
-								expenseKind === k
-									? 'bg-surface-white text-ink-gray-9 shadow-sm'
-									: 'text-ink-gray-6'
-							"
-							@click="expenseKind = k"
-						>
-							{{ k === 'Expense' ? 'Expense' : 'Paid a neighbour' }}
-						</button>
-					</div>
-
 					<div class="grid grid-cols-2 gap-3">
 						<div>
 							<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
@@ -492,7 +541,7 @@ const CASH_IN_TYPES = ['Neighbour Refund']
 						</div>
 					</div>
 
-					<div v-if="expenseKind === 'Expense'" class="mt-3">
+					<div class="mt-3">
 						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
 							Booked to
 						</label>
@@ -507,19 +556,6 @@ const CASH_IN_TYPES = ['Neighbour Refund']
 						</select>
 					</div>
 
-					<div v-else class="mt-3">
-						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
-							Which shop
-						</label>
-						<select
-							v-model="expenseParty"
-							class="h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
-						>
-							<option v-for="n in options?.neighbours || []" :key="n" :value="n">
-								{{ n }}
-							</option>
-						</select>
-					</div>
 
 					<div class="mt-3 grid grid-cols-2 gap-3">
 						<div>
@@ -562,18 +598,19 @@ const CASH_IN_TYPES = ['Neighbour Refund']
 					</p>
 				</div>
 
-				<div v-if="movements?.rows?.length" class="flex flex-col gap-2">
+				<div v-if="expenseMovements.length" class="flex flex-col gap-2">
 					<div class="flex items-baseline justify-between">
-						<span class="text-p-sm font-medium text-ink-gray-7">This shift</span>
+						<span class="text-p-sm font-medium text-ink-gray-7">Expenses this shift</span>
 						<span class="tabular text-p-sm font-semibold text-ink-gray-9">
-							{{ fmtMoney(movements.paid_out_total) }} out
-							<template v-if="movements.cash_in_total">
-								· {{ fmtMoney(movements.cash_in_total) }} back in
-							</template>
+							{{ fmtMoney(expenseTotal) }} out
 						</span>
 					</div>
+					<!-- Expenses only. Neighbour purchases and refunds are money out of
+					     the same drawer, but they belong to a trade with a named shop and
+					     are read on their own tab; mixing them here made "what did we
+					     spend today" unanswerable from the screen that asks it. -->
 					<div
-						v-for="m in movements.rows"
+						v-for="m in expenseMovements"
 						:key="m.name"
 						class="flex items-center gap-3 rounded-xl border border-outline-gray-2 px-3 py-2.5"
 					>
@@ -616,12 +653,102 @@ const CASH_IN_TYPES = ['Neighbour Refund']
 					</div>
 				</div>
 				<p v-else class="px-1 text-p-sm text-ink-gray-5">
-					Nothing has come out of the drawer this shift.
+					No expenses have been taken out of the drawer this shift.
 				</p>
 			</template>
 
 			<!-- ---------- Neighbours ---------- -->
 			<template v-else-if="tab === 'neighbours'">
+				<!-- Recording the payment sits with the trade it belongs to. It used
+				     to be a toggle on the expenses tab, one screen away from the list
+				     of what was owed — so the cashier read the debt in one place and
+				     settled it in another. -->
+				<div class="rounded-xl border border-outline-gray-2 p-2.5">
+					<div class="grid grid-cols-2 gap-3">
+						<div>
+							<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">Amount</label>
+							<input
+								v-model="expenseAmount"
+								type="number"
+								inputmode="decimal"
+								placeholder="0"
+								class="tabular h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-lg font-semibold text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+								@focus="$event.target.select()"
+							/>
+						</div>
+						<div>
+							<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">Out of</label>
+							<select
+								v-model="expenseMode"
+								class="h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+							>
+								<option v-for="m in options?.modes || paymentModes" :key="m" :value="m">
+									{{ m }}
+								</option>
+							</select>
+						</div>
+					</div>
+
+					<div class="mt-3">
+						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">Which shop</label>
+						<select
+							v-model="expenseParty"
+							class="h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						>
+							<option v-for="n in options?.neighbours || []" :key="n" :value="n">{{ n }}</option>
+						</select>
+					</div>
+
+					<button
+						class="mt-3 flex min-h-touch w-full items-center justify-center gap-2 rounded-xl bg-surface-gray-7 py-3.5 text-p-base font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
+						:disabled="!canRecord || movementBusy"
+						@click="submitMovement"
+					>
+						<LucidePlus class="h-4 w-4" />
+						{{ movementBusy ? 'Recording…' : `Pay ${fmtMoney(expenseAmountNum)} next door` }}
+					</button>
+
+					<p class="mt-2 text-p-xs text-ink-gray-5">
+						This records the cash leaving the drawer. The purchase itself is
+						already on their invoice — nothing is posted twice.
+					</p>
+				</div>
+
+				<!-- Every neighbour movement this shift, both directions. -->
+				<div v-if="neighbourMovements.length" class="flex flex-col gap-2">
+					<span class="text-p-sm font-medium text-ink-gray-7">Paid and refunded</span>
+					<div
+						v-for="m in neighbourMovements"
+						:key="m.name"
+						class="flex items-center gap-3 rounded-xl border border-outline-gray-2 px-3 py-2.5"
+					>
+						<LucideStore class="h-4 w-4 shrink-0 text-ink-gray-5" />
+						<div class="min-w-0 flex-1">
+							<div class="truncate text-p-sm font-medium text-ink-gray-8">
+								{{ m.reason || m.movement_type }}
+							</div>
+							<div class="truncate text-p-xs text-ink-gray-5">
+								{{ m.mode_of_payment }}<template v-if="m.party"> · {{ m.party }}</template>
+							</div>
+						</div>
+						<span
+							class="tabular shrink-0 text-p-base font-semibold"
+							:class="
+								CASH_IN_TYPES.includes(m.movement_type) ? 'text-ink-green-3' : 'text-ink-gray-9'
+							"
+						>
+							{{ CASH_IN_TYPES.includes(m.movement_type) ? '+' : '−' }}{{ fmtMoney(m.amount) }}
+						</span>
+						<button
+							class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-ink-gray-5 hover:bg-surface-red-2 hover:text-ink-red-3"
+							:aria-label="`Void ${m.name}`"
+							@click="emit('void-movement', m)"
+						>
+							<LucideX class="h-4 w-4" />
+						</button>
+					</div>
+				</div>
+
 				<div v-if="neighbour?.count" class="flex flex-col gap-3">
 					<div class="grid grid-cols-2 gap-3">
 						<div class="rounded-xl bg-surface-amber-2 px-3 py-2.5">
@@ -674,6 +801,94 @@ const CASH_IN_TYPES = ['Neighbour Refund']
 				</div>
 				<p v-else class="px-1 text-p-sm text-ink-gray-5">
 					Nothing was sourced from a neighbour this shift.
+				</p>
+			</template>
+
+			<!-- ---------- Credit sales ---------- -->
+			<template v-else-if="tab === 'credit'">
+				<div class="grid grid-cols-2 gap-3">
+					<div class="rounded-xl bg-surface-amber-2 px-3 py-2.5">
+						<div class="text-p-xs font-medium text-ink-amber-3">Still owed</div>
+						<div class="tabular text-p-lg font-semibold text-ink-gray-9">
+							{{ fmtMoney(creditSales?.totals?.outstanding || 0) }}
+						</div>
+						<div class="text-p-xs text-ink-gray-6">
+							{{ creditSales?.totals?.count || 0 }} sales ·
+							{{ creditSales?.totals?.customers || 0 }} customers
+						</div>
+					</div>
+					<div class="rounded-xl bg-surface-gray-2 px-3 py-2.5">
+						<div class="text-p-xs font-medium text-ink-gray-6">Taken this shift</div>
+						<div class="tabular text-p-lg font-semibold text-ink-green-3">
+							{{ fmtMoney(movements?.credit_payment_total || 0) }}
+						</div>
+						<div class="text-p-xs text-ink-gray-6">Counted in the drawer</div>
+					</div>
+				</div>
+
+				<p v-if="creditSales?.reason" class="px-1 text-p-sm text-ink-gray-5">
+					{{ creditSales.reason }}
+				</p>
+
+				<p v-else-if="!creditSales?.rows?.length" class="px-1 text-p-sm text-ink-gray-5">
+					Nothing is owed. Every sale has been paid for.
+				</p>
+
+				<!-- Overdue first is deliberate: the list is long on a shop that sells
+				     on account, and the ones worth chasing are the ones that are late,
+				     not the ones that are biggest. -->
+				<div
+					v-for="c in creditSales?.rows || []"
+					:key="c.name"
+					class="rounded-xl border px-3 py-2.5"
+					:class="c.overdue ? 'border-outline-red-2 bg-surface-red-1' : 'border-outline-gray-2'"
+				>
+					<div class="flex items-baseline justify-between gap-2">
+						<span class="min-w-0 truncate text-p-base font-medium text-ink-gray-9">
+							{{ c.customer_name }}
+						</span>
+						<span class="tabular shrink-0 text-p-base font-semibold text-ink-amber-3">
+							{{ fmtMoney(c.outstanding) }}
+						</span>
+					</div>
+					<div class="mt-0.5 truncate text-p-xs text-ink-gray-5">
+						{{ c.name }} · {{ c.date }}
+						<template v-if="c.paid"> · {{ fmtMoney(c.paid) }} already paid</template>
+						<span v-if="c.overdue" class="font-medium text-ink-red-3">
+							· due {{ c.due_date }}
+						</span>
+					</div>
+					<div class="mt-2 flex items-center gap-2">
+						<input
+							:value="payAmount[c.name] ?? ''"
+							type="number"
+							inputmode="decimal"
+							:placeholder="String(c.outstanding)"
+							class="tabular h-11 w-28 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base font-semibold text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+							:aria-label="`Amount paid against ${c.name}`"
+							@input="payAmount = { ...payAmount, [c.name]: $event.target.value }"
+							@focus="$event.target.select()"
+						/>
+						<button
+							class="min-h-touch rounded-lg border border-outline-gray-2 px-3 text-p-sm font-medium text-ink-gray-7 hover:bg-surface-gray-2 disabled:opacity-40"
+							:disabled="creditBusy"
+							@click="submitPayment(c)"
+						>
+							Take part
+						</button>
+						<button
+							class="ml-auto min-h-touch rounded-lg bg-surface-gray-7 px-4 text-p-sm font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
+							:disabled="creditBusy"
+							@click="payFull(c)"
+						>
+							{{ creditBusy && payingFor === c.name ? 'Taking…' : `Settle ${fmtMoneyShort(c.outstanding)}` }}
+						</button>
+					</div>
+				</div>
+
+				<p class="px-1 text-p-xs text-ink-gray-5">
+					A payment here posts against the invoice and adds the cash to what this
+					shift is expected to hold, so the close still balances.
 				</p>
 			</template>
 

@@ -39,6 +39,7 @@ const PERIODS = [
 const STATUSES = [
 	{ label: 'Still owed', value: 'unpaid' },
 	{ label: 'Settled', value: 'paid' },
+	{ label: 'Sent back', value: 'returned' },
 	{ label: 'All', value: 'all' },
 ]
 
@@ -49,6 +50,9 @@ const COLUMNS = [
 	{ label: 'Invoice', key: 'name', type: 'text' },
 	{ label: 'Status', key: 'status', type: 'text' },
 	{ label: 'Total', key: 'grand_total', type: 'currency' },
+	// What went back, on the same line as what was bought. A return listed as a
+	// row of its own reads as a second purchase with a minus sign.
+	{ label: 'Sent back', key: 'returned', type: 'currency' },
 	{ label: 'Still owed', key: 'outstanding', type: 'currency' },
 ]
 
@@ -60,6 +64,13 @@ const stats = computed(() => {
 		{ label: 'Purchases', value: t.count, type: 'number', icon: 'cart' },
 		{ label: 'Shops used', value: t.shops, type: 'number', icon: 'store' },
 		{ label: 'Spent', value: t.spend, type: 'currency', icon: 'money' },
+		{
+			label: 'Sent back',
+			value: t.returned,
+			type: 'currency',
+			icon: 'undo',
+			tone: t.returned ? 'warn' : 'default',
+		},
 		{
 			label: 'Still owed',
 			value: t.owed,

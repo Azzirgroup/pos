@@ -1590,8 +1590,11 @@ def _master_data(r):
 	for entry in master.MASTERS:
 		meta = frappe.get_meta(entry["doctype"])
 		for field in entry["fields"]:
-			# `opening_price` is this app's own, written as an Item Price after insert.
-			if field["fieldname"] == "opening_price":
+			# Some form fields are this app's own and live elsewhere on save — the
+			# selling price as an Item Price, the barcode as a child row. Read from
+			# the module rather than listed again here, so adding a third cannot
+			# make this test fail for the wrong reason.
+			if field["fieldname"] in master.VIRTUAL_FIELDS:
 				continue
 			if not meta.has_field(field["fieldname"]):
 				problems.append(f"{entry['doctype']}.{field['fieldname']}")

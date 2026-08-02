@@ -1,8 +1,9 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { Button, FormControl, TabButtons } from 'frappe-ui'
+import { Button, FormControl } from 'frappe-ui'
 import { listMasterRecords } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
+import PillTabs from '@/components/PillTabs.vue'
 import DataTable from '@/components/DataTable.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import MasterSheet from '@/components/MasterSheet.vue'
@@ -113,7 +114,7 @@ function createNew() {
 		</PageHeader>
 
 		<div class="shrink-0 overflow-x-auto px-4 pt-3">
-			<TabButtons v-model="tab" :buttons="TABS" />
+			<PillTabs v-model="tab" :buttons="TABS" />
 		</div>
 
 		<DataTable

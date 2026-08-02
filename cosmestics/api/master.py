@@ -63,8 +63,33 @@ MASTERS = [
 			{"fieldname": "stock_uom", "label": "Unit", "type": "link", "options": "UOM"},
 			{"fieldname": "brand", "label": "Brand", "type": "link", "options": "Brand"},
 			{"fieldname": "opening_price", "label": "Selling price", "type": "currency"},
+			# Barcode is a child table on Item, not a field, so it is handled the
+			# same way `opening_price` is: shown as one box because a shop scanning
+			# a product has exactly one number printed on it, and written to the
+			# `barcodes` table after the insert.
+			{"fieldname": "barcode", "label": "Barcode", "type": "text"},
 		],
 		"defaults": {"is_stock_item": 1, "is_sales_item": 1, "is_purchase_item": 1},
+	},
+	{
+		# Categories, which a shop reorganises far more often than it adds
+		# warehouses — and which every item form asks for, so a shopkeeper who
+		# needs a new one should not have to leave the app to make it.
+		"key": "item_group",
+		"doctype": "Item Group",
+		"label": "Item group",
+		"icon": "boxes",
+		"title_field": "item_group_name",
+		"fields": [
+			{"fieldname": "item_group_name", "label": "Name", "type": "text", "required": True},
+			{
+				"fieldname": "parent_item_group",
+				"label": "Under",
+				"type": "link",
+				"options": "Item Group",
+			},
+		],
+		"defaults": {"is_group": 0},
 	},
 	{
 		"key": "warehouse",
@@ -144,7 +169,11 @@ def list_records(key: str, search: str | None = None, limit: int = 100) -> dict:
 		frappe.throw(_("You may not view {0}").format(_(doctype)), frappe.PermissionError)
 
 	meta = frappe.get_meta(doctype)
-	shown = [f for f in entry["fields"] if f["fieldname"] != "opening_price" and meta.has_field(f["fieldname"])]
+	shown = [
+		f
+		for f in entry["fields"]
+		if f["fieldname"] not in VIRTUAL_FIELDS and meta.has_field(f["fieldname"])
+	]
 
 	fields = ["name"]
 	for f in shown:
@@ -256,8 +285,9 @@ def create(key: str, values: dict | str) -> dict:
 
 	doc = frappe.new_doc(doctype)
 	for fieldname, value in values.items():
-		# `opening_price` is ours, not the Item's — handled after the insert.
-		if fieldname in allowed and fieldname != "opening_price" and value not in (None, ""):
+		# `opening_price` and `barcode` are ours, not the Item's — both are
+		# handled after the insert, one as an Item Price and one as a child row.
+		if fieldname in allowed and fieldname not in VIRTUAL_FIELDS and value not in (None, ""):
 			doc.set(fieldname, value)
 
 	for fieldname, value in (entry.get("defaults") or {}).items():
@@ -273,6 +303,10 @@ def create(key: str, values: dict | str) -> dict:
 	price = values.get("opening_price")
 	if doctype == "Item" and price:
 		_set_opening_price(doc.name, price)
+
+	barcode = (values.get("barcode") or "").strip()
+	if doctype == "Item" and barcode:
+		_set_barcode(doc.name, barcode)
 
 	return {
 		"key": key,
@@ -296,9 +330,14 @@ def get_record(key: str, name: str) -> dict:
 	doc = frappe.get_doc(entry["doctype"], name)
 	doc.check_permission("read")
 
-	values = {f["fieldname"]: doc.get(f["fieldname"]) for f in entry["fields"] if f["fieldname"] != "opening_price"}
+	values = {
+		f["fieldname"]: doc.get(f["fieldname"])
+		for f in entry["fields"]
+		if f["fieldname"] not in VIRTUAL_FIELDS
+	}
 	if entry["doctype"] == "Item":
 		values["opening_price"] = _current_item_price(name)
+		values["barcode"] = _current_barcode(name)
 
 	return {
 		"key": key,
@@ -338,7 +377,7 @@ def update(key: str, name: str, values: dict | str) -> dict:
 
 	changed = False
 	for fieldname, value in values.items():
-		if fieldname not in allowed or fieldname == "opening_price":
+		if fieldname not in allowed or fieldname in VIRTUAL_FIELDS:
 			continue
 		if doc.get(fieldname) != value:
 			doc.set(fieldname, value)
@@ -351,6 +390,12 @@ def update(key: str, name: str, values: dict | str) -> dict:
 	if entry["doctype"] == "Item" and price not in (None, "") and flt(price) != flt(_current_item_price(name)):
 		_set_opening_price(name, price)
 		changed = True
+
+	if entry["doctype"] == "Item" and "barcode" in values:
+		barcode = (values.get("barcode") or "").strip()
+		if barcode != (_current_barcode(name) or ""):
+			_set_barcode(name, barcode)
+			changed = True
 
 	return {
 		"key": key,
@@ -373,6 +418,53 @@ def _current_item_price(item_code: str):
 	return frappe.db.get_value(
 		"Item Price", {"item_code": item_code, "price_list": price_list}, "price_list_rate"
 	)
+
+
+#: Fields the form shows that are not fields on the doctype.
+#:
+#: Both belong to an Item in a shop's mind and to somewhere else in ERPNext's
+#: model: the selling price is an Item Price document, and the barcode is a row
+#: in the Item's `barcodes` child table. Asking a shopkeeper to understand that
+#: distinction to add a product is the reason this form exists at all.
+VIRTUAL_FIELDS = {"opening_price", "barcode"}
+
+
+def _current_barcode(item_code: str) -> str | None:
+	"""The Item's first barcode, which is the one on the packet.
+
+	First rather than all of them: the form shows one box, and a product with
+	several barcodes is an edge case a shop handles in the desk. Reading the
+	first keeps the form honest about what it will overwrite.
+	"""
+	return frappe.db.get_value(
+		"Item Barcode", {"parent": item_code}, "barcode", order_by="idx asc"
+	)
+
+
+def _set_barcode(item_code: str, barcode: str):
+	"""Put one barcode on an Item, replacing whatever the form was showing.
+
+	Refuses a duplicate rather than letting ERPNext raise it on save: the same
+	barcode on two items makes every scan of it ambiguous, and the till would
+	pick whichever the query returned first.
+	"""
+	existing = frappe.db.get_value(
+		"Item Barcode", {"barcode": barcode, "parent": ("!=", item_code)}, "parent"
+	)
+	if barcode and existing:
+		frappe.throw(_("{0} is already the barcode for {1}").format(barcode, existing))
+
+	doc = frappe.get_doc("Item", item_code)
+	current = _current_barcode(item_code)
+	if not barcode:
+		# Cleared: drop the row rather than leaving an empty one, which ERPNext
+		# would reject on the next save of this item.
+		doc.barcodes = [row for row in doc.barcodes if row.barcode != current]
+	elif doc.barcodes:
+		doc.barcodes[0].barcode = barcode
+	else:
+		doc.append("barcodes", {"barcode": barcode})
+	doc.save(ignore_permissions=True)
 
 
 def _set_opening_price(item_code: str, price):

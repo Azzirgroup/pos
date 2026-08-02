@@ -1,8 +1,9 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { Button, FormControl, TabButtons } from 'frappe-ui'
+import { Button, FormControl } from 'frappe-ui'
 import {
 	listRecentShifts,
+	getShiftActivity,
 	getProfiles,
 	getOpenShift,
 	getClosingSummary,
@@ -18,6 +19,7 @@ import {
 } from '@/data/api'
 import { fmtMoney, fmtMoneyShort } from '@/utils/format'
 import PageHeader from '@/components/PageHeader.vue'
+import PillTabs from '@/components/PillTabs.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import DataTable from '@/components/DataTable.vue'
@@ -116,12 +118,35 @@ const { shareOpen, sharePayload, shareRow, shareList, actionsFor } = useRowActio
  * and their names live here rather than in the row, because a table wide enough
  * to hold them is one nobody can scan.
  */
+/** Movement types that put money in rather than take it out. */
+const CASH_IN_TYPES = ['Neighbour Refund', 'Credit Payment']
+
 const detail = ref(null)
 const detailOpen = ref(false)
+/**
+ * Everything that happened on the shift, fetched when it is opened.
+ *
+ * The row carries what a table can hold — who, when, how short. This is the
+ * rest: every tender, what was counted against what was expected, the money out
+ * of the drawer, the credit sales and the neighbour purchases. Fetched rather
+ * than sent with the list because it is four queries per shift and nobody
+ * opens more than one at a time.
+ */
+const activity = ref(null)
+const activityLoading = ref(false)
 
-function openDetail(row) {
+async function openDetail(row) {
 	detail.value = row
 	detailOpen.value = true
+	activity.value = null
+	activityLoading.value = true
+	try {
+		activity.value = await getShiftActivity({ shift: row.name })
+	} catch (e) {
+		notify(e.message || 'Could not load that shift', 'bad')
+	} finally {
+		activityLoading.value = false
+	}
 }
 
 onMounted(load)
@@ -362,7 +387,7 @@ function notify(message, tone = 'good') {
 	<div class="flex min-h-0 flex-1 flex-col overflow-hidden">
 		<PageHeader
 			title="Previous shifts"
-			subtitle="Closed tills, what they were short, and against whom">
+			subtitle="Tills open now and shifts already closed — what each was short, and against whom">
 			<template #actions>
 				<template v-if="tab === 'history'">
 					<div class="w-[150px]">
@@ -386,7 +411,7 @@ function notify(message, tone = 'good') {
 		</PageHeader>
 
 		<div class="shrink-0 overflow-x-auto px-4 pt-3">
-			<TabButtons v-model="tab" :buttons="TABS" />
+			<PillTabs v-model="tab" :buttons="TABS" />
 		</div>
 
 		<StatTiles v-if="tab === 'history'" :stats="stats" />
@@ -414,18 +439,27 @@ function notify(message, tone = 'good') {
 					row-key="closing"
 					:scroll="false"
 					:actions="actionsFor"
-					empty-text="No shifts have been closed yet."
+					empty-text="No shifts yet."
 				>
 					<template #cell-closed="{ row }">
 						<button
 							class="text-left font-medium text-ink-gray-8 underline decoration-outline-gray-3 underline-offset-2 hover:decoration-ink-gray-8"
 							@click="openDetail(row)"
 						>
-							{{ when(row.closed) }}
+							{{ row.open ? 'Still open' : when(row.closed) }}
 						</button>
 					</template>
 					<template #cell-difference="{ row }">
-						<span class="tabular font-semibold" :class="toneFor(row.difference)">
+						<!-- A shift that has not been counted has no difference. Printing
+						     "Balanced" for one would be the most misleading cell on the
+						     screen: it reads as a till that was checked and agreed. -->
+						<span
+							v-if="row.open"
+							class="text-p-xs font-medium text-ink-amber-3"
+						>
+							Not counted yet
+						</span>
+						<span v-else class="tabular font-semibold" :class="toneFor(row.difference)">
 							{{
 								Math.abs(row.difference) < 0.005
 									? 'Balanced'
@@ -735,6 +769,103 @@ function notify(message, tone = 'good') {
 					<LucideBanknote class="h-4 w-4 shrink-0 text-ink-gray-5" />
 					{{ fmtMoney(detail.expenses) }} of till expenses, and it still balanced
 				</div>
+
+				<!-- ---------- What actually happened on it ---------- -->
+				<p v-if="activityLoading" class="px-1 text-p-sm text-ink-gray-5">
+					Loading the shift…
+				</p>
+
+				<template v-else-if="activity">
+					<div class="flex flex-col gap-2">
+						<span class="text-p-sm font-medium text-ink-gray-7">
+							Every mode of payment
+						</span>
+						<div
+							v-for="m in activity.modes"
+							:key="m.mode_of_payment"
+							class="rounded-xl border border-outline-gray-2 px-3 py-2.5"
+						>
+							<div class="flex items-baseline justify-between gap-2">
+								<span class="text-p-base font-medium text-ink-gray-9">
+									{{ m.mode_of_payment }}
+								</span>
+								<span class="tabular text-p-base font-semibold text-ink-gray-9">
+									{{ fmtMoney(m.counted === null || m.counted === undefined ? m.expected_amount : m.counted) }}
+								</span>
+							</div>
+							<div class="tabular mt-0.5 text-p-xs text-ink-gray-5">
+								float {{ fmtMoneyShort(m.opening_amount) }} · took
+								{{ fmtMoneyShort(m.taken) }}
+								<template v-if="m.paid_out"> · out {{ fmtMoneyShort(m.paid_out) }}</template>
+								· expected {{ fmtMoneyShort(m.expected_amount) }}
+								<span
+									v-if="m.difference !== null && m.difference !== undefined && Math.abs(m.difference) >= 0.005"
+									class="font-medium"
+									:class="m.difference < 0 ? 'text-ink-red-3' : 'text-ink-green-3'"
+								>
+									· {{ m.difference < 0 ? 'short' : 'over' }}
+									{{ fmtMoneyShort(Math.abs(m.difference)) }}
+								</span>
+							</div>
+						</div>
+					</div>
+
+					<div v-if="activity.movements?.rows?.length" class="flex flex-col gap-2">
+						<span class="text-p-sm font-medium text-ink-gray-7">Money in and out</span>
+						<div
+							v-for="m in activity.movements.rows"
+							:key="m.name"
+							class="flex items-center gap-3 rounded-xl border border-outline-gray-2 px-3 py-2"
+						>
+							<div class="min-w-0 flex-1">
+								<div class="truncate text-p-sm font-medium text-ink-gray-8">
+									{{ m.reason || m.movement_type }}
+								</div>
+								<div class="truncate text-p-xs text-ink-gray-5">
+									{{ m.movement_type }} · {{ m.mode_of_payment }}
+									<template v-if="m.person"> · {{ m.person }}</template>
+									<template v-if="m.party"> · {{ m.party }}</template>
+								</div>
+							</div>
+							<span
+								class="tabular shrink-0 text-p-sm font-semibold"
+								:class="
+									m.movement_type === 'Short'
+										? 'text-ink-red-3'
+										: CASH_IN_TYPES.includes(m.movement_type)
+											? 'text-ink-green-3'
+											: 'text-ink-gray-9'
+								"
+							>
+								{{ CASH_IN_TYPES.includes(m.movement_type) ? '+' : '' }}{{ fmtMoney(m.amount) }}
+							</span>
+						</div>
+					</div>
+
+					<div class="grid grid-cols-2 gap-2">
+						<div class="rounded-xl bg-surface-gray-2 px-3 py-2">
+							<div class="text-p-xs text-ink-gray-6">Sales</div>
+							<div class="tabular text-p-base font-semibold text-ink-gray-9">
+								{{ activity.invoice_count }} · {{ fmtMoneyShort(activity.grand_total) }}
+							</div>
+						</div>
+						<div class="rounded-xl bg-surface-gray-2 px-3 py-2">
+							<div class="text-p-xs text-ink-gray-6">On credit</div>
+							<div class="tabular text-p-base font-semibold text-ink-gray-9">
+								{{ activity.credit?.count || 0 }} ·
+								{{ fmtMoneyShort(activity.credit?.outstanding || 0) }}
+							</div>
+						</div>
+					</div>
+
+					<div v-if="activity.neighbour?.count" class="rounded-xl bg-surface-amber-1 px-3 py-2">
+						<div class="text-p-xs text-ink-amber-3">Bought from neighbours</div>
+						<div class="tabular text-p-base font-semibold text-ink-gray-9">
+							{{ activity.neighbour.count }} ·
+							{{ fmtMoneyShort(activity.neighbour.unpaid) }} still owed
+						</div>
+					</div>
+				</template>
 
 				<button
 					class="min-h-touch w-full rounded-xl border border-outline-gray-2 py-3 text-p-base font-medium text-ink-gray-7 hover:bg-surface-gray-2"

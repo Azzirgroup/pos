@@ -143,11 +143,18 @@ export const listNeighbourPurchases = ({ days, status, limit } = {}) =>
 	})
 
 /** Shifts already closed, newest first. */
-export const listRecentShifts = ({ limit, mine } = {}) =>
+export const listRecentShifts = ({ limit, mine, includeOpen } = {}) =>
 	call('cosmestics.api.shift.list_recent_shifts', {
 		limit: limit || 10,
 		mine: mine === false ? 0 : 1,
+		// Shifts still running are listed alongside the closed ones — "whose till
+		// is open" is the same question as "what happened yesterday", asked now.
+		include_open: includeOpen === false ? 0 : 1,
 	})
+
+/** Everything that happened on one shift — open or closed. */
+export const getShiftActivity = ({ shift }) =>
+	call('cosmestics.api.shift.shift_activity', { shift })
 
 /** Expense accounts, modes and neighbours the money-out form needs. */
 export const getMovementOptions = () => call('cosmestics.api.shift.get_movement_options')
@@ -175,6 +182,25 @@ export const recordMovement = ({
 	})
 
 export const voidMovement = ({ name }) => call('cosmestics.api.shift.void_movement', { name })
+
+/* ---------- credit sales ---------- */
+
+/** Sales still owed for. `thisShift` narrows to what this cashier put on account. */
+export const listCreditSales = ({ days, thisShift, limit } = {}) =>
+	call('cosmestics.api.credit.list_credit_sales', {
+		days: days || 90,
+		this_shift: thisShift ? 1 : 0,
+		limit: limit || 200,
+	})
+
+/** Take money against a credit sale. Omit `amount` to settle it in full. */
+export const payCreditSale = ({ invoice, amount, modeOfPayment, reference }) =>
+	call('cosmestics.api.credit.pay_credit_sale', {
+		invoice,
+		amount: amount ?? null,
+		mode_of_payment: modeOfPayment || null,
+		reference: reference || null,
+	})
 
 /* ---------- settings ---------- */
 
@@ -212,6 +238,14 @@ export const shareOnWhatsapp = ({ to, message, sender, doctype, name, csv }) =>
 	})
 
 export const getWhatsappGroups = () => call('cosmestics.api.notifications.list_groups')
+
+/** Numbers already on file for whoever a document is about. */
+export const getContactNumbers = ({ doctype, name, party } = {}) =>
+	call('cosmestics.api.notifications.contact_numbers', {
+		doctype: doctype || null,
+		name: name || null,
+		party: party || null,
+	})
 
 /* ---------- customers ---------- */
 
@@ -425,11 +459,14 @@ export const getCustomerLedger = ({ customer, days } = {}) =>
 
 /* ---------- recent sales ---------- */
 
-export const getRecentSales = ({ limit, mine, thisShift } = {}) =>
+export const getRecentSales = ({ limit, mine, thisShift, onDate } = {}) =>
 	call('cosmestics.api.pos.recent_sales', {
 		limit: limit || 20,
 		mine: mine === false ? 0 : 1,
 		this_shift: thisShift === false ? 0 : 1,
+		// A specific day. Overrides the shift window on the server — the two are
+		// different scopes and their intersection is usually empty.
+		on_date: onDate || null,
 	})
 
 /* ---------- session ---------- */

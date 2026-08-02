@@ -7,6 +7,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import DataTable from '@/components/DataTable.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import { useRowActions } from '@/composables/useRowActions'
+import { resolveIcon } from '@/utils/icons'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideDownload from '~icons/lucide/download'
 import LucideSend from '~icons/lucide/send'
@@ -41,6 +42,44 @@ const warehouse = ref(ALL)
 const warehouses = ref([])
 const result = ref({ columns: [], rows: [], totals: {} })
 const loading = ref(false)
+
+/**
+ * A colour per group, so the index is scannable rather than a wall of white
+ * cards. The hue carries the department, not a status — these are all just
+ * reports — so it is deliberately outside the red/amber/green vocabulary that
+ * means something in `tone.js`.
+ */
+const GROUP_TONES = {
+	Sales: {
+		card: 'border-violet-200 bg-surface-violet-1 hover:bg-violet-200',
+		chip: 'bg-violet-200 text-violet-600',
+		icon: 'receipt',
+	},
+	Inventory: {
+		card: 'border-outline-blue-1 bg-surface-blue-1 hover:bg-surface-blue-2',
+		chip: 'bg-surface-blue-2 text-ink-blue-3',
+		icon: 'boxes',
+	},
+	Purchasing: {
+		card: 'border-outline-amber-1 bg-surface-amber-1 hover:bg-surface-amber-2',
+		chip: 'bg-surface-amber-2 text-ink-amber-3',
+		icon: 'truck',
+	},
+	Accounts: {
+		card: 'border-outline-green-1 bg-surface-green-1 hover:bg-surface-green-2',
+		chip: 'bg-surface-green-2 text-ink-green-3',
+		icon: 'landmark',
+	},
+	Audit: {
+		card: 'border-outline-gray-2 bg-surface-gray-1 hover:bg-surface-gray-2',
+		chip: 'bg-surface-gray-3 text-ink-gray-7',
+		icon: 'scale',
+	},
+}
+
+const DEFAULT_TONE = GROUP_TONES.Audit
+
+const toneFor = (group) => GROUP_TONES[group] || DEFAULT_TONE
 
 const PERIODS = [
 	{ label: 'Last 7 days', value: 7 },
@@ -181,12 +220,22 @@ function exportCsv() {
 						<button
 							v-for="r in items"
 							:key="r.key"
-							class="flex min-w-0 flex-col items-start gap-1 rounded-lg border border-outline-gray-2 bg-surface-white p-3.5 text-left transition-colors hover:border-outline-gray-3 hover:bg-surface-gray-2"
+							class="flex min-w-0 items-start gap-3 rounded-xl border p-3.5 text-left shadow-sm transition-colors"
+							:class="toneFor(group).card"
 							@click="openReport(r.key)"
 						>
-							<span class="text-p-base font-medium text-ink-gray-9">{{ r.label }}</span>
-							<span v-if="r.hint" class="text-p-sm leading-snug text-ink-gray-5">
-								{{ r.hint }}
+							<span
+								class="grid h-10 w-10 shrink-0 place-items-center rounded-xl"
+								:class="toneFor(group).chip"
+								aria-hidden="true"
+							>
+								<component :is="resolveIcon(toneFor(group).icon)" class="h-5 w-5" />
+							</span>
+							<span class="flex min-w-0 flex-col gap-1">
+								<span class="text-p-base font-medium text-ink-gray-9">{{ r.label }}</span>
+								<span v-if="r.hint" class="text-p-sm leading-snug text-ink-gray-6">
+									{{ r.hint }}
+								</span>
 							</span>
 						</button>
 					</div>

@@ -415,7 +415,9 @@ def _other_modes() -> list:
 
 
 @frappe.whitelist()
-def recent_sales(limit: int = 20, mine: int = 1, this_shift: int = 1) -> dict:
+def recent_sales(
+	limit: int = 20, mine: int = 1, this_shift: int = 1, on_date: str | None = None
+) -> dict:
 	"""The last few sales, for reprinting and for answering "did that go through?".
 
 	Scoped to the open shift by default. "Did that go through?" is always asked
@@ -425,6 +427,11 @@ def recent_sales(limit: int = 20, mine: int = 1, this_shift: int = 1) -> dict:
 
 	Falls back to the whole list when no shift is open, because the question is
 	still worth answering at a till nobody has opened a shift on.
+
+	`on_date` answers the other version of the question — "what did we sell on
+	Tuesday" — and overrides the shift window, because a day and a shift are two
+	different scopes and applying both would silently return the intersection,
+	which is usually nothing.
 
 	Defaults to this cashier's own sales for the same reason. Windowed on
 	`creation`, not `posting_date`, because posting_date is a date and cannot
@@ -439,6 +446,9 @@ def recent_sales(limit: int = 20, mine: int = 1, this_shift: int = 1) -> dict:
 		filters["company"] = company
 
 	shift = None
+	if on_date:
+		filters["posting_date"] = on_date
+		this_shift = 0
 	if cint(this_shift):
 		shift = frappe.db.get_value(
 			"POS Opening Entry",
@@ -483,6 +493,7 @@ def recent_sales(limit: int = 20, mine: int = 1, this_shift: int = 1) -> dict:
 		# a list that simply has nothing in it look identical otherwise.
 		"shift": shift.name if shift else None,
 		"since": str(shift.period_start_date) if shift else None,
+		"on_date": on_date,
 	}
 
 

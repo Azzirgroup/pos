@@ -490,8 +490,13 @@ def list_purchases(days: int = 30, status: str | None = None, limit: int = 200) 
 	the shift in front of you; this is the standing question — who have we been
 	buying from, and what have we not settled.
 
-	`status` is 'unpaid', 'paid' or None for both. Unpaid is the reason the
-	screen exists, so it is the one worth filtering to.
+	`status` is 'unpaid', 'paid', 'returned' or None for all of them. Unpaid is
+	the reason the screen exists, so it is the one worth filtering to.
+
+	Return invoices are not listed as purchases of their own — they would show as
+	a negative row next to the thing they reverse, which reads as a second
+	purchase. What went back is reported per purchase instead, as `returned`, so
+	one line says what was bought, what came back and what is still owed.
 	"""
 	group = frappe.db.get_single_value("Cosmestics POS Settings", "neighbour_supplier_group")
 	if not group:
@@ -504,6 +509,7 @@ def list_purchases(days: int = 30, status: str | None = None, limit: int = 200) 
 	filters = {
 		"supplier": ("in", suppliers),
 		"docstatus": 1,
+		"is_return": 0,
 		"posting_date": (">=", add_days(nowdate(), -int(days or 30))),
 	}
 	if status == "unpaid":
@@ -527,6 +533,22 @@ def list_purchases(days: int = 30, status: str | None = None, limit: int = 200) 
 		limit=min(int(limit or 200), 500),
 	)
 
+	# What has already gone back, per purchase. One query for the page rather
+	# than one per row: `_already_returned` answers this for a single invoice and
+	# is right for a return form, but wrong for a list of two hundred.
+	returned = {}
+	if rows:
+		for r in frappe.get_all(
+			"Purchase Invoice",
+			filters={"return_against": ("in", [x.name for x in rows]), "docstatus": 1, "is_return": 1},
+			fields=["return_against", "grand_total", "is_paid"],
+		):
+			acc = returned.setdefault(r.return_against, {"value": 0.0, "count": 0, "refunded": 0.0})
+			acc["value"] += abs(flt(r.grand_total))
+			acc["count"] += 1
+			if r.is_paid:
+				acc["refunded"] += abs(flt(r.grand_total))
+
 	# The items are what makes a row recognisable — "Ksh 400 to the shop next
 	# door" means nothing a week later without knowing what it bought.
 	items = {}
@@ -541,6 +563,9 @@ def list_purchases(days: int = 30, status: str | None = None, limit: int = 200) 
 
 	out = []
 	for r in rows:
+		back = returned.get(r.name) or {"value": 0.0, "count": 0, "refunded": 0.0}
+		if status == "returned" and not back["count"]:
+			continue
 		out.append(
 			{
 				"name": r.name,
@@ -548,6 +573,9 @@ def list_purchases(days: int = 30, status: str | None = None, limit: int = 200) 
 				"posting_date": str(r.posting_date),
 				"grand_total": flt(r.grand_total),
 				"outstanding": flt(r.outstanding_amount),
+				"returned": flt(back["value"]),
+				"refunded": flt(back["refunded"]),
+				"returns": back["count"],
 				"status": r.status,
 				"bought_by": r.owner,
 				"items": ", ".join(items.get(r.name, [])[:4]),
@@ -560,6 +588,7 @@ def list_purchases(days: int = 30, status: str | None = None, limit: int = 200) 
 			"count": len(out),
 			"spend": flt(sum(r["grand_total"] for r in out)),
 			"owed": flt(sum(r["outstanding"] for r in out)),
+			"returned": flt(sum(r["returned"] for r in out)),
 			"shops": len({r["supplier"] for r in out}),
 		},
 		"suppliers": suppliers,

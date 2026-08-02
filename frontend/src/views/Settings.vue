@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { Button, Spinner, TabButtons } from 'frappe-ui'
+import { Button, Spinner } from 'frappe-ui'
 import {
 	getSettings,
 	savePosSettings,
@@ -11,6 +11,7 @@ import {
 	getWhatsappGroups,
 } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
+import PillTabs from '@/components/PillTabs.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideSave from '~icons/lucide/save'
 import LucideCheck from '~icons/lucide/check'
@@ -268,7 +269,7 @@ function notify(message, tone = 'good') {
 		</PageHeader>
 
 		<div class="shrink-0 overflow-x-auto px-4 pt-3">
-			<TabButtons v-model="tab" :buttons="TABS" />
+			<PillTabs v-model="tab" :buttons="TABS" />
 		</div>
 
 		<div v-if="loading && !data" class="grid flex-1 place-items-center">

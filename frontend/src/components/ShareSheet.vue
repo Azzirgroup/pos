@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { Button, Dialog } from 'frappe-ui'
-import { shareOnWhatsapp, getWhatsappGroups } from '@/data/api'
+import { shareOnWhatsapp, getWhatsappGroups, getContactNumbers } from '@/data/api'
 import LucideSend from '~icons/lucide/send'
 import LucideUsers from '~icons/lucide/users'
 import LucideSmartphone from '~icons/lucide/smartphone'
@@ -32,6 +32,15 @@ const sending = ref(false)
 const result = ref(null)
 const groups = ref([])
 const groupsLoaded = ref(false)
+/**
+ * Numbers already on file for whoever this document is about.
+ *
+ * Typing one by hand is the slowest part of sharing and the only part that
+ * fails silently — a digit wrong sends a customer's invoice to a stranger, and
+ * the bridge reports it delivered. A single number fills the box outright;
+ * several are offered, because "which of these two" is the cashier's call.
+ */
+const known = ref([])
 const target = ref('number')
 
 watch(
@@ -42,6 +51,20 @@ watch(
 		target.value = 'number'
 		message.value = props.payload?.message || ''
 		result.value = null
+		known.value = []
+
+		if (props.payload?.doctype && props.payload?.name) {
+			try {
+				const res = await getContactNumbers({
+					doctype: props.payload.doctype,
+					name: props.payload.name,
+				})
+				known.value = res?.numbers || []
+				if (known.value.length === 1) to.value = known.value[0].number
+			} catch {
+				known.value = []
+			}
+		}
 
 		// Fetched on first open rather than on mount: most sessions never share
 		// anything, and this is a round trip to a bridge that idles.
@@ -141,14 +164,35 @@ async function copy() {
 					</button>
 				</div>
 
-				<input
-					v-if="target === 'number'"
-					v-model="to"
-					type="tel"
-					inputmode="tel"
-					placeholder="2547…"
-					class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
-				/>
+				<template v-if="target === 'number'">
+					<input
+						v-model="to"
+						type="tel"
+						inputmode="tel"
+						placeholder="2547…"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+					<!-- On file for this customer. Tapping one is a number that is
+					     certainly theirs; typing one is a number that is probably
+					     theirs, and the difference only shows up as a message somebody
+					     else received. -->
+					<div v-if="known.length" class="flex flex-wrap items-center gap-1.5">
+						<span class="text-p-xs text-ink-gray-5">On file:</span>
+						<button
+							v-for="k in known"
+							:key="k.number"
+							class="rounded-full border px-2.5 py-1 text-p-xs font-medium transition-colors"
+							:class="
+								to === k.number
+									? 'border-violet-200 bg-surface-violet-1 text-violet-600'
+									: 'border-outline-gray-2 text-ink-gray-7 hover:bg-surface-gray-2'
+							"
+							@click="to = k.number"
+						>
+							{{ k.label }} · {{ k.number }}
+						</button>
+					</div>
+				</template>
 				<template v-else>
 					<select
 						v-if="groups.length"

@@ -45,6 +45,10 @@ const CACHEABLE = new Set([
 	// Dashboard tabs — the most revisited screens in the app.
 	'cosmestics.api.dashboard.overview',
 	'cosmestics.api.dashboard.filters',
+	// Today is the one tab where a minute of staleness is actually noticeable,
+	// but stale-while-revalidate answers that: it paints immediately and
+	// corrects itself a round trip later, which is what "live" looks like.
+	'cosmestics.api.dashboard.today',
 	'cosmestics.api.dashboard.sales',
 	'cosmestics.api.dashboard.branches',
 	'cosmestics.api.dashboard.warehouses',
@@ -73,6 +77,7 @@ const CACHEABLE = new Set([
 	// Crosses the network twice — to this server and on to the WhatsApp bridge.
 	// Easily the slowest read in the app and the one that changes least.
 	'cosmestics.api.notifications.list_groups',
+	'cosmestics.api.notifications.contact_numbers',
 ])
 
 /**

@@ -645,6 +645,83 @@ def test_whatsapp(to: str, message: str | None = None):
 	}
 
 
+@frappe.whitelist()
+def contact_numbers(
+	doctype: str | None = None, name: str | None = None, party: str | None = None
+) -> dict:
+	"""Phone numbers already on file for whoever this document is about.
+
+	Typing a customer's number by hand to send them their own invoice is both the
+	slowest part of sharing and the only part that can silently fail — a digit
+	wrong and the message goes to a stranger, with a delivery receipt saying it
+	worked.
+
+	Looks in the two places a shop actually keeps a number: the party record
+	itself (`mobile_no`, then `phone`), and any linked Contact. Returned labelled
+	rather than picked for them — "which of these two numbers" is a question the
+	cashier can answer and the server cannot.
+	"""
+	if not party and doctype and name:
+		party = _party_of(doctype, name)
+
+	if not party:
+		return {"party": None, "numbers": []}
+
+	numbers = []
+	seen = set()
+
+	def add(number, label):
+		digits = str(number or "").strip()
+		if not digits or digits in seen:
+			return
+		seen.add(digits)
+		numbers.append({"number": digits, "label": label})
+
+	for party_type in ("Customer", "Supplier"):
+		if not frappe.db.exists(party_type, party):
+			continue
+		# Read through the meta rather than assuming: Customer carries `mobile_no`
+		# but not `phone`, Supplier the other way round on some versions, and a
+		# missing column is a hard SQL error rather than a null.
+		meta = frappe.get_meta(party_type)
+		name_field = f"{frappe.scrub(party_type)}_name"
+		wanted = [f for f in ("mobile_no", "phone", name_field) if meta.has_field(f)]
+		row = frappe.db.get_value(party_type, party, wanted, as_dict=True) if wanted else None
+		if row:
+			label = row.get(name_field) or party
+			add(row.get("mobile_no"), label)
+			add(row.get("phone"), f"{label} (landline)")
+		break
+
+	# Contacts hang off Dynamic Link, which is how ERPNext models "this person
+	# belongs to that customer" — reading Contact directly would miss anyone
+	# attached to more than one party.
+	for contact in frappe.get_all(
+		"Dynamic Link", filters={"link_name": party, "parenttype": "Contact"}, pluck="parent"
+	):
+		doc = frappe.db.get_value(
+			"Contact", contact, ["first_name", "last_name", "mobile_no", "phone"], as_dict=True
+		)
+		if not doc:
+			continue
+		who = " ".join(filter(None, [doc.first_name, doc.last_name])) or contact
+		add(doc.mobile_no, who)
+		add(doc.phone, f"{who} (landline)")
+
+	return {"party": party, "numbers": numbers}
+
+
+def _party_of(doctype: str, name: str) -> str | None:
+	"""Whose document this is, whatever the doctype calls the field."""
+	meta = frappe.get_meta(doctype)
+	for field in ("customer", "supplier", "party", "party_name"):
+		if meta.has_field(field):
+			value = frappe.db.get_value(doctype, name, field)
+			if value:
+				return value
+	return None
+
+
 @frappe.whitelist(methods=["POST"])
 def share(
 	to: str,

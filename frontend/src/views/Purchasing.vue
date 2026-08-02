@@ -1,8 +1,9 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { Button, Badge, TabButtons, FormControl } from 'frappe-ui'
+import { Button, Badge, FormControl } from 'frappe-ui'
 import { getPurchasing } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
+import PillTabs from '@/components/PillTabs.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
@@ -132,7 +133,7 @@ async function load() {
 		<StatTiles :stats="stats" />
 
 		<div class="shrink-0 px-4 pb-2">
-			<TabButtons v-model="tab" :buttons="TABS" />
+			<PillTabs v-model="tab" :buttons="TABS" />
 		</div>
 
 		<DataTable

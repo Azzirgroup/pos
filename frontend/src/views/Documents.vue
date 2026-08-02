@@ -1,7 +1,7 @@
 <script setup>
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { Badge, Button, Dropdown, FormControl, TabButtons } from 'frappe-ui'
+import { Badge, Button, Dropdown, FormControl } from 'frappe-ui'
 import {
 	getDocumentInsights,
 	getPrintUrl,
@@ -11,6 +11,7 @@ import {
 	sendDocumentWhatsapp,
 } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
+import PillTabs from '@/components/PillTabs.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
 import DocumentModal from '@/components/DocumentModal.vue'
@@ -23,6 +24,7 @@ import LucideMore from '~icons/lucide/ellipsis'
 import LucideCheck from '~icons/lucide/check'
 import LucideBan from '~icons/lucide/ban'
 import LucideCopy from '~icons/lucide/copy'
+import LucideTruck from '~icons/lucide/truck'
 import LucideUndo from '~icons/lucide/undo-2'
 import LucidePrinter from '~icons/lucide/printer'
 import LucideSend from '~icons/lucide/send'
@@ -190,6 +192,9 @@ const ACTION_LABELS = {
 	cancel: { label: 'Cancel', icon: LucideBan, theme: 'red' },
 	amend: { label: 'Amend', icon: LucideUndo },
 	duplicate: { label: 'Duplicate', icon: LucideCopy },
+	// Only offered on a submitted Material Request — the server decides, this
+	// only draws it.
+	stock_entry: { label: 'Move the stock', icon: LucideTruck },
 	print: { label: 'Print', icon: LucidePrinter },
 	whatsapp: { label: 'Send on WhatsApp', icon: LucideSend },
 }
@@ -346,7 +351,7 @@ function notify(message, tone = 'good') {
 			</PageHeader>
 
 			<div class="shrink-0 px-4 pt-3">
-				<TabButtons v-model="tab" :buttons="TABS" />
+				<PillTabs v-model="tab" :buttons="TABS" inset />
 			</div>
 
 			<!-- List -->

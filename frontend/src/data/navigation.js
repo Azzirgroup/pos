@@ -15,6 +15,7 @@
 export const MODULE_TABS = {
 	inventory: [
 		{ label: 'Items', to: '/items' },
+		{ label: 'Item groups', to: '/item-groups' },
 		{ label: 'Item price', to: '/pricing' },
 		{ label: 'Stock levels', to: '/inventory' },
 		{ label: 'Barcodes', to: '/barcodes' },
@@ -40,6 +41,7 @@ export const MODULE_TABS = {
 		{ label: 'Deliveries', to: '/documents/delivery-note' },
 		{ label: 'Invoices', to: '/documents/sales-invoice' },
 		{ label: 'Payments', to: '/documents/payment-entry' },
+		{ label: 'Returns', to: '/returns' },
 		{ label: 'Customers', to: '/customers' },
 		// Filed under Sales rather than Purchasing: these are raised by a cashier
 		// to complete a sale that is happening at that moment, and the person who
@@ -108,11 +110,17 @@ function _moduleForPath(path) {
 		path.startsWith('/reorder') ||
 		path.startsWith('/pricing') ||
 		path.startsWith('/items') ||
+		path.startsWith('/item-groups') ||
 		path.startsWith('/barcodes')
 	)
 		return 'inventory'
 	if (path.startsWith('/purchasing')) return 'purchasing'
-	if (path.startsWith('/sales') || path.startsWith('/customers') || path.startsWith('/neighbours'))
+	if (
+		path.startsWith('/sales') ||
+		path.startsWith('/customers') ||
+		path.startsWith('/returns') ||
+		path.startsWith('/neighbours')
+	)
 		return 'sales'
 	if (path.startsWith('/accounts')) return 'accounts'
 	return null

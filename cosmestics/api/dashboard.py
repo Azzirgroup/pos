@@ -484,7 +484,7 @@ def _negative_stock_rows() -> dict:
 # --------------------------------------------------------------------------
 
 
-def _section(key, title, subtitle, columns, rows, chart=None):
+def _section(key, title, subtitle, columns, rows, chart=None, scroll=False):
 	"""One tab section.
 
 	`chart` is an optional drawing hint — {kind, label, value, hint} naming which
@@ -503,6 +503,10 @@ def _section(key, title, subtitle, columns, rows, chart=None):
 		"columns": columns,
 		"rows": rows,
 		"chart": chart,
+		# A full list rather than a shortlist: the card caps its own height and
+		# scrolls inside itself, so a hundred debtors do not push the rest of the
+		# tab off the screen.
+		"scroll": scroll,
 	}
 
 
@@ -583,6 +587,188 @@ def filters() -> dict:
 				"Warehouse", filters=warehouse_filters, fields=["name", "warehouse_name", "warehouse_type"]
 			)
 			if w.warehouse_type != "Transit"
+		],
+	}
+
+
+@frappe.whitelist()
+def today() -> dict:
+	"""Everything that has happened since the shop opened this morning.
+
+	Deliberately ignores the period control. Every other tab answers "how is the
+	month going"; this one answers "what is happening right now", and the two
+	questions want different screens. A shop owner checking in at four in the
+	afternoon wants today's takings, who is on the till, what went out of the
+	drawer and what is still unpaid — none of which a thirty-day average shows.
+
+	Windowed on `posting_date`, not on `creation`: a sale is part of today's
+	trading because it was posted today, and a shift that opened before midnight
+	does not move yesterday's invoices into today.
+	"""
+	day = getdate(nowdate())
+	args = _args({"day": day})
+
+	sales_row = frappe.db.sql(
+		f"""select count(si.name) as invoices,
+		           sum(si.grand_total) as revenue,
+		           sum(si.outstanding_amount) as unpaid,
+		           sum(case when si.is_pos = 1 then 1 else 0 end) as till_sales,
+		           sum(case when si.is_return = 1 then 1 else 0 end) as returns,
+		           sum(case when si.is_return = 1 then si.grand_total else 0 end) as returned_value
+		    from `tabSales Invoice` si
+		    where si.docstatus = 1 and si.posting_date = %(day)s {_scope('si')}""",
+		args,
+		as_dict=True,
+	)[0]
+
+	by_mode = frappe.db.sql(
+		f"""select sip.mode_of_payment as mode, sum(sip.amount) as amount
+		    from `tabSales Invoice Payment` sip
+		    join `tabSales Invoice` si on si.name = sip.parent
+		    where si.docstatus = 1 and si.posting_date = %(day)s {_scope('si')}
+		    group by sip.mode_of_payment order by amount desc""",
+		args,
+		as_dict=True,
+	)
+
+	invoices = frappe.db.sql(
+		f"""select si.name, si.customer, si.grand_total, si.outstanding_amount as outstanding,
+		           si.is_return, si.pos_profile, si.owner,
+		           time_format(si.posting_time, '%%H:%%i') as at
+		    from `tabSales Invoice` si
+		    where si.docstatus = 1 and si.posting_date = %(day)s {_scope('si')}
+		    order by si.posting_time desc limit 200""",
+		args,
+		as_dict=True,
+	)
+
+	movements = frappe.db.sql(
+		"""select m.movement_type as kind, m.amount, m.party, m.person, m.reason,
+		          m.mode_of_payment as mode
+		   from `tabCosmestics Shift Movement` m
+		   where m.docstatus = 1 and date(m.creation) = %(day)s
+		   order by m.creation desc limit 100""",
+		{"day": day},
+		as_dict=True,
+	)
+
+	purchases = frappe.db.sql(
+		f"""select pi.name, pi.supplier, pi.grand_total, pi.outstanding_amount as outstanding
+		    from `tabPurchase Invoice` pi
+		    where pi.docstatus = 1 and pi.posting_date = %(day)s {_scope('pi')}
+		    order by pi.creation desc limit 100""",
+		args,
+		as_dict=True,
+	)
+
+	tills = _open_tills()
+	revenue = flt(sales_row.revenue)
+	paid_out = flt(sum(m.amount for m in movements if m.kind in ("Expense", "Neighbour Purchase")))
+	cash_in = flt(sum(m.amount for m in movements if m.kind == "Neighbour Refund"))
+
+	return {
+		"period": {"from": str(day), "to": str(day), "days": 1},
+		"stats": [
+			{"key": "revenue", "label": "Taken today", "value": revenue, "type": "currency", "icon": "money"},
+			{"key": "invoices", "label": "Sales", "value": cint(sales_row.invoices), "type": "number", "icon": "receipt"},
+			{
+				"key": "unpaid",
+				"label": "Unpaid today",
+				"value": flt(sales_row.unpaid),
+				"type": "currency",
+				"icon": "hourglass",
+				"tone": "warn" if flt(sales_row.unpaid) else "good",
+			},
+			{"key": "till", "label": "Over the counter", "value": cint(sales_row.till_sales), "type": "number", "icon": "cart"},
+			{
+				"key": "tills_open",
+				"label": "Tills open now",
+				"value": tills["count"],
+				"type": "number",
+				"icon": "unlock",
+				"tone": "warn" if tills["count"] else "default",
+			},
+			{
+				"key": "paid_out",
+				"label": "Out of the drawer",
+				"value": paid_out - cash_in,
+				"type": "currency",
+				"icon": "wallet",
+				"tone": "warn" if paid_out else "default",
+			},
+			{
+				"key": "returns",
+				"label": "Returns",
+				"value": cint(sales_row.returns),
+				"type": "number",
+				"icon": "ban",
+				"tone": "bad" if cint(sales_row.returns) else "default",
+				"hint": f"{abs(flt(sales_row.returned_value)):,.0f} given back" if sales_row.returns else None,
+			},
+			{
+				"key": "bought",
+				"label": "Bought today",
+				"value": flt(sum(p.grand_total for p in purchases)),
+				"type": "currency",
+				"icon": "truck",
+			},
+		],
+		"sections": [
+			_section(
+				"modes",
+				"How it was paid",
+				"Every tender taken today",
+				[_col("Mode", "mode"), _col("Amount", "amount", "currency")],
+				by_mode,
+				_donut("mode", "amount"),
+			),
+			_section(
+				"tills",
+				"Tills open now",
+				"Nobody has closed these yet",
+				[_col("Shift", "name"), _col("Cashier", "user"), _col("Till", "pos_profile")],
+				tills["rows"],
+			),
+			_section(
+				"movements",
+				"Money out of the drawer",
+				"Expenses, neighbour purchases and refunds",
+				[
+					_col("Kind", "kind"),
+					_col("Who", "party"),
+					_col("Why", "reason"),
+					_col("Amount", "amount", "currency"),
+				],
+				movements,
+				scroll=True,
+			),
+			_section(
+				"invoices",
+				"Today's sales",
+				f"{len(invoices)} in the order they happened",
+				[
+					_col("Time", "at"),
+					_col("Invoice", "name"),
+					_col("Customer", "customer"),
+					_col("Unpaid", "outstanding", "currency"),
+					_col("Total", "grand_total", "currency"),
+				],
+				invoices,
+				scroll=True,
+			),
+			_section(
+				"purchases",
+				"Bought today",
+				"Including anything sourced from next door",
+				[
+					_col("Invoice", "name"),
+					_col("Supplier", "supplier"),
+					_col("Still owed", "outstanding", "currency"),
+					_col("Total", "grand_total", "currency"),
+				],
+				purchases,
+				scroll=True,
+			),
 		],
 	}
 
@@ -1159,13 +1345,19 @@ def accounts(days: int = DEFAULT_DAYS) -> dict:
 			as_dict=True,
 		)
 
+	# Every customer who owes anything, not a top eight. "Who owes us money" is
+	# the question this tab exists to answer, and an answer that stops at the
+	# eighth name is one somebody has to go and check elsewhere. The card scrolls
+	# rather than the page growing.
 	receivable = frappe.db.sql(
 		f"""select si.customer as party, count(si.name) as invoices,
-		           sum(si.outstanding_amount) as outstanding
+		           sum(si.outstanding_amount) as outstanding,
+		           min(si.due_date) as oldest_due,
+		           sum(case when si.due_date < %(today)s then 1 else 0 end) as overdue
 		    from `tabSales Invoice` si
 		    where si.docstatus = 1 and si.outstanding_amount > 0 {_scope('si')}
-		    group by si.customer order by outstanding desc limit %(limit)s""",
-		_args({"limit": SHORTLIST}),
+		    group by si.customer order by outstanding desc limit 500""",
+		_args({"today": nowdate()}),
 		as_dict=True,
 	)
 
@@ -1252,10 +1444,16 @@ def accounts(days: int = DEFAULT_DAYS) -> dict:
 			_section(
 				"receivable",
 				"Customers who owe us",
-				"Biggest first",
-				[_col("Customer", "party"), _col("Invoices", "invoices", "number"), _col("Owes", "outstanding", "currency")],
+				f"All {len(receivable)}, biggest first",
+				[
+					_col("Customer", "party"),
+					_col("Invoices", "invoices", "number"),
+					_col("Overdue", "overdue", "number"),
+					_col("Owes", "outstanding", "currency"),
+				],
 				receivable,
 				_bar("party", "outstanding", hint="invoices"),
+				scroll=True,
 			),
 			_section(
 				"payable",

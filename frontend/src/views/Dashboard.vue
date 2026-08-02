@@ -1,9 +1,10 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { Button, FormControl, Spinner, TabButtons } from 'frappe-ui'
+import { Button, FormControl, Spinner } from 'frappe-ui'
 import { getDashboard, getDashboardFilters, getDashboardTab } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
+import PillTabs from '@/components/PillTabs.vue'
 import DataTable from '@/components/DataTable.vue'
 import AttentionList from '@/components/AttentionList.vue'
 import ChartCard from '@/components/charts/ChartCard.vue'
@@ -40,6 +41,10 @@ const PERIODS = [
  */
 const TABS = [
 	{ label: 'Overview', value: 'overview' },
+	// Today ignores the period control on purpose — see `dashboard.today`. It is
+	// the "what is happening right now" tab, next to the "how is the month going"
+	// ones, which is why it sits first among them.
+	{ label: 'Today', value: 'today' },
 	{ label: 'Sales', value: 'sales' },
 	{ label: 'Branches', value: 'branches' },
 	{ label: 'Warehouses', value: 'warehouses' },
@@ -261,9 +266,7 @@ const attention = computed(() => {
 			</template>
 		</PageHeader>
 
-		<div class="shrink-0 overflow-x-auto px-4 pt-3">
-			<TabButtons v-model="tab" :buttons="TABS" />
-		</div>
+		<PillTabs v-model="tab" :buttons="TABS" />
 
 		<!-- The five department tabs: same shape, one renderer. -->
 		<div
@@ -337,12 +340,13 @@ const attention = computed(() => {
 								:value-key="section.chart.value"
 							/>
 						</template>
-						<AttentionList
-							v-else
-							:columns="section.columns"
-							:rows="section.rows"
-							empty-text="Nothing in this period."
-						/>
+						<div v-else :class="section.scroll ? 'max-h-80 overflow-y-auto' : ''">
+							<AttentionList
+								:columns="section.columns"
+								:rows="section.rows"
+								empty-text="Nothing in this period."
+							/>
+						</div>
 					</section>
 				</div>
 			</template>

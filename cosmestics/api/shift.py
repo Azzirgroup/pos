@@ -341,7 +341,12 @@ def _movement_summary(movements):
 		"neighbour_cash_total": flt(
 			sum(r["amount"] for r in rows if r["movement_type"] == "Neighbour Purchase")
 		),
-		"neighbour_refund_total": flt(sum(r["amount"] for r in cash_in)),
+		"neighbour_refund_total": flt(
+			sum(r["amount"] for r in rows if r["movement_type"] == "Neighbour Refund")
+		),
+		"credit_payment_total": flt(
+			sum(r["amount"] for r in rows if r["movement_type"] == "Credit Payment")
+		),
 		"shorts": shorts,
 		"short_total": flt(sum(r["amount"] for r in shorts)),
 	}
@@ -553,7 +558,7 @@ def _record_shorts(shift, closing, shorts):
 
 
 @frappe.whitelist()
-def list_recent_shifts(limit: int = 10, mine: int = 1) -> dict:
+def list_recent_shifts(limit: int = 10, mine: int = 1, include_open: int = 1) -> dict:
 	"""Previous shifts — one row per submitted POS Closing Entry, newest first.
 
 	The shift screen could only ever show the one in front of you, so "what did
@@ -566,9 +571,11 @@ def list_recent_shifts(limit: int = 10, mine: int = 1) -> dict:
 	Starting from the closing entry means every row on this screen is a real
 	close that still stands.
 
-	The shift currently open is absent by construction: it has no closing entry
-	yet. That is the point — this is history, and the open shift is read and
-	settled at the till.
+	Shifts still open are listed too, from the opening side, because a manager
+	asking "whose till is still running" is asking this screen. They carry
+	`open: true` and no closing figures — a shift that has not been counted has
+	no difference and no shorts, and inventing zeroes for them would put a
+	perfectly balanced row next to real ones.
 
 	Defaults to this cashier's own, as `pos.recent_sales` does: a shift belongs
 	to a person, and everyone else's closings bury the one being looked for.
@@ -621,6 +628,7 @@ def list_recent_shifts(limit: int = 10, mine: int = 1) -> dict:
 		rows.append(
 			{
 				"name": c.pos_opening_entry,
+				"open": False,
 				"closing": c.name,
 				"user": c.user,
 				"pos_profile": c.pos_profile,
@@ -641,16 +649,163 @@ def list_recent_shifts(limit: int = 10, mine: int = 1) -> dict:
 			}
 		)
 
+	if int(include_open or 0):
+		rows = _open_shift_rows(int(mine or 0)) + rows
+
 	return {
 		"rows": rows,
 		"count": len(rows),
 		"totals": {
 			"shifts": len(rows),
+			"open": len([r for r in rows if r["open"]]),
 			"taken": flt(sum(r["grand_total"] for r in rows)),
 			"paid_out": flt(sum(r["paid_out"] for r in rows)),
 			"short": flt(sum(r["short_total"] for r in rows)),
 			"unbalanced": len([r for r in rows if abs(r["difference"]) >= 0.005]),
 		},
+	}
+
+
+def _open_shift_rows(mine: int) -> list:
+	"""Shifts still running, in the same shape as the closed ones.
+
+	Taken from the opening entry with no closing figures, because there are
+	none: nothing has been counted. What *is* known — who is on it, since when,
+	and what has come out of the drawer — is the part a manager wants.
+	"""
+	filters = {"docstatus": 1, "status": "Open"}
+	if mine:
+		filters["user"] = frappe.session.user
+
+	openings = frappe.get_all(
+		"POS Opening Entry",
+		filters=filters,
+		fields=["name", "user", "pos_profile", "period_start_date"],
+		order_by="period_start_date desc",
+		limit=20,
+	)
+	if not openings:
+		return []
+
+	movements = _movements_for([o.name for o in openings])
+
+	rows = []
+	for o in openings:
+		summary = _movement_summary(movements.get(o.name, []))
+		rows.append(
+			{
+				"name": o.name,
+				"open": True,
+				"closing": None,
+				"user": o.user,
+				"pos_profile": o.pos_profile,
+				"opened": str(o.period_start_date) if o.period_start_date else None,
+				"closed": None,
+				# Nothing has been counted, so there is nothing to report as taken
+				# or short. The activity view has the real figures for an open
+				# shift; a row here would be a guess.
+				"grand_total": 0,
+				"total_quantity": 0,
+				"difference": 0,
+				"paid_out": summary["paid_out_total"],
+				"expenses": summary["expense_total"],
+				"shorts": [],
+				"short_total": 0,
+				"assigned_to": [],
+				"_tone": "warn",
+			}
+		)
+	return rows
+
+
+@frappe.whitelist()
+def shift_activity(shift: str) -> dict:
+	"""Everything that happened on one shift, open or closed.
+
+	The list answers "which shift"; this answers "what happened on it" — every
+	tender taken, every movement out of the drawer, the credit sales, the
+	neighbour purchases and, when it has been closed, what was counted against
+	what was expected.
+
+	Works for a shift that is still running, which is the case the closing entry
+	cannot serve: there is no closing document to read, so the figures come from
+	the same `get_invoices` the live closing screen uses.
+	"""
+	opening = frappe.get_doc("POS Opening Entry", shift)
+	end = opening.period_end_date or now_datetime()
+
+	from erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry import get_invoices
+
+	# The same call the live closing screen makes, scoped to whoever owns this
+	# shift rather than to the session — a manager reading somebody else's shift
+	# must see that cashier's invoices, not their own.
+	data = get_invoices(
+		start=opening.period_start_date,
+		end=end,
+		pos_profile=opening.pos_profile,
+		user=opening.user,
+	)
+	movements = _movements(opening.name)
+	summary = _movement_summary(movements)
+
+	taken = {}
+	for p in data.get("payments", []):
+		taken[p["mode_of_payment"]] = flt(taken.get(p["mode_of_payment"], 0)) + flt(p["amount"])
+
+	paid_out = _paid_out_by_mode(movements)
+	opening_amounts = {b.mode_of_payment: flt(b.opening_amount) for b in opening.balance_details}
+
+	# What was actually counted, when it has been counted at all.
+	closing = frappe.db.get_value(
+		"POS Closing Entry", {"pos_opening_entry": shift, "docstatus": 1}, "name"
+	)
+	counted = {}
+	if closing:
+		for d in frappe.get_all(
+			"POS Closing Entry Detail",
+			filters={"parent": closing},
+			fields=["mode_of_payment", "closing_amount", "expected_amount", "difference"],
+		):
+			counted[d.mode_of_payment] = {
+				"closing_amount": flt(d.closing_amount),
+				"difference": flt(d.difference),
+			}
+
+	modes = []
+	for mode in {*opening_amounts, *taken, *paid_out, *counted}:
+		expected = opening_amounts.get(mode, 0) + taken.get(mode, 0) - paid_out.get(mode, 0)
+		row = counted.get(mode) or {}
+		modes.append(
+			{
+				"mode_of_payment": mode,
+				"opening_amount": opening_amounts.get(mode, 0),
+				"taken": taken.get(mode, 0),
+				"paid_out": paid_out.get(mode, 0),
+				"expected_amount": expected,
+				"counted": row.get("closing_amount"),
+				"difference": row.get("difference"),
+			}
+		)
+	modes.sort(key=lambda r: r["mode_of_payment"])
+
+	invoices = data.get("invoices", [])
+	return {
+		"shift": {
+			"name": opening.name,
+			"user": opening.user,
+			"pos_profile": opening.pos_profile,
+			"company": opening.company,
+			"opened": str(opening.period_start_date),
+			"closed": str(opening.period_end_date) if opening.period_end_date else None,
+			"open": opening.status == "Open",
+			"closing": closing,
+		},
+		"modes": modes,
+		"invoice_count": len(invoices),
+		"grand_total": flt(sum(flt(i.get("grand_total")) for i in invoices)),
+		"movements": summary,
+		"credit": _credit_summary(opening.period_start_date, end),
+		"neighbour": _neighbour_summary(opening.period_start_date, end),
 	}
 
 

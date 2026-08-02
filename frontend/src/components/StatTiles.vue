@@ -94,14 +94,17 @@ function deltaLabel(s) {
 			:key="s.key || s.label"
 			class="rounded-xl border border-violet-200 bg-surface-violet-1 px-4 py-3 shadow-sm"
 		>
-			<div class="flex items-start gap-2.5">
+			<div class="flex items-center gap-3">
+				<!-- Sized to the value, not to the label: the figure is what the tile
+				     is for, and a chip half its height read as a bullet point beside
+				     it rather than as part of it. -->
 				<span
 					v-if="resolveIcon(s.icon)"
-					class="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-lg"
+					class="grid h-10 w-10 shrink-0 place-items-center rounded-xl"
 					:class="ICON_CHIPS[s.tone || 'default']"
 					aria-hidden="true"
 				>
-					<component :is="resolveIcon(s.icon)" class="h-4 w-4" />
+					<component :is="resolveIcon(s.icon)" class="h-5 w-5" />
 				</span>
 				<div class="min-w-0 flex-1">
 					<div class="truncate text-p-xs text-ink-gray-6">{{ s.label }}</div>

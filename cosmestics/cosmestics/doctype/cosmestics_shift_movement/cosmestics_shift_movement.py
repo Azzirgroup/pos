@@ -30,7 +30,13 @@ PAID_OUT_TYPES = ("Expense", "Neighbour Purchase")
 #: Types that put money back in. Amounts stay positive on the record — the
 #: direction is the type's job, not the sign's, so a movement always reads as
 #: "this much moved" and validation can keep refusing zero and below.
-CASH_IN_TYPES = ("Neighbour Refund",)
+#:
+#: A Credit Payment is a customer settling an older sale at the counter. Its
+#: Payment Entry is invisible to `get_closing_summary`, which reads POS payment
+#: rows and these movements and nothing else — so without this the cash would
+#: land in the drawer and the count would come up over with nothing to explain
+#: it.
+CASH_IN_TYPES = ("Neighbour Refund", "Credit Payment")
 
 
 class CosmesticsShiftMovement(Document):
@@ -61,12 +67,13 @@ class CosmesticsShiftMovement(Document):
 	def on_submit(self):
 		"""Book the ledger side, where this movement has one.
 
-		Only Expense posts its own entry. A Neighbour Purchase is already a
-		Purchase Invoice written by `sourcing.receive_from_neighbours`, and a
-		Neighbour Refund is the return invoice that reverses it — posting a
-		second document for the same money would double-count it, so those two
-		records only tell the closing screen which way the cash went. A Short is
-		booked by ERPNext's POS Closing Entry as the reconciliation difference.
+		Only Expense posts its own entry. Every other type already has a document
+		behind it — a Neighbour Purchase has its Purchase Invoice, a Neighbour
+		Refund the return that reverses it, a Credit Payment its Payment Entry —
+		and posting a second one for the same money would double-count it, so
+		those records only tell the closing screen which way the cash went. A
+		Short is booked by ERPNext's POS Closing Entry as the reconciliation
+		difference.
 		"""
 		if self.movement_type != "Expense" or self.reference_name:
 			return

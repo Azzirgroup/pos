@@ -4,6 +4,48 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 46. A batch of eighteen, from a walkthrough
+
+Sixteen landed. Two things worth recording about the ones that did:
+
+- **`PillTabs`** replaced frappe-ui's `TabButtons` on six screens. That control
+  is a compact segmented pill with half-pixel gaps — right for a two-way toggle,
+  cramped for six departments, and visibly a different control sitting beside
+  our own spaced tabs.
+- **A Today tab** (`dashboard.today`) ignores the period control on purpose.
+  Every other tab answers "how is the month going"; this one answers "what is
+  happening now", and a thirty-day average cannot. Windowed on `posting_date`,
+  so a shift that opened before midnight does not drag yesterday into today.
+- **Credit sales can be paid at the till** (`api/credit.py`). The payment is an
+  ordinary Payment Entry, because that is what ageing and reconciliation read —
+  but a Payment Entry is invisible to `get_closing_summary`, which sees POS
+  payment rows and till movements and nothing else. So a **Credit Payment**
+  movement is recorded beside it, in the same direction a neighbour refund goes:
+  money in, expectation up by exactly that much. Verified against a live shift —
+  expected cash 0 → 5000 on a 5000 part payment, then settled in full, then
+  refused when already settled.
+- **`shift_activity`** serves an open shift as well as a closed one, which is
+  the case the closing entry cannot: there is no closing document to read, so
+  the figures come from the same `get_invoices` the live screen uses. Open
+  shifts show "Not counted yet" rather than "Balanced" — a shift nobody has
+  counted has no difference, and printing one reads as a till that was checked.
+- **Barcode on the item form** joins `opening_price` as a virtual field:
+  `VIRTUAL_FIELDS` is now read by `master.py` *and* by the smoke test, so adding
+  a third cannot make the test fail for the wrong reason. A duplicate barcode is
+  refused rather than left for ERPNext to raise — the same number on two items
+  makes every scan of it ambiguous.
+
+**Not done: multi-person shorts and their accounts.** Attribution across several
+people is straightforward; the accounting is not. ERPNext's POS Closing Entry
+already posts the reconciliation difference somewhere, so charging a named
+person's account from here would **double-count it** unless it is a
+reclassification of what that entry posted — which needs the account it actually
+used, per site. Shipping that unverified is worse than not shipping it. What it
+needs: a short account on POS Profile, a company-level account for the
+unattributed remainder, `close_shift` taking `[{mode, person, amount}]` instead
+of one name per mode, and a probe that proves the ledger nets to the difference
+and not to twice it.
+
 ### 44. Saved quotes threw on render
 
 `v-for` sat on the quote row button, and the Print/WhatsApp strip below it —

@@ -27,6 +27,7 @@ import LucideReceipt from '~icons/lucide/receipt-text'
 import LucideScale from '~icons/lucide/scale'
 import LucideTrendingUp from '~icons/lucide/trending-up'
 import LucideTruck from '~icons/lucide/truck'
+import LucideUndo from '~icons/lucide/undo-2'
 import LucideUnlock from '~icons/lucide/lock-open'
 import LucideStore from '~icons/lucide/store'
 import LucideUsers from '~icons/lucide/users'
@@ -51,6 +52,7 @@ const ICONS = {
 	store: LucideStore,
 	'trending-up': LucideTrendingUp,
 	truck: LucideTruck,
+	undo: LucideUndo,
 	unlock: LucideUnlock,
 	users: LucideUsers,
 	wallet: LucideWallet,

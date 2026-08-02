@@ -32,6 +32,7 @@ declare module 'vue' {
     PairedBars: typeof import('./src/components/charts/PairedBars.vue')['default']
     PaymentLogo: typeof import('./src/components/PaymentLogo.vue')['default']
     PaySheet: typeof import('./src/components/PaySheet.vue')['default']
+    PillTabs: typeof import('./src/components/PillTabs.vue')['default']
     QuotationSheet: typeof import('./src/components/QuotationSheet.vue')['default']
     ReturnSheet: typeof import('./src/components/ReturnSheet.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']

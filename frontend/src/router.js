@@ -49,6 +49,12 @@ const routes = [
 		component: () => import('@/views/Sales.vue'),
 	},
 	{
+		path: '/returns',
+		name: 'Returns',
+		meta: { title: 'Returns' },
+		component: () => import('@/views/Returns.vue'),
+	},
+	{
 		path: '/customers',
 		name: 'Customers',
 		meta: { title: 'Customers' },
@@ -81,6 +87,14 @@ const routes = [
 		path: '/items',
 		name: 'Items',
 		meta: { title: 'Items', masterKey: 'item', focusedMaster: true },
+		component: () => import('@/views/Masters.vue'),
+	},
+	{
+		// The categories every item form asks for. Same screen as Records with the
+		// type fixed, exactly like /items.
+		path: '/item-groups',
+		name: 'ItemGroups',
+		meta: { title: 'Item groups', masterKey: 'item_group', focusedMaster: true },
 		component: () => import('@/views/Masters.vue'),
 	},
 	{

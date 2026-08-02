@@ -25,6 +25,8 @@ import {
 	recordMovement as apiRecordMovement,
 	voidMovement as apiVoidMovement,
 	createQuotation,
+	listCreditSales,
+	payCreditSale,
 } from '@/data/api'
 
 import { Button, Dialog, FormControl, TabButtons } from 'frappe-ui'
@@ -288,7 +290,11 @@ async function loadRecent() {
 		recent.value = await getRecentSales({
 			limit: 25,
 			mine: recentMine.value,
-			thisShift: recentThisShift.value,
+			// A day and a shift are different scopes; the server ignores the shift
+			// when a date is given rather than returning the intersection, which is
+			// usually nothing.
+			thisShift: recentDate.value ? false : recentThisShift.value,
+			onDate: recentDate.value || null,
 		})
 	} catch (e) {
 		notify(e.message || 'Could not load recent sales', 'warn')
@@ -298,11 +304,21 @@ async function loadRecent() {
 	}
 }
 
-watch([recentMine, recentThisShift], () => {
+/**
+ * A specific day, for "what did we sell on Tuesday".
+ *
+ * Empty means the default scope — this shift, or everything when none is open.
+ * Picking a date turns the shift filter off rather than combining with it, and
+ * the control below says so instead of leaving the cashier to work out why an
+ * old date returned nothing.
+ */
+const recentDate = ref('')
+
+watch([recentMine, recentThisShift, recentDate], () => {
 	if (recentSheet.value) loadRecent()
 })
 
-const SHIFT_TABS = ['count', 'money', 'neighbours']
+const SHIFT_TABS = ['count', 'money', 'neighbours', 'credit']
 
 async function openShiftSheet(initialTab = 'count') {
 	// Guarded because a bare `@click="openShiftSheet"` hands this the click
@@ -314,7 +330,7 @@ async function openShiftSheet(initialTab = 'count') {
 		shiftMode.value = 'close'
 		closingSummary.value = null
 		shiftSheet.value = true
-		await Promise.all([reloadClosingSummary(), loadMovementOptions()])
+		await Promise.all([reloadClosingSummary(), loadMovementOptions(), loadCreditSales()])
 		return
 	}
 	shiftMode.value = 'open'
@@ -363,6 +379,46 @@ async function doRecordMovement(payload) {
 		notify(e.message || 'Could not record that', 'warn')
 	} finally {
 		movementBusy.value = false
+	}
+}
+
+/* ---------- credit sales ---------- */
+
+/**
+ * What the shop is still owed, and taking it when the customer walks back in.
+ *
+ * Loaded with the shift sheet rather than at start-up: it is a list a cashier
+ * consults, not one they act on every sale, and on a shop that sells on account
+ * it is long enough that fetching it on every till open would be a waste.
+ */
+const creditSales = ref(null)
+const creditBusy = ref(false)
+
+async function loadCreditSales() {
+	try {
+		creditSales.value = await listCreditSales({})
+	} catch (e) {
+		creditSales.value = { rows: [], totals: {}, reason: e.message || 'Could not load credit sales' }
+	}
+}
+
+async function doPayCredit({ invoice, amount }) {
+	creditBusy.value = true
+	try {
+		const res = await payCreditSale({ invoice, amount })
+		// Both, because the payment changed both: the invoice is settled or part
+		// paid, and the drawer is expected to hold that much more.
+		await Promise.all([loadCreditSales(), reloadClosingSummary()])
+		notify(
+			res.settled
+				? `${fmtMoney(res.paid)} received · ${invoice} settled`
+				: `${fmtMoney(res.paid)} received · ${fmtMoney(res.outstanding)} still owed`,
+			'ok',
+		)
+	} catch (e) {
+		notify(e.message || 'Could not take that payment', 'warn')
+	} finally {
+		creditBusy.value = false
 	}
 }
 
@@ -1323,7 +1379,7 @@ useShortcuts({
 
 		<BottomSheet v-model="recentSheet" title="Recent sales" tall>
 			<div class="flex flex-col gap-2 px-4 pb-5">
-				<div class="flex items-center justify-between gap-2">
+				<div class="flex flex-wrap items-center justify-between gap-2">
 					<FormControl v-model="recentMine" type="checkbox" label="Only mine" />
 					<!-- A list scoped to a shift and a list that is simply empty look
 					     identical, so the scope is a control rather than a silent
@@ -1332,10 +1388,30 @@ useShortcuts({
 						v-model="recentThisShift"
 						type="checkbox"
 						:label="recent.shift ? 'This shift only' : 'This shift only (none open)'"
-						:disabled="!recent.shift && recentThisShift"
+						:disabled="!!recentDate || (!recent.shift && recentThisShift)"
 					/>
 					<span class="tabular text-p-sm text-ink-gray-6">
 						{{ recent.totals.count || 0 }} sales · {{ fmtMoney(recent.totals.revenue || 0) }}
+					</span>
+				</div>
+
+				<div class="flex items-center gap-2">
+					<label class="text-p-sm text-ink-gray-7" for="recent-date">On</label>
+					<input
+						id="recent-date"
+						v-model="recentDate"
+						type="date"
+						class="h-10 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+					<button
+						v-if="recentDate"
+						class="min-h-touch rounded-lg border border-outline-gray-2 px-3 text-p-sm font-medium text-ink-gray-7 hover:bg-surface-gray-2"
+						@click="recentDate = ''"
+					>
+						Clear
+					</button>
+					<span v-if="recentDate" class="text-p-xs text-ink-gray-5">
+						Showing that whole day, not just this shift
 					</span>
 				</div>
 
@@ -1418,6 +1494,9 @@ useShortcuts({
 			:options="movementOptions"
 			:movement-busy="movementBusy"
 			:initial-tab="shiftTab"
+			:credit-sales="creditSales"
+			:credit-busy="creditBusy"
+			@pay-credit="doPayCredit"
 			@open-shift="doOpenShift"
 			@close-shift="doCloseShift"
 			@record-movement="doRecordMovement"

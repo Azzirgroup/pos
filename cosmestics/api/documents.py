@@ -700,6 +700,12 @@ def _actions_for(doctype: str, docstatus: int, perms: dict) -> list:
 	"""
 	submittable = frappe.get_meta(doctype).is_submittable
 	actions = ["print", "whatsapp"]
+	# A submitted Material Request is a promise to move stock that nothing in the
+	# app could act on: the shop raised the request, the other branch agreed, and
+	# then somebody had to open the desk to actually move the goods. `stock_entry`
+	# is that step, using ERPNext's own mapper — see `run_action`.
+	if doctype == "Material Request" and docstatus == 1 and perms["create"]:
+		actions.append("stock_entry")
 	if perms["create"]:
 		actions.append("duplicate")
 	if submittable:
@@ -1023,6 +1029,9 @@ def run_action(key: str, name: str, action: str) -> dict:
 		doc.cancel()
 		return {"name": doc.name, "docstatus": doc.docstatus, "message": _("{0} cancelled").format(doc.name)}
 
+	if action == "stock_entry":
+		return _stock_entry_from_request(doc)
+
 	if action in ("amend", "duplicate"):
 		if action == "amend" and cint(doc.docstatus) != 2:
 			frappe.throw(_("Only a cancelled document can be amended"))
@@ -1040,6 +1049,41 @@ def run_action(key: str, name: str, action: str) -> dict:
 		}
 
 	frappe.throw(_("Unknown action: {0}").format(action))
+
+
+def _stock_entry_from_request(doc) -> dict:
+	"""Move the goods a submitted Material Request asked for.
+
+	Built with ERPNext's own `make_stock_entry` mapper rather than assembled
+	here: it decides the entry type, the source and target warehouses, the
+	quantities still outstanding and the valuation, and every one of those is a
+	rule this app would otherwise be guessing at.
+
+	Left as a **draft**. A transfer moves real stock off a real shelf, and unlike
+	a sale nobody is standing at the counter waiting for it — so the person who
+	receives the goods submits it, having counted what actually arrived. Auto
+	submitting would post a movement that matched the request rather than
+	reality, which is exactly how a warehouse ends up trusting neither.
+	"""
+	from erpnext.stock.doctype.material_request.material_request import make_stock_entry
+
+	if doc.docstatus != 1:
+		frappe.throw(_("{0} has not been submitted yet").format(doc.name))
+	if flt(doc.per_ordered) >= 100:
+		frappe.throw(_("{0} has already been fulfilled").format(doc.name))
+
+	entry = make_stock_entry(doc.name)
+	entry.insert(ignore_permissions=False)
+
+	return {
+		"name": entry.name,
+		"doctype": "Stock Entry",
+		"docstatus": entry.docstatus,
+		"created": True,
+		"message": _("{0} created as a draft — submit it once the stock is counted in").format(
+			entry.name
+		),
+	}
 
 
 @frappe.whitelist()
