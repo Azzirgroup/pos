@@ -29,7 +29,6 @@ export const MODULE_TABS = {
 	purchasing: [
 		{ label: 'Overview', to: '/purchasing' },
 		{ label: 'Requests', to: '/documents/material-request' },
-		{ label: 'Orders', to: '/documents/purchase-order' },
 		{ label: 'Receipts', to: '/documents/purchase-receipt' },
 		{ label: 'Bills', to: '/documents/purchase-invoice' },
 		{ label: 'Landed costs', to: '/documents/landed-cost-voucher' },
@@ -37,7 +36,6 @@ export const MODULE_TABS = {
 	],
 	sales: [
 		{ label: 'Overview', to: '/sales' },
-		{ label: 'Orders', to: '/documents/sales-order' },
 		{ label: 'Deliveries', to: '/documents/delivery-note' },
 		{ label: 'Invoices', to: '/documents/sales-invoice' },
 		{ label: 'Payments', to: '/documents/payment-entry' },
@@ -60,9 +58,13 @@ export const MODULE_TABS = {
 /**
  * Which module a document type belongs to.
  *
- * Only the types that appear as a module tab are listed. The rest — the till's
- * own POS documents — are reached from the hub's own index, because they belong
- * to a shift rather than to a back-office module.
+ * Which module a document type belongs to, whether or not it has a tab of its
+ * own. Orders no longer do — this shop invoices directly — but the route still
+ * works from the hub's index, and landing there should still show the module it
+ * belongs to rather than no context at all.
+ *
+ * The till's own POS documents are absent deliberately: they belong to a shift
+ * rather than to a back-office module.
  */
 const DOCUMENT_MODULE = {
 	'sales-order': 'sales',

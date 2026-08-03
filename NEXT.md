@@ -4,6 +4,28 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 48. Deleting a company took the default with it
+
+Two failures reported together after a demo company was removed by SQL.
+
+**"Please specify Company" on a Purchase Invoice.** `documents._company()` read
+only `frappe.defaults.get_global_default("company")` — a `tabDefaultValue` row
+that names the company, and therefore a row deleted alongside it. With no
+default, `create_document` left `company` unset and ERPNext threw from three
+frames inside `get_item_details`, which says nothing about what to fix. It now
+tries the user default, the global default, `Global Defaults.default_company`,
+and finally the only company on the site when there is exactly one — a
+single-company shop that never set a default is unambiguous. If all four come
+back empty it throws naming the setting, rather than letting the failure surface
+as a broken form.
+
+**"Language is not a field this screen can fill."** `_linked_doctypes()` walked
+POS settings and profile fields but not `USER_FIELDS`, and `User.language` is a
+Link. The settings screen drew a picker whose options endpoint then refused the
+doctype it had just asked for. Fixed by including User in the walk — worth
+noting the allow-list and the form are now derived from the same tuples, which
+is what stops this recurring.
+
 ### 47. Shorts: what nobody was posting
 
 The deferred item, settled by checking rather than assuming. **A POS Closing

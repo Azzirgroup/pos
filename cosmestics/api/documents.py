@@ -496,7 +496,29 @@ def _columns(doctype: str, fieldnames: list) -> list:
 
 
 def _company():
-	return frappe.defaults.get_global_default("company")
+	"""The company documents raised here belong to.
+
+	Four sources, most specific first, because they disagree on real sites and
+	each one goes missing for its own reason. The global default in particular
+	is a `tabDefaultValue` row that is deleted along with the company it names —
+	so removing an old company silently leaves every new document with no
+	company at all, and ERPNext throws "Please specify Company" from three
+	frames inside `get_item_details`, which says nothing about what to fix.
+
+	The last resort is the only company on the site. A single-company shop that
+	has never set a default is unambiguous, and refusing it would be pedantry.
+	"""
+	return (
+		frappe.defaults.get_user_default("Company")
+		or frappe.defaults.get_global_default("company")
+		or frappe.db.get_single_value("Global Defaults", "default_company")
+		or _only_company()
+	)
+
+
+def _only_company():
+	companies = frappe.get_all("Company", pluck="name", limit_page_length=2)
+	return companies[0] if len(companies) == 1 else None
 
 
 def _window(days: int):
@@ -962,7 +984,17 @@ def create_document(key: str, values: dict | str, items: list | str, submit: int
 
 	doc = frappe.new_doc(doctype)
 	company = _company()
-	if company and _has(doctype, "company"):
+	if _has(doctype, "company"):
+		if not company:
+			# Said here, naming the setting. Left to ERPNext this surfaces as
+			# "Please specify Company" raised inside item-detail lookup, which
+			# reads like a broken form rather than a missing default.
+			frappe.throw(
+				_(
+					"No default company is set, so this {0} has nothing to belong to. "
+					"Set one in Global Defaults, or on your own user as a default."
+				).format(_(doctype))
+			)
 		doc.company = company
 
 	allowed = {f["fieldname"] for f in spec["fields"]}

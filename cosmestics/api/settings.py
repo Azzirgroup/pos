@@ -431,6 +431,10 @@ def _linked_doctypes() -> set:
 	for doctype, fields in (
 		("Cosmestics POS Settings", POS_SETTINGS_FIELDS),
 		("POS Profile", PROFILE_FIELDS),
+		# The user block asks for a Language too. Left out, this screen offered a
+		# picker whose options endpoint then refused the very doctype it had just
+		# asked for — "Language is not a field this screen can fill".
+		("User", USER_FIELDS),
 	):
 		meta = frappe.get_meta(doctype)
 		for fieldname in fields:
