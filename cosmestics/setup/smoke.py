@@ -46,6 +46,7 @@ def _run(r):
 
 	_annotations(r)
 	_custom_fields_visible(r)
+	_next_documents(r)
 	_clear_stale_shift(r)
 
 	wh = _default_warehouse()
@@ -1722,6 +1723,65 @@ def _neighbour_returns(r, item, novel):
 		r.check("an invented refund route is refused", False, "no error raised")
 	except frappe.ValidationError:
 		r.check("an invented refund route is refused", True)
+
+
+def _next_documents(r):
+	"""What each document becomes next, and the ones that must be refused.
+
+	Every entry runs ERPNext's own mapper, so the risk is not the arithmetic —
+	it is offering a step that cannot work. Two of those were found by running
+	them: a payment against a settled invoice, and a stock movement from a
+	purchase request, which fails deep inside ERPNext with a message about a
+	missing Stock Entry Type.
+	"""
+	from cosmestics.api import documents
+
+	print()
+	for key, filters, action, target in (
+		("sales-invoice", {"docstatus": 1, "is_return": 0, "outstanding_amount": (">", 0)}, "payment", "Payment Entry"),
+		("purchase-invoice", {"docstatus": 1, "outstanding_amount": (">", 0)}, "payment", "Payment Entry"),
+		("purchase-receipt", {"docstatus": 1}, "invoice", "Purchase Invoice"),
+		("delivery-note", {"docstatus": 1}, "invoice", "Sales Invoice"),
+	):
+		doctype = documents._entry(key)["doctype"]
+		name = frappe.db.get_value(doctype, filters, "name")
+		if not name:
+			print(f"SKIP: no {doctype} to carry forward")
+			continue
+		res = documents.run_action(key=key, name=name, action=action)
+		r.check(
+			f"a {doctype.lower()} becomes a {target.lower()}",
+			res["doctype"] == target and res["docstatus"] == 0,
+			f"{res['name']} docstatus={res['docstatus']}",
+		)
+
+	settled = frappe.db.get_value(
+		"Sales Invoice", {"docstatus": 1, "outstanding_amount": 0, "is_return": 0}, "name"
+	)
+	if settled:
+		try:
+			documents.run_action(key="sales-invoice", name=settled, action="payment")
+			r.check("paying a settled invoice is refused", False, "no error raised")
+		except frappe.ValidationError:
+			r.check("paying a settled invoice is refused", True)
+
+	purchase_req = frappe.db.get_value(
+		"Material Request", {"docstatus": 1, "material_request_type": "Purchase"}, "name"
+	)
+	if purchase_req:
+		try:
+			documents.run_action(key="material-request", name=purchase_req, action="stock_entry")
+			r.check("moving stock for a purchase request is refused", False, "no error raised")
+		except frappe.ValidationError:
+			r.check("moving stock for a purchase request is refused", True)
+
+	# The steps are only offered once a document is a commitment.
+	offered = documents.list_documents(key="sales-invoice")["actions_by_docstatus"]
+	r.check(
+		"next steps are offered on submitted documents only",
+		"payment" in offered["1"] and "payment" not in offered["0"],
+		f"draft={offered['0']} submitted={offered['1']}",
+	)
 
 
 def _dashboard_tabs(r):

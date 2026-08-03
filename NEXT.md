@@ -4,6 +4,41 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 49. Documents carry forward
+
+Every document in the hub now offers what it naturally becomes next, through
+ERPNext's own mappers rather than anything assembled here — the mapper knows
+which lines are still outstanding, what to carry over and what to write back to
+the source, and a hand-rolled copy is exactly the thing that drifts on upgrade.
+
+    Sales Invoice     → Payment Entry      Purchase Invoice → Payment Entry
+    Delivery Note     → Sales Invoice      Purchase Receipt → Purchase Invoice
+    Sales Order       → Delivery Note      Purchase Order   → Purchase Receipt
+                      → Sales Invoice                       → Purchase Invoice
+    Material Request  → Stock Entry
+
+Everything lands as a **draft**. A payment moves real money and a transfer moves
+real stock, and unlike a till sale nobody is waiting at a counter — the person
+handing over the cash submits it, having looked.
+
+Three things running them found, none of which reading would have:
+
+- **A Payment Entry against a bank account is refused without a reference.**
+  Prefilled with the invoice number and today; the real cheque or M-Pesa code is
+  typed before submitting.
+- **Material Request → Purchase Order cannot work at all.** The mapper leaves
+  the supplier blank and it is mandatory — a request says what is needed, not who
+  from. Dropped rather than shipped broken.
+- **`stock_entry` was only ever tested against a *transfer* request.** On a
+  purchase request it fails inside ERPNext with "Could not find Stock Entry
+  Type: Purchase". Now refused by name, saying that a purchase request is filled
+  by ordering and receiving.
+
+The suite gained seven checks — and they were initially placed after the
+sale-dependent early return, so they silently did not run on a site with no
+sellable stock. Carrying a document forward has nothing to do with stock; they
+run near the top now.
+
 ### 48. Deleting a company took the default with it
 
 Two failures reported together after a demo company was removed by SQL.

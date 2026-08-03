@@ -25,6 +25,9 @@ import LucideCheck from '~icons/lucide/check'
 import LucideBan from '~icons/lucide/ban'
 import LucideCopy from '~icons/lucide/copy'
 import LucideTruck from '~icons/lucide/truck'
+import LucideBanknote from '~icons/lucide/banknote'
+import LucideReceipt from '~icons/lucide/receipt-text'
+import LucidePackage from '~icons/lucide/package'
 import LucideUndo from '~icons/lucide/undo-2'
 import LucidePrinter from '~icons/lucide/printer'
 import LucideSend from '~icons/lucide/send'
@@ -192,9 +195,15 @@ const ACTION_LABELS = {
 	cancel: { label: 'Cancel', icon: LucideBan, theme: 'red' },
 	amend: { label: 'Amend', icon: LucideUndo },
 	duplicate: { label: 'Duplicate', icon: LucideCopy },
-	// Only offered on a submitted Material Request — the server decides, this
-	// only draws it.
+	// What a document becomes next. The server decides which of these are live
+	// for a given type and state; this only draws them. Labels are the shop's
+	// words rather than the doctype's — "Pay this bill" is what somebody is
+	// actually doing, "Create Payment Entry" is what ERPNext calls it.
 	stock_entry: { label: 'Move the stock', icon: LucideTruck },
+	payment: { label: 'Record payment', icon: LucideBanknote },
+	invoice: { label: 'Raise the invoice', icon: LucideReceipt },
+	deliver: { label: 'Deliver the goods', icon: LucideTruck },
+	receive: { label: 'Receive the goods', icon: LucidePackage },
 	print: { label: 'Print', icon: LucidePrinter },
 	whatsapp: { label: 'Send on WhatsApp', icon: LucideSend },
 }
@@ -235,6 +244,15 @@ async function rowAction(row, action) {
 		notify(res.message, 'good')
 		await load()
 		if (tab.value === 'insights') loadInsights()
+
+		// A step that produced a *different* kind of document leaves the new draft
+		// somewhere this list will never show it. Go there — the point of the
+		// action was the thing it created, and leaving the user on the source
+		// document is how a draft gets forgotten until somebody finds it months
+		// later in the desk.
+		if (res.created && res.doctype && res.doctype !== data.value.doctype) {
+			router.push(`/documents/${res.doctype.toLowerCase().replace(/\s+/g, '-')}`)
+		}
 	} catch (e) {
 		notify(e.message || `Could not ${action} ${row.name}`, 'bad')
 	} finally {

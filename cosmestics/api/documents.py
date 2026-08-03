@@ -713,6 +713,106 @@ def _permissions(doctype: str) -> dict:
 	}
 
 
+#: What each document naturally becomes next.
+#:
+#: A shop does not raise a Payment Entry out of nowhere — it pays *an invoice*,
+#: receives *an order*, bills *a delivery*. Until now every one of those meant
+#: leaving for the desk, finding the source document again and using its own
+#: "Create" menu. This is that menu, for the handful of steps this shop actually
+#: takes.
+#:
+#: Each entry names ERPNext's own mapper. That matters: the mapper decides which
+#: lines are still outstanding, what rate and warehouse to carry over, and what
+#: to write back to the source. Assembling the target here by hand would be a
+#: second, worse copy of rules ERPNext already enforces — and it is exactly the
+#: copy that drifts when they upgrade.
+#:
+#: Everything lands as a **draft**. The source document is history; the new one
+#: is a decision somebody is about to make, and it deserves a look before it
+#: posts. The one exception a shop might want — auto-submitting a payment — is
+#: deliberately not offered, because a payment posted by a mis-tap is the single
+#: hardest thing on this list to unpick.
+NEXT_DOCUMENTS = {
+	"Sales Invoice": [
+		{
+			"action": "payment",
+			"label": "Record payment",
+			"target": "Payment Entry",
+			"mapper": "payment",
+		},
+	],
+	"Purchase Invoice": [
+		{
+			"action": "payment",
+			"label": "Pay this bill",
+			"target": "Payment Entry",
+			"mapper": "payment",
+		},
+	],
+	"Delivery Note": [
+		{
+			"action": "invoice",
+			"label": "Bill this delivery",
+			"target": "Sales Invoice",
+			"mapper": "erpnext.stock.doctype.delivery_note.delivery_note.make_sales_invoice",
+		},
+	],
+	"Purchase Receipt": [
+		{
+			"action": "invoice",
+			"label": "Enter the bill",
+			"target": "Purchase Invoice",
+			"mapper": "erpnext.stock.doctype.purchase_receipt.purchase_receipt.make_purchase_invoice",
+		},
+	],
+	"Sales Order": [
+		{
+			"action": "deliver",
+			"label": "Deliver these goods",
+			"target": "Delivery Note",
+			"mapper": "erpnext.selling.doctype.sales_order.sales_order.make_delivery_note",
+		},
+		{
+			"action": "invoice",
+			"label": "Invoice this order",
+			"target": "Sales Invoice",
+			"mapper": "erpnext.selling.doctype.sales_order.sales_order.make_sales_invoice",
+		},
+	],
+	"Purchase Order": [
+		{
+			"action": "receive",
+			"label": "Receive these goods",
+			"target": "Purchase Receipt",
+			"mapper": "erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_receipt",
+		},
+		{
+			"action": "invoice",
+			"label": "Enter the bill",
+			"target": "Purchase Invoice",
+			"mapper": "erpnext.buying.doctype.purchase_order.purchase_order.make_purchase_invoice",
+		},
+	],
+	"Material Request": [
+		{
+			"action": "stock_entry",
+			"label": "Move the stock",
+			"target": "Stock Entry",
+			"mapper": "erpnext.stock.doctype.material_request.material_request.make_stock_entry",
+		},
+		# Purchase Order is deliberately absent. ERPNext's mapper leaves the
+		# supplier blank — a Material Request says what is needed, not who from —
+		# and the document is mandatory on it, so the action could only ever fail
+		# or guess. Choosing the supplier is a question, and this menu answers
+		# with documents rather than asking questions.
+	],
+}
+
+
+def _next_steps(doctype: str) -> list:
+	return NEXT_DOCUMENTS.get(doctype) or []
+
+
 def _actions_for(doctype: str, docstatus: int, perms: dict) -> list:
 	"""Which row actions are live for a document in this state.
 
@@ -722,12 +822,12 @@ def _actions_for(doctype: str, docstatus: int, perms: dict) -> list:
 	"""
 	submittable = frappe.get_meta(doctype).is_submittable
 	actions = ["print", "whatsapp"]
-	# A submitted Material Request is a promise to move stock that nothing in the
-	# app could act on: the shop raised the request, the other branch agreed, and
-	# then somebody had to open the desk to actually move the goods. `stock_entry`
-	# is that step, using ERPNext's own mapper — see `run_action`.
-	if doctype == "Material Request" and docstatus == 1 and perms["create"]:
-		actions.append("stock_entry")
+
+	# What this document becomes next — a payment against an invoice, a bill
+	# against a receipt. Only once submitted: a draft is not yet a commitment to
+	# anything, so there is nothing to carry forward from it.
+	if docstatus == 1 and perms["create"]:
+		actions.extend(step["action"] for step in _next_steps(doctype))
 	if perms["create"]:
 		actions.append("duplicate")
 	if submittable:
@@ -1061,8 +1161,9 @@ def run_action(key: str, name: str, action: str) -> dict:
 		doc.cancel()
 		return {"name": doc.name, "docstatus": doc.docstatus, "message": _("{0} cancelled").format(doc.name)}
 
-	if action == "stock_entry":
-		return _stock_entry_from_request(doc)
+	step = next((s for s in _next_steps(doctype) if s["action"] == action), None)
+	if step:
+		return _make_next(doc, step)
 
 	if action in ("amend", "duplicate"):
 		if action == "amend" and cint(doc.docstatus) != 2:
@@ -1083,39 +1184,97 @@ def run_action(key: str, name: str, action: str) -> dict:
 	frappe.throw(_("Unknown action: {0}").format(action))
 
 
-def _stock_entry_from_request(doc) -> dict:
-	"""Move the goods a submitted Material Request asked for.
+def _make_next(doc, step) -> dict:
+	"""Turn one document into the next, through ERPNext's own mapper.
 
-	Built with ERPNext's own `make_stock_entry` mapper rather than assembled
-	here: it decides the entry type, the source and target warehouses, the
-	quantities still outstanding and the valuation, and every one of those is a
-	rule this app would otherwise be guessing at.
-
-	Left as a **draft**. A transfer moves real stock off a real shelf, and unlike
-	a sale nobody is standing at the counter waiting for it — so the person who
-	receives the goods submits it, having counted what actually arrived. Auto
-	submitting would post a movement that matched the request rather than
-	reality, which is exactly how a warehouse ends up trusting neither.
+	Left as a **draft** every time. A transfer moves real stock off a real shelf
+	and a payment moves real money, and unlike a till sale nobody is standing at
+	a counter waiting — so the person who receives the goods, or hands over the
+	cash, submits it having checked. Auto-submitting would post what the source
+	document *said*, which is not always what happened.
 	"""
-	from erpnext.stock.doctype.material_request.material_request import make_stock_entry
-
 	if doc.docstatus != 1:
 		frappe.throw(_("{0} has not been submitted yet").format(doc.name))
-	if flt(doc.per_ordered) >= 100:
-		frappe.throw(_("{0} has already been fulfilled").format(doc.name))
 
-	entry = make_stock_entry(doc.name)
-	entry.insert(ignore_permissions=False)
+	_assert_worth_doing(doc, step)
+
+	target = (
+		_payment_entry_for(doc)
+		if step["mapper"] == "payment"
+		else frappe.get_attr(step["mapper"])(doc.name)
+	)
+
+	# A mapper can hand back a document with nothing on it — every line already
+	# billed, every unit already received. Caught here so the shop is told why
+	# rather than left with an empty draft to work out for itself.
+	if not target.get("items") and target.doctype != "Payment Entry":
+		frappe.throw(
+			_("There is nothing left on {0} to carry into a {1}").format(
+				doc.name, _(step["target"])
+			)
+		)
+
+	target.insert(ignore_permissions=False)
 
 	return {
-		"name": entry.name,
-		"doctype": "Stock Entry",
-		"docstatus": entry.docstatus,
+		"name": target.name,
+		"doctype": target.doctype,
+		"docstatus": target.docstatus,
 		"created": True,
-		"message": _("{0} created as a draft — submit it once the stock is counted in").format(
-			entry.name
-		),
+		"message": _("{0} created as a draft — check it, then submit").format(target.name),
 	}
+
+
+def _assert_worth_doing(doc, step):
+	"""Refuse the steps that would produce a document with no purpose.
+
+	Said before the mapper runs, naming the reason. The alternative is an empty
+	draft, or a payment for nothing, and both look like the app misbehaving.
+	"""
+	if step["mapper"] == "payment" and flt(doc.get("outstanding_amount")) <= 0:
+		frappe.throw(_("{0} is already settled — there is nothing to pay").format(doc.name))
+
+	if doc.doctype == "Material Request":
+		if flt(doc.get("per_ordered")) >= 100:
+			frappe.throw(_("{0} has already been fulfilled").format(doc.name))
+
+		# Only a request to *move* stock becomes a stock movement. A purchase
+		# request becomes an order and then a receipt — ERPNext's mapper still
+		# tries, and fails deep inside with "Could not find Stock Entry Type:
+		# Purchase", which reads as a broken app rather than the wrong action.
+		movable = ("Material Transfer", "Material Issue", "Manufacture")
+		if step["action"] == "stock_entry" and doc.material_request_type not in movable:
+			frappe.throw(
+				_(
+					"{0} is a {1} request, which is filled by ordering and receiving "
+					"rather than by moving stock between warehouses."
+				).format(doc.name, _(doc.material_request_type))
+			)
+
+
+def _payment_entry_for(doc):
+	"""A payment against this invoice, for whatever is still outstanding.
+
+	`get_payment_entry` is ERPNext's own builder: it picks the party account, the
+	reference row, the exchange rate and the allocation. Every one of those is a
+	rule this app would otherwise be guessing at, and getting the party account
+	wrong is how a payment lands against the wrong ledger.
+	"""
+	from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+	from frappe.utils import nowdate
+
+	entry = get_payment_entry(doc.doctype, doc.name)
+
+	# ERPNext refuses a bank-mode payment with no reference: "Reference No and
+	# Reference Date is mandatory for Bank transaction". Prefilled with the
+	# invoice number and today, which is both true and a sensible default — the
+	# real cheque or M-Pesa code is typed in before submitting.
+	if not entry.get("reference_no"):
+		entry.reference_no = doc.name
+	if not entry.get("reference_date"):
+		entry.reference_date = nowdate()
+
+	return entry
 
 
 @frappe.whitelist()
