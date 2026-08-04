@@ -1775,6 +1775,24 @@ def _next_documents(r):
 		except frappe.ValidationError:
 			r.check("moving stock for a purchase request is refused", True)
 
+	# A step that cannot apply must not be *offered*. The guard that refuses it
+	# is the second line of defence; a button that always fails is the bug.
+	rows = documents.list_documents(key="material-request")["rows"]
+	purchase = next(
+		(r for r in rows if r.docstatus == 1 and r.material_request_type == "Purchase"), None
+	)
+	if purchase:
+		r.check(
+			"a purchase request is not offered a stock movement",
+			"stock_entry" not in (purchase.get("_actions") or []),
+			str(purchase.get("_actions")),
+		)
+		r.check(
+			"and its modal agrees with its row",
+			documents.get_document(key="material-request", name=purchase.name)["actions"]
+			== purchase.get("_actions"),
+		)
+
 	# The steps are only offered once a document is a commitment.
 	offered = documents.list_documents(key="sales-invoice")["actions_by_docstatus"]
 	r.check(

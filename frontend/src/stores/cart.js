@@ -35,9 +35,20 @@ export const useCartStore = defineStore('cart', () => {
 	 * in-stock line — they have different costs, and merging them would hide
 	 * the margin and produce a wrong Purchase Receipt.
 	 */
-	function add(item, qty = 1, { sourced = null } = {}) {
+	function add(item, qty = 1, { sourced = null, uom = null } = {}) {
+		// The unit being sold, and what one of it costs. `uoms[0]` is always the
+		// stock unit at factor 1, so an item nobody has configured a second unit
+		// for behaves exactly as before.
+		const units = item.uoms?.length ? item.uoms : [{ uom: item.uom || 'Nos', factor: 1, rate: item.price }]
+		const unit = units.find((u) => u.uom === uom) || units[0]
+
 		if (!sourced) {
-			const existing = lines.value.find((l) => l.item_code === item.item_code && !l.sourced)
+			// Merged only when it is the *same unit*. A dozen and a single are
+			// different lines with different rates — adding them together would
+			// silently reprice one of them.
+			const existing = lines.value.find(
+				(l) => l.item_code === item.item_code && l.uom === unit.uom && !l.sourced,
+			)
 			if (existing) {
 				existing.qty = round2(existing.qty + qty)
 				lastTouched.value = existing.id
@@ -50,10 +61,16 @@ export const useCartStore = defineStore('cart', () => {
 			item_name: item.item_name,
 			brand: item.brand,
 			hue: item.hue,
-			uom: item.uom || 'Nos',
+			uom: unit.uom,
+			/** How many stock units one of `uom` is. A dozen is 12. */
+			conversionFactor: unit.factor || 1,
+			/** Every unit this item may be sold in, so the line can be switched. */
+			units,
+			// In stock units, which is what the shelf holds. The cart compares
+			// against `stockQty`, not `qty` — one dozen is twelve off the shelf.
 			stock: item.stock,
-			rate: item.price,
-			listRate: item.price,
+			rate: unit.rate,
+			listRate: unit.rate,
 			qty,
 			discountPct: 0,
 			sourced,
@@ -61,6 +78,24 @@ export const useCartStore = defineStore('cart', () => {
 		lines.value.push(line)
 		lastTouched.value = line.id
 		return line
+	}
+
+	/**
+	 * Switch a line to another unit — pieces to a dozen, say.
+	 *
+	 * The rate moves with it, because a rate is always "per one of these". The
+	 * quantity does not: somebody changing the unit means "two dozen", not
+	 * "two twelfths of what I typed".
+	 */
+	function setUom(id, uom) {
+		const line = lines.value.find((l) => l.id === id)
+		if (!line) return
+		const unit = (line.units || []).find((u) => u.uom === uom)
+		if (!unit) return
+		line.uom = unit.uom
+		line.conversionFactor = unit.factor || 1
+		line.rate = unit.rate
+		line.listRate = unit.rate
 	}
 
 	function setQty(id, qty) {
@@ -179,6 +214,7 @@ export const useCartStore = defineStore('cart', () => {
 		vatRate: VAT_RATE,
 		taxInclusive: TAX_INCLUSIVE,
 		add,
+		setUom,
 		setQty,
 		inc,
 		dec,

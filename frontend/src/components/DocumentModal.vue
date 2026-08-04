@@ -14,6 +14,10 @@ import { cellTone, statusTheme } from '@/utils/tone'
 import LucideCheck from '~icons/lucide/check'
 import LucideBan from '~icons/lucide/ban'
 import LucideCopy from '~icons/lucide/copy'
+import LucideBanknote from '~icons/lucide/banknote'
+import LucideReceiptText from '~icons/lucide/receipt-text'
+import LucideTruck from '~icons/lucide/truck'
+import LucidePackage from '~icons/lucide/package'
 import LucideUndo from '~icons/lucide/undo-2'
 import LucidePrinter from '~icons/lucide/printer'
 import LucideSend from '~icons/lucide/send'
@@ -78,6 +82,31 @@ function close() {
 }
 
 const can = (action) => doc.value?.actions?.includes(action)
+
+/**
+ * What this document becomes next, as buttons rather than a hidden menu.
+ *
+ * The row menu already offers these, but the modal is where somebody has
+ * actually *read* the document — and deciding to pay a bill or move the stock is
+ * a decision you make having looked at it, not one you make from a list.
+ *
+ * Driven by the same `actions` the server sent, so the two can never come to
+ * different conclusions about what is allowed. The labels are the shop's words;
+ * `NEXT_LABELS` is the modal's copy of what the list uses.
+ */
+const NEXT_LABELS = {
+	payment: { label: 'Record payment', icon: LucideBanknote },
+	invoice: { label: 'Raise the invoice', icon: LucideReceiptText },
+	deliver: { label: 'Deliver the goods', icon: LucideTruck },
+	receive: { label: 'Receive the goods', icon: LucidePackage },
+	stock_entry: { label: 'Move the stock', icon: LucideTruck },
+}
+
+const nextSteps = computed(() =>
+	Object.keys(NEXT_LABELS)
+		.filter((action) => can(action))
+		.map((action) => ({ action, ...NEXT_LABELS[action] })),
+)
 
 const DESTRUCTIVE = new Set(['cancel'])
 
@@ -282,6 +311,19 @@ const printFormatOptions = computed(() =>
 					label="Duplicate"
 					:loading="busy === 'duplicate'"
 					@click="act('duplicate')"
+				/>
+
+				<!-- The next document. Solid rather than subtle: having read the
+				     thing, this is usually why you opened it. -->
+				<Button
+					v-for="step in nextSteps"
+					:key="step.action"
+					theme="gray"
+					variant="solid"
+					:icon-left="step.icon"
+					:label="step.label"
+					:loading="busy === step.action"
+					@click="act(step.action)"
 				/>
 
 				<div v-if="printFormatOptions.length > 1" class="w-[170px]">

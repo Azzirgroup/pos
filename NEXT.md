@@ -4,6 +4,40 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 50. Selling by the dozen, and opening a shift honestly
+
+**UOM at the till.** `get_catalog` now returns every unit an item may be sold
+in, from ERPNext's own UOM Conversion Detail rows — nothing invents units. The
+cart line carries the unit and its conversion factor, the rate is "per one of
+these", and `submit_sale` passes both so ERPNext computes `stock_qty`. Verified
+end to end: one Dozen at factor 12 posted `stock_qty=12`, moved 12 off the
+shelf, and priced at 12× the base.
+
+Three details that are load-bearing:
+
+- **An explicitly priced unit wins over multiplication.** A shop that prices a
+  dozen separately is doing so precisely because it is not twelve singles.
+- **Lines merge only within the same unit.** A dozen and a single are different
+  rates; merging them would silently reprice one.
+- **`cartQtys` counts stock units, not line quantities.** The shelf check
+  compares against the shelf — counting a dozen as "1" would let a cashier sell
+  twelve of the last three with no offer to source them.
+
+**Opening a shift offers every tender the till accepts**, from the POS Profile,
+the same list closing will ask to be counted. It used to fall back to three
+hard-coded names, so a float counted into M-Pesa Paybill had nowhere to be
+declared at opening and the shift closed short by exactly that much with nothing
+on screen explaining why. Switching till mid-form re-seeds the floats, since two
+counters can take different tenders.
+
+**Not done: a receipt from a Material Request.** ERPNext has no
+`make_purchase_receipt` on Material Request — the path is MR → Purchase Order →
+Purchase Receipt, and *both* need a supplier the request does not carry, because
+a request says what is needed rather than who from. That makes it a form
+(supplier, then create) rather than a menu item, which is what "open a modal for
+editing" is really asking for. Worth building as `DocumentFormSheet` seeded from
+the request; it is not a mapper call.
+
 ### 49. Documents carry forward
 
 Every document in the hub now offers what it naturally becomes next, through

@@ -28,6 +28,10 @@ export function submitSale({ items, payment, customer }) {
 			item_code: l.item_code,
 			qty: l.qty,
 			rate: l.rate,
+			// The unit sold in, and how many stock units one of them is. Without
+			// the factor the server would take a dozen off the shelf as one.
+			uom: l.uom || null,
+			conversion_factor: l.conversionFactor || 1,
 			discount_pct: l.discountPct,
 			sourced: l.sourced
 				? {

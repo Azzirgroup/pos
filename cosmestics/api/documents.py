@@ -681,6 +681,15 @@ def list_documents(
 	outstanding_field = entry.get("outstanding_field")
 	perms = _permissions(doctype)
 
+	# Rows whose available steps depend on a field rather than only on docstatus
+	# carry their own list. Only computed for the doctypes that actually have a
+	# conditional step, so the common case still costs nothing — see
+	# `actions_by_docstatus` below, which stays the answer for everything else.
+	if any(step.get("when") for step in _next_steps(doctype)):
+		for r in rows:
+			r["_actions"] = _actions_for(doctype, cint(r.docstatus), perms, row=r)
+
+
 	return {
 		"key": key,
 		"doctype": doctype,
@@ -799,6 +808,14 @@ NEXT_DOCUMENTS = {
 			"label": "Move the stock",
 			"target": "Stock Entry",
 			"mapper": "erpnext.stock.doctype.material_request.material_request.make_stock_entry",
+			# Only a request to *move* stock becomes a stock movement. Declared
+			# here so the action is never offered on a purchase request rather
+			# than offered and then refused — a button that exists and always
+			# fails is worse than no button, because it reads as a broken app.
+			"when": {
+				"field": "material_request_type",
+				"in": ("Material Transfer", "Material Issue", "Manufacture"),
+			},
 		},
 		# Purchase Order is deliberately absent. ERPNext's mapper leaves the
 		# supplier blank — a Material Request says what is needed, not who from —
@@ -813,7 +830,20 @@ def _next_steps(doctype: str) -> list:
 	return NEXT_DOCUMENTS.get(doctype) or []
 
 
-def _actions_for(doctype: str, docstatus: int, perms: dict) -> list:
+def _step_applies(step, row) -> bool:
+	"""Whether a next-step is live for this particular document.
+
+	Without a row — the list's per-docstatus lookup — a conditional step is
+	assumed to apply, and `_assert_worth_doing` catches it on the way through.
+	With one, it is filtered out before it is ever drawn.
+	"""
+	rule = step.get("when")
+	if not rule or row is None:
+		return True
+	return (row.get(rule["field"]) if hasattr(row, "get") else getattr(row, rule["field"], None)) in rule["in"]
+
+
+def _actions_for(doctype: str, docstatus: int, perms: dict, row=None) -> list:
 	"""Which row actions are live for a document in this state.
 
 	Computed once per response rather than per row: the answer depends only on
@@ -827,7 +857,9 @@ def _actions_for(doctype: str, docstatus: int, perms: dict) -> list:
 	# against a receipt. Only once submitted: a draft is not yet a commitment to
 	# anything, so there is nothing to carry forward from it.
 	if docstatus == 1 and perms["create"]:
-		actions.extend(step["action"] for step in _next_steps(doctype))
+		actions.extend(
+			step["action"] for step in _next_steps(doctype) if _step_applies(step, row)
+		)
 	if perms["create"]:
 		actions.append("duplicate")
 	if submittable:
@@ -903,7 +935,7 @@ def get_document(key: str, name: str) -> dict:
 		"header": header,
 		"tables": tables,
 		"totals": totals,
-		"actions": _actions_for(doctype, cint(doc.docstatus), perms),
+		"actions": _actions_for(doctype, cint(doc.docstatus), perms, row=doc),
 		"print_formats": _print_formats(doctype),
 		"whatsapp_to": _party_mobile(entry, doc),
 	}

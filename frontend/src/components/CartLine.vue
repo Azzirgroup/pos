@@ -11,7 +11,7 @@ const props = defineProps({
 	highlight: { type: Boolean, default: false },
 })
 
-defineEmits(['inc', 'dec', 'remove', 'setQty'])
+defineEmits(['inc', 'dec', 'remove', 'setQty', 'setUom'])
 
 // A one-shot tint when the line is touched. Confirms the tap landed on the
 // right line without a toast — critical when scanning the same item repeatedly.
@@ -37,7 +37,26 @@ watch(
 				{{ line.item_name }}
 			</div>
 			<div class="tabular mt-0.5 flex flex-wrap items-center gap-1.5 text-p-xs text-ink-gray-5">
+				<!-- A unit picker only where there is a choice. Most items have one
+				     unit, and a select with a single option is a control that looks
+				     like a decision and is not. -->
+				<select
+					v-if="line.units && line.units.length > 1"
+					:value="line.uom"
+					class="h-6 rounded border border-outline-gray-2 bg-surface-gray-2 px-1 text-p-xs font-medium text-ink-gray-8 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					:aria-label="`Unit for ${line.item_name}`"
+					@change="$emit('setUom', line.id, $event.target.value)"
+					@click.stop
+				>
+					<option v-for="u in line.units" :key="u.uom" :value="u.uom">{{ u.uom }}</option>
+				</select>
 				<span>{{ fmtMoneyShort(line.rate) }} / {{ line.uom }}</span>
+				<!-- What actually leaves the shelf, when that differs from what was
+				     typed. A cashier selling two dozen should see "24 pcs" without
+				     doing the arithmetic. -->
+				<span v-if="(line.conversionFactor || 1) !== 1" class="text-ink-gray-4">
+					= {{ (line.qty * line.conversionFactor).toLocaleString() }} {{ line.units?.[0]?.uom }}
+				</span>
 				<span
 					v-if="line.discountPct"
 					class="rounded bg-surface-amber-2 px-1 font-medium text-ink-amber-3"

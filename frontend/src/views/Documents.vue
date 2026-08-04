@@ -215,11 +215,29 @@ const ACTION_LABELS = {
  * make that decision.
  */
 function rowActions(row) {
-	const allowed = data.value.actions_by_docstatus?.[String(row.docstatus)] || []
+	// A row carries its own list when its steps depend on more than docstatus —
+	// a purchase request cannot become a stock movement, and offering the button
+	// only to refuse it reads as a broken app.
+	const allowed = row._actions || data.value.actions_by_docstatus?.[String(row.docstatus)] || []
 	return allowed.map((action) => ({
 		...ACTION_LABELS[action],
 		onClick: () => rowAction(row, action),
 	}))
+}
+
+/**
+ * The modal acted on a document. Reload, and follow anything it created.
+ *
+ * Same rule as the row menu: a step that produced a *different* kind of
+ * document leaves the new draft somewhere this list will never show it, and a
+ * draft nobody was shown is one found months later in the desk.
+ */
+async function onDocumentChanged(res) {
+	await load()
+	if (tab.value === 'insights') loadInsights()
+	if (res?.created && res.doctype && res.doctype !== data.value.doctype) {
+		router.push(`/documents/${res.doctype.toLowerCase().replace(/\s+/g, '-')}`)
+	}
 }
 
 async function rowAction(row, action) {
@@ -489,7 +507,7 @@ function notify(message, tone = 'good') {
 			v-model:open="open"
 			:doc-key="activeKey"
 			:name="selected"
-			@changed="load"
+			@changed="onDocumentChanged"
 			@notify="notify($event.message, $event.tone)"
 		/>
 

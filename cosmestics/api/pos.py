@@ -25,7 +25,9 @@ def submit_sale(
 ):
 	"""Turn a cart into a submitted Sales Invoice.
 
-	`items`   — [{item_code, qty, rate, discount_pct, sourced: {supplier, buy_rate}}]
+	`items`   — [{item_code, qty, rate, uom, conversion_factor, discount_pct,
+	             sourced: {supplier, buy_rate}}]. `qty` and `rate` are in `uom`;
+	             the factor is what turns them into stock quantities.
 	`payment` — {method: cash|mpesa|card, tendered, change, reference}
 
 	Returns {invoice, grand_total, change, paid_amount, purchases}.
@@ -140,16 +142,26 @@ def _build_invoice(items, payment, customer, company, settings):
 		si.set_warehouse = warehouse
 
 	for row in items:
-		si.append(
-			"items",
-			{
-				"item_code": row["item_code"],
-				"qty": flt(row["qty"]),
-				"rate": flt(row["rate"]),
-				"discount_percentage": flt(row.get("discount_pct")),
-				"warehouse": warehouse,
-			},
-		)
+		line = {
+			"item_code": row["item_code"],
+			"qty": flt(row["qty"]),
+			"rate": flt(row["rate"]),
+			"discount_percentage": flt(row.get("discount_pct")),
+			"warehouse": warehouse,
+		}
+
+		# Selling by the dozen. `qty` is in the unit the cashier chose and `rate`
+		# is the price of one of those, so a dozen is one line of qty 1 — not
+		# twelve. ERPNext multiplies by the conversion factor to get `stock_qty`,
+		# which is what actually leaves the shelf, so the factor has to travel
+		# with the line or the shop sells twelve and counts one.
+		if row.get("uom"):
+			line["uom"] = row["uom"]
+			factor = flt(row.get("conversion_factor"))
+			if factor > 0:
+				line["conversion_factor"] = factor
+
+		si.append("items", line)
 
 	si.set_missing_values()
 	# Totals must be current before the payment row is sized against them.

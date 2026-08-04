@@ -51,6 +51,16 @@ export function decorate(row) {
 		stock: Number(row.stock) || 0,
 		barcodes,
 		uom: row.uom || 'Nos',
+		/**
+		 * Every unit this may be sold in, from the server.
+		 *
+		 * This function rebuilds the row field by field rather than spreading it,
+		 * which keeps the shape of a catalogue item explicit — and silently drops
+		 * anything new the server starts sending. `uoms` was dropped exactly that
+		 * way: the endpoint returned Dozen, the cart never saw it, and the picker
+		 * never appeared. Anything added to `get_catalog` has to be added here.
+		 */
+		uoms: Array.isArray(row.uoms) && row.uoms.length ? row.uoms : null,
 		batched: Boolean(row.batched),
 		hue: hueFor(row.item_code),
 		// Pre-lowered haystack: built once at load, not per keystroke.

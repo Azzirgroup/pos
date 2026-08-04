@@ -89,7 +89,7 @@ watch(
 		if (!isOpen) return
 		tab.value = props.initialTab || 'count'
 		profile.value = props.profiles[0]?.name || null
-		floats.value = Object.fromEntries(props.paymentModes.map((m) => [m, '']))
+		floats.value = Object.fromEntries(modesForProfile().map((m) => [m, '']))
 		shortPeople.value = {}
 		resetExpense()
 	},
@@ -110,6 +110,23 @@ watch(
 	},
 	{ immediate: true },
 )
+
+/**
+ * The tenders the chosen till accepts, falling back to whatever the parent
+ * passed. Switching till mid-form has to re-seed the floats: two counters can
+ * take different tenders, and leaving the previous till's list on screen
+ * collects a float against a mode this one cannot settle.
+ */
+function modesForProfile() {
+	const chosen = props.profiles.find((p) => p.name === profile.value)
+	return chosen?.modes?.length ? chosen.modes : props.paymentModes
+}
+
+watch(profile, () => {
+	floats.value = Object.fromEntries(modesForProfile().map((m) => [m, floats.value[m] ?? '']))
+})
+
+const openingModes = computed(() => modesForProfile())
 
 const rows = computed(() => props.summary?.rows || [])
 const movements = computed(() => props.summary?.movements || null)
@@ -290,7 +307,7 @@ function submitOpen() {
 	if (!profile.value) return
 	emit('open-shift', {
 		posProfile: profile.value,
-		balances: props.paymentModes.map((m) => ({
+		balances: openingModes.value.map((m) => ({
 			mode_of_payment: m,
 			opening_amount: Number(floats.value[m]) || 0,
 		})),
@@ -377,7 +394,7 @@ const CASH_IN_TYPES = ['Neighbour Refund', 'Credit Payment']
 
 			<div class="flex flex-col gap-2">
 				<label class="text-p-sm font-medium text-ink-gray-7">Opening float</label>
-				<div v-for="m in paymentModes" :key="m" class="flex items-center gap-3">
+				<div v-for="m in openingModes" :key="m" class="flex items-center gap-3">
 					<span class="w-24 shrink-0 text-p-base text-ink-gray-7">{{ m }}</span>
 					<input
 						v-model="floats[m]"

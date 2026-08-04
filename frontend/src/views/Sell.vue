@@ -129,12 +129,22 @@ const movementBusy = ref(false)
 /** Which tab the sheet opens on. The Expenses entry lands on 'money'. */
 const shiftTab = ref('count')
 
-/** Modes to collect an opening float for — from the shift, else the till's three. */
-const paymentModes = computed(() =>
-	shift.value?.balances?.length
-		? shift.value.balances.map((b) => b.mode_of_payment)
-		: ['Cash', 'M-Pesa', 'Credit Card'],
-)
+/**
+ * Modes to collect an opening float for.
+ *
+ * From the open shift once there is one, and otherwise from the till profile
+ * itself — which is the same list the closing screen will ask to be counted.
+ * It used to fall back to three hard-coded names, so a float counted into
+ * M-Pesa Paybill had nowhere to be declared at opening and the shift closed
+ * short by exactly that much, with nothing on screen explaining why.
+ */
+const paymentModes = computed(() => {
+	if (shift.value?.balances?.length) {
+		return shift.value.balances.map((b) => b.mode_of_payment)
+	}
+	const profileModes = profiles.value?.[0]?.modes
+	return profileModes?.length ? profileModes : ['Cash', 'M-Pesa', 'Credit Card']
+})
 
 /* ---------- customer ---------- */
 
@@ -502,9 +512,19 @@ function onCustomerSelected(c) {
 const visibleItems = computed(() => catalog.search(query.value))
 
 /** item_code → qty, so ItemCard can show its pip without scanning the cart. */
+/**
+ * How much of each item the cart holds, **in stock units**.
+ *
+ * Not in the unit it was rung up in: a line of one dozen takes twelve off the
+ * shelf, and the shelf is what the stock check compares against. Counting the
+ * line as "1" would let a cashier sell twelve of the last three without the
+ * app ever offering to source them.
+ */
 const cartQtys = computed(() => {
 	const m = {}
-	for (const l of lines.value) m[l.item_code] = (m[l.item_code] || 0) + l.qty
+	for (const l of lines.value) {
+		m[l.item_code] = (m[l.item_code] || 0) + l.qty * (l.conversionFactor || 1)
+	}
 	return m
 })
 
@@ -539,7 +559,7 @@ function promptIfShort(item, wantQty) {
 	const stock = Number(item.stock) || 0
 	const sourcedQty = lines.value
 		.filter((l) => l.item_code === item.item_code && l.sourced)
-		.reduce((n, l) => n + l.qty, 0)
+		.reduce((n, l) => n + l.qty * (l.conversionFactor || 1), 0)
 
 	if (wantQty - sourcedQty <= stock) return false
 
@@ -556,6 +576,8 @@ function addItem(item) {
 	// buy it from next door, request it from another store, or sell anyway
 	// because it is physically on the shelf but not yet received.
 	const inCart = cartQtys.value[item.item_code] || 0
+	// One of the item's default unit, which is the stock unit — a dozen is
+	// chosen on the cart line, not by tapping the grid.
 	if (promptIfShort(item, inCart + 1)) return
 	cart.add(item, 1)
 }
@@ -1209,6 +1231,7 @@ useShortcuts({
 					@inc="cartInc"
 					@dec="cart.dec"
 					@set-qty="cartSetQty"
+					@set-uom="cart.setUom"
 				/>
 			</div>
 		</div>
@@ -1231,6 +1254,7 @@ useShortcuts({
 					@inc="cartInc"
 					@dec="cart.dec"
 					@set-qty="cartSetQty"
+					@set-uom="cart.setUom"
 				/>
 			</div>
 		</BottomSheet>

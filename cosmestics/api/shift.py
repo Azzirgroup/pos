@@ -36,7 +36,28 @@ def get_profiles():
 	if allowed:
 		filters["name"] = ("in", allowed)
 
-	return frappe.get_all("POS Profile", filters=filters, fields=["name", "company"])
+	profiles = frappe.get_all("POS Profile", filters=filters, fields=["name", "company"])
+
+	# Every tender each till accepts, so the opening screen collects a float for
+	# the same list the closing screen will ask the cashier to count. They used
+	# to disagree: opening offered three hard-coded modes, closing offered
+	# whatever the profile actually accepts — so a float counted into M-Pesa
+	# Paybill at eight in the morning had nowhere to be declared, and the till
+	# closed short by exactly that amount with no explanation on the screen.
+	for profile in profiles:
+		profile["modes"] = _profile_modes(profile["name"])
+
+	return profiles
+
+
+def _profile_modes(pos_profile: str) -> list:
+	"""The modes a till accepts, in the order the profile lists them.
+
+	Deduplicated for the same reason `_till_modes` is: on a shop that has not
+	split the M-Pesa channels they all resolve to the generic mode, and asking a
+	cashier to count one drawer three times is worse than not asking.
+	"""
+	return [b["mode_of_payment"] for b in _default_balances(pos_profile)]
 
 
 @frappe.whitelist()

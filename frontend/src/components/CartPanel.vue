@@ -23,7 +23,7 @@ defineProps({
  * the one that never checked. The view that owns the out-of-stock sheet decides
  * now; this panel only says what the cashier pressed.
  */
-const emit = defineEmits(['pay', 'hold', 'pickCustomer', 'inc', 'dec', 'setQty'])
+const emit = defineEmits(['pay', 'hold', 'pickCustomer', 'inc', 'dec', 'setQty', 'setUom'])
 
 const cart = useCartStore()
 const {
@@ -96,6 +96,7 @@ watch(
 				@dec="emit('dec', $event)"
 				@remove="cart.remove"
 				@set-qty="(id, qty) => emit('setQty', id, qty)"
+				@set-uom="(id, uom) => emit('setUom', id, uom)"
 			/>
 		</div>
 

@@ -49,6 +49,8 @@ def get_catalog():
 	prices = _prices(codes, price_list)
 	stock = _stock(codes, warehouse)
 	barcodes = _barcodes(codes)
+	stock_uoms = {i.item_code: i.stock_uom for i in items}
+	uoms = _sellable_uoms(codes, stock_uoms, prices)
 
 	rows = []
 	for it in items:
@@ -58,11 +60,15 @@ def get_catalog():
 				"item_name": it.item_name,
 				"brand": it.brand,
 				"category": it.item_group,
-				"price": flt(prices.get(it.item_code)),
+				"price": flt(prices.get((it.item_code, it.stock_uom)) or prices.get((it.item_code, None))),
 				"stock": flt(stock.get(it.item_code)),
 				"barcodes": barcodes.get(it.item_code, []),
 				"image": it.image,
 				"uom": it.stock_uom,
+				# Every unit this may be sold in. One entry — the stock unit — on
+				# the vast majority of items, so the till only offers a choice
+				# where the shop has actually configured one.
+				"uoms": uoms.get(it.item_code) or [],
 				"batched": bool(it.has_batch_no or it.has_serial_no),
 			}
 		)
@@ -86,16 +92,65 @@ def _prices(codes, price_list) -> dict:
 	rows = frappe.get_all(
 		"Item Price",
 		filters={"price_list": price_list, "item_code": ("in", codes)},
-		fields=["item_code", "price_list_rate", "valid_from"],
+		fields=["item_code", "price_list_rate", "valid_from", "uom"],
 		limit_page_length=0,
 		# Newest first, so the loop below keeps the most recent price per item.
 		order_by="valid_from desc, modified desc",
 	)
 
+	# Keyed by (item, uom). A shop can price a dozen separately from twelve
+	# singles — a carton is usually cheaper than its contents — and that price
+	# has to win over the multiplication. A row with no UOM is the base price.
 	out = {}
 	for r in rows:
-		out.setdefault(r.item_code, r.price_list_rate)
+		out.setdefault((r.item_code, r.uom or None), r.price_list_rate)
 	return out
+
+
+def _sellable_uoms(codes, stock_uoms, prices) -> dict:
+	"""The units each item may be sold in, with the price of one of each.
+
+	A shop that sells shampoo by the piece and by the dozen has one item, one
+	shelf and two ways to ring it up. ERPNext already models that as UOM
+	Conversion Detail rows; nothing here invents units.
+
+	The price of a larger unit is the base price times the conversion factor,
+	*unless* the shop has priced that unit explicitly — which is the whole point
+	of buying by the dozen, so an explicit price always wins.
+	"""
+	rows = frappe.get_all(
+		"UOM Conversion Detail",
+		filters={"parent": ("in", codes), "parenttype": "Item"},
+		fields=["parent", "uom", "conversion_factor"],
+		limit_page_length=0,
+	)
+
+	by_item = {}
+	for code in codes:
+		stock_uom = stock_uoms.get(code)
+		base = flt(prices.get((code, stock_uom)) or prices.get((code, None)))
+		# The stock unit is always sellable, at factor 1. Listed first because it
+		# is what the till defaults to.
+		by_item[code] = [{"uom": stock_uom, "factor": 1, "rate": base}]
+
+	for r in rows:
+		factor = flt(r.conversion_factor)
+		stock_uom = stock_uoms.get(r.parent)
+		if factor <= 0 or r.uom == stock_uom:
+			continue
+		explicit = prices.get((r.parent, r.uom))
+		by_item.setdefault(r.parent, []).append(
+			{
+				"uom": r.uom,
+				"factor": factor,
+				"rate": flt(explicit) if explicit else flt(
+					prices.get((r.parent, stock_uom)) or prices.get((r.parent, None))
+				) * factor,
+				"priced": bool(explicit),
+			}
+		)
+
+	return by_item
 
 
 def _stock(codes, warehouse) -> dict:
