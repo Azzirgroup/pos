@@ -158,6 +158,14 @@ def _build_invoice(items, payment, customer, company, settings, discount_amount=
 			"rate": flt(row["rate"]),
 			"discount_percentage": flt(row.get("discount_pct")),
 			"warehouse": warehouse,
+			# An item sold before any stock was ever received against it has no
+			# valuation rate to draw from, and ERPNext refuses to post an
+			# accounting entry it cannot cost — even with negative stock
+			# allowed, which only covers the quantity, not the value. A till
+			# that must never be unable to sell has to let this post at zero
+			# cost rather than block the sale; the item's margin on this line
+			# is simply unknown until real stock brings a rate in behind it.
+			"allow_zero_valuation_rate": 1,
 		}
 
 		# Selling by the dozen. `qty` is in the unit the cashier chose and `rate`
