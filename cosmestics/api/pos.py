@@ -44,7 +44,13 @@ def submit_sale(
 		frappe.throw(_("Cannot complete a sale with an empty cart"))
 
 	settings = frappe.get_cached_doc("Cosmestics POS Settings")
-	company = company or frappe.defaults.get_user_default("Company")
+	# Falls back to the site's global default the same way `session.context`
+	# does — a cashier with no *personal* default Company set still sees the
+	# right company in the header, and the sale has to resolve it the same
+	# way or checkout fails for a reason invisible on screen.
+	company = company or frappe.defaults.get_user_default(
+		"Company"
+	) or frappe.defaults.get_global_default("company")
 	if not company:
 		frappe.throw(_("No company configured"))
 
@@ -428,7 +434,9 @@ def _other_modes() -> list:
 	shift = get_open_shift()
 	profile = shift["pos_profile"] if shift else None
 	if not profile:
-		company = frappe.defaults.get_user_default("Company")
+		company = frappe.defaults.get_user_default("Company") or frappe.defaults.get_global_default(
+			"company"
+		)
 		filters = {"disabled": 0, **({"company": company} if company else {})}
 		profile = frappe.db.get_value("POS Profile", filters, "name")
 
@@ -472,7 +480,9 @@ def recent_sales(
 	if cint(mine):
 		filters["owner"] = frappe.session.user
 
-	company = frappe.defaults.get_user_default("Company")
+	company = frappe.defaults.get_user_default("Company") or frappe.defaults.get_global_default(
+		"company"
+	)
 	if company:
 		filters["company"] = company
 
@@ -623,7 +633,9 @@ def selling_warehouse() -> str | None:
 	if not profile:
 		# No shift open. A single enabled profile is unambiguous; several are not,
 		# and guessing between them is how the wrong branch gets sold down.
-		company = frappe.defaults.get_user_default("Company")
+		company = frappe.defaults.get_user_default("Company") or frappe.defaults.get_global_default(
+			"company"
+		)
 		candidates = frappe.get_all(
 			"POS Profile",
 			filters={"disabled": 0, **({"company": company} if company else {})},
