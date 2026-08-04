@@ -15,7 +15,8 @@ let lineSeq = 0
 export const useCartStore = defineStore('cart', () => {
 	const lines = ref([])
 	const customer = ref(null)
-	const cartDiscountPct = ref(0)
+	/** Whole-sale discount, in shillings, on top of any per-line discount. */
+	const discount = ref(0)
 	/** Line id most recently touched — drives the flash/scroll-into-view affordance. */
 	const lastTouched = ref(null)
 	const held = ref([])
@@ -134,7 +135,7 @@ export const useCartStore = defineStore('cart', () => {
 	function clear() {
 		lines.value = []
 		customer.value = null
-		cartDiscountPct.value = 0
+		discount.value = 0
 		lastTouched.value = null
 	}
 
@@ -149,12 +150,17 @@ export const useCartStore = defineStore('cart', () => {
 		round2(lines.value.reduce((sum, l) => sum + lineTotal(l), 0)),
 	)
 
-	const discountAmount = computed(() =>
-		round2((grossTotal.value * cartDiscountPct.value) / 100),
-	)
+	// Clamped to the subtotal: a discount worth more than the sale is a typo,
+	// not a valid negative-total invoice.
+	const discountAmount = computed(() => round2(Math.min(discount.value, grossTotal.value)))
 
 	/** What the customer actually pays. */
 	const total = computed(() => round2(grossTotal.value - discountAmount.value))
+
+	/** Set the whole-sale discount, in shillings. Clamped to non-negative. */
+	function setDiscount(amount) {
+		discount.value = round2(Math.max(0, Number(amount) || 0))
+	}
 
 	const taxAmount = computed(() =>
 		TAX_INCLUSIVE
@@ -184,6 +190,7 @@ export const useCartStore = defineStore('cart', () => {
 			at: Date.now(),
 			customer: customer.value,
 			lines: JSON.parse(JSON.stringify(lines.value)),
+			discount: discount.value,
 			total: total.value,
 			count: count.value,
 		}
@@ -198,6 +205,7 @@ export const useCartStore = defineStore('cart', () => {
 		const [ticket] = held.value.splice(idx, 1)
 		lines.value = ticket.lines
 		customer.value = ticket.customer
+		discount.value = ticket.discount || 0
 		lastTouched.value = null
 	}
 
@@ -208,7 +216,7 @@ export const useCartStore = defineStore('cart', () => {
 	return {
 		lines,
 		customer,
-		cartDiscountPct,
+		discount,
 		lastTouched,
 		held,
 		vatRate: VAT_RATE,
@@ -220,6 +228,7 @@ export const useCartStore = defineStore('cart', () => {
 		dec,
 		setRate,
 		setLineDiscount,
+		setDiscount,
 		remove,
 		clear,
 		lineTotal,

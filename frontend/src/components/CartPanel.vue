@@ -15,6 +15,8 @@ defineProps({
 	embedded: { type: Boolean, default: false },
 	/** From the active POS Profile — whether a cashier can override a line's rate. */
 	allowRateChange: { type: Boolean, default: false },
+	/** From the active POS Profile — whether a cashier can apply a discount. */
+	allowDiscountChange: { type: Boolean, default: false },
 })
 
 /**
@@ -139,9 +141,35 @@ watch(
 					<dt>Subtotal</dt>
 					<dd>{{ fmtMoneyShort(grossTotal) }}</dd>
 				</div>
-				<div v-if="discountAmount" class="flex justify-between text-ink-amber-3">
-					<dt>Discount ({{ cart.cartDiscountPct }}%)</dt>
-					<dd>−{{ fmtMoneyShort(discountAmount) }}</dd>
+				<!-- A whole-sale discount, on top of anything already taken off a
+				     line. Always editable rather than hidden behind a button: the
+				     common case is a manager saying "knock off fifty bob" once the
+				     cart is already full, not planned before the first item is
+				     scanned. -->
+				<div
+					v-if="allowDiscountChange"
+					class="flex items-center justify-between"
+					:class="discountAmount ? 'text-ink-amber-3' : 'text-ink-gray-6'"
+				>
+					<dt><label for="cart-discount">Discount</label></dt>
+					<dd class="flex items-center gap-1">
+						<span v-if="discountAmount">−</span>
+						<input
+							id="cart-discount"
+							:value="cart.discount || ''"
+							type="number"
+							min="0"
+							:max="grossTotal"
+							step="0.01"
+							inputmode="decimal"
+							placeholder="0"
+							:disabled="isEmpty"
+							class="tabular h-6 w-20 rounded border border-outline-gray-2 bg-surface-white px-1 text-right text-p-xs font-medium focus:border-outline-gray-4 focus:outline-none disabled:opacity-50"
+							:class="discountAmount ? 'text-ink-amber-3' : 'text-ink-gray-8'"
+							@focus="$event.target.select()"
+							@change="cart.setDiscount($event.target.value)"
+						/>
+					</dd>
 				</div>
 				<div class="flex justify-between text-ink-gray-5">
 					<dt>VAT {{ Math.round(cart.vatRate * 100) }}% (incl.)</dt>

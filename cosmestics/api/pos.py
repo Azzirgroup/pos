@@ -22,6 +22,7 @@ def submit_sale(
 	payment: dict | str,
 	customer: str | None = None,
 	company: str | None = None,
+	discount_amount: float = 0,
 ):
 	"""Turn a cart into a submitted Sales Invoice.
 
@@ -29,6 +30,8 @@ def submit_sale(
 	             sourced: {supplier, buy_rate}}]. `qty` and `rate` are in `uom`;
 	             the factor is what turns them into stock quantities.
 	`payment` — {method: cash|mpesa|card, tendered, change, reference}
+	`discount_amount` — a whole-sale discount, in the company currency, on top
+	             of any per-line discount.
 
 	Returns {invoice, grand_total, change, paid_amount, purchases}.
 	"""
@@ -82,7 +85,7 @@ def submit_sale(
 			purchases.extend(result.get("invoices", []))
 
 	# 2. The sale itself.
-	invoice = _build_invoice(items, payment, customer, company, settings)
+	invoice = _build_invoice(items, payment, customer, company, settings, discount_amount)
 
 	return {
 		"invoice": invoice.name,
@@ -94,7 +97,7 @@ def submit_sale(
 	}
 
 
-def _build_invoice(items, payment, customer, company, settings):
+def _build_invoice(items, payment, customer, company, settings, discount_amount=0):
 	method = (payment or {}).get("method", "cash")
 	is_credit = method == "credit"
 
@@ -119,6 +122,7 @@ def _build_invoice(items, payment, customer, company, settings):
 	# closing screen so the cashier still sees it.
 	si.is_pos = 0 if is_credit else 1
 
+	profile = None
 	if not is_credit:
 		# Both fields are required for the shift to see the sale: POS Closing
 		# Entry filters on owner + is_pos + pos_profile + the hidden
@@ -164,6 +168,22 @@ def _build_invoice(items, payment, customer, company, settings):
 		si.append("items", line)
 
 	si.set_missing_values()
+
+	if flt(discount_amount) > 0:
+		# Checked here, not just hidden in the UI: this endpoint is reachable
+		# directly, and a rule only the browser applies is not a rule. No
+		# profile means no policy was ever configured for this till, so the
+		# same "must never be unable to sell" default from the pos_profile
+		# tagging above applies here too.
+		allowed = frappe.db.get_value("POS Profile", profile, "allow_discount_change") if profile else 1
+		if not allowed:
+			frappe.throw(_("This till does not allow a discount to be applied"))
+
+		si.apply_discount_on = (
+			frappe.db.get_value("POS Profile", profile, "apply_discount_on") if profile else None
+		) or "Grand Total"
+		si.discount_amount = flt(discount_amount)
+
 	# Totals must be current before the payment row is sized against them.
 	si.calculate_taxes_and_totals()
 

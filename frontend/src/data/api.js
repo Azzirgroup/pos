@@ -22,8 +22,9 @@ function call(method, args) {
 }
 
 /** Submit a completed sale. Resolves with {invoice, grand_total, change, …}. */
-export function submitSale({ items, payment, customer }) {
+export function submitSale({ items, payment, customer, discountAmount }) {
 	return call('cosmestics.api.pos.submit_sale', {
+		discount_amount: discountAmount || 0,
 		items: items.map((l) => ({
 			item_code: l.item_code,
 			qty: l.qty,

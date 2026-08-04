@@ -981,6 +981,9 @@ async function completeSale(payment) {
 	const snapshot = {
 		items: lines.value.map((l) => ({ ...l })),
 		customer: customer.value?.name || null,
+		// Clamped to the subtotal — `cart.discount` is the raw typed value,
+		// `discountAmount` is what actually applies and what was charged.
+		discountAmount: cart.discountAmount,
 	}
 	const paid = total.value
 	const wasCredit = payment.method === 'credit'
@@ -1007,6 +1010,7 @@ async function completeSale(payment) {
 		const res = await submitSale({
 			items: snapshot.items,
 			customer: snapshot.customer,
+			discountAmount: snapshot.discountAmount,
 			payment: {
 				method: payment.method,
 				// Present only for split tender; the backend treats it as the
@@ -1233,6 +1237,7 @@ useShortcuts({
 					@set-qty="cartSetQty"
 					@set-uom="cart.setUom"
 					:allow-rate-change="Boolean(till.context?.allow_rate_change)"
+					:allow-discount-change="Boolean(till.context?.allow_discount_change)"
 				/>
 			</div>
 		</div>
@@ -1257,6 +1262,7 @@ useShortcuts({
 					@set-qty="cartSetQty"
 					@set-uom="cart.setUom"
 					:allow-rate-change="Boolean(till.context?.allow_rate_change)"
+					:allow-discount-change="Boolean(till.context?.allow_discount_change)"
 				/>
 			</div>
 		</BottomSheet>
