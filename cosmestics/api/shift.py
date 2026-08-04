@@ -60,13 +60,62 @@ def _profile_modes(pos_profile: str) -> list:
 	return [b["mode_of_payment"] for b in _default_balances(pos_profile)]
 
 
+def _user_profiles() -> list:
+	"""POS Profiles this user can transact against.
+
+	Explicit `POS Profile User` rows when the profile lists any, otherwise
+	every enabled profile for the company — the same fallback `get_profiles`
+	uses, so a one-till shop that never bothered to list users still works.
+	"""
+	user = frappe.session.user
+	allowed = frappe.get_all(
+		"POS Profile User", filters={"user": user, "parenttype": "POS Profile"}, pluck="parent"
+	)
+	if allowed:
+		return allowed
+
+	company = frappe.defaults.get_user_default("Company")
+	filters = {"disabled": 0}
+	if company:
+		filters["company"] = company
+	return frappe.get_all("POS Profile", filters=filters, pluck="name")
+
+
+def _shared_open_shift():
+	"""The open shift on a POS Profile this user shares with someone else.
+
+	ERPNext allows only one open `POS Opening Entry` per profile at a time
+	(`check_open_pos_exists`), regardless of who opened it. A profile with
+	several `applicable_for_users` therefore has exactly one open shift,
+	belonging to whichever of them started it first — everyone else on that
+	profile sells against that same shift rather than being locked out until
+	it closes.
+	"""
+	profiles = _user_profiles()
+	if not profiles:
+		return None
+	return frappe.db.get_value(
+		"POS Opening Entry",
+		{"pos_profile": ("in", profiles), "docstatus": 1, "status": "Open"},
+		"name",
+	)
+
+
 @frappe.whitelist()
 def get_open_shift():
-	"""The user's currently open shift, with its opening floats. None if closed."""
-	name = frappe.db.get_value(
-		"POS Opening Entry",
-		{"user": frappe.session.user, "docstatus": 1, "status": "Open"},
-		"name",
+	"""The shift this user is transacting against, with its opening floats.
+
+	Their own, if they started one. Otherwise the shift they share with
+	someone else on the same POS Profile (see `_shared_open_shift`). None if
+	neither.
+	"""
+	name = (
+		frappe.db.get_value(
+			"POS Opening Entry",
+			{"user": frappe.session.user, "docstatus": 1, "status": "Open"},
+			"name",
+		)
+		or _shared_open_shift()
 	)
 	if not name:
 		return None
@@ -76,6 +125,9 @@ def get_open_shift():
 		"name": doc.name,
 		"pos_profile": doc.pos_profile,
 		"company": doc.company,
+		"user": doc.user,
+		# So the till can say whose shift it is when it is not the viewer's own.
+		"shared": doc.user != frappe.session.user,
 		"period_start_date": str(doc.period_start_date),
 		# ERPNext refuses to post an `is_pos` invoice against an opening entry
 		# from an earlier day — `validate_pos_opening_entry` throws "Outdated POS
@@ -97,6 +149,13 @@ def open_shift(pos_profile: str, balances: list | str | None = None):
 		balances = frappe.parse_json(balances)
 
 	existing = get_open_shift()
+	if existing and existing.get("shared"):
+		frappe.throw(
+			_(
+				"{0} already has an open shift ({1}), started by {2}. Sell against that "
+				"shift instead of opening a new one."
+			).format(existing["pos_profile"], existing["name"], existing.get("user"))
+		)
 	if existing:
 		frappe.throw(
 			_("You already have an open shift ({0}). Close it before starting another.").format(
@@ -161,15 +220,8 @@ def get_closing_summary():
 	if not shift:
 		frappe.throw(_("No open shift"))
 
-	from erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry import get_invoices
-
 	end = now_datetime()
-	data = get_invoices(
-		start=shift["period_start_date"],
-		end=end,
-		pos_profile=shift["pos_profile"],
-		user=frappe.session.user,
-	)
+	data = _shift_invoices(shift["pos_profile"], shift["period_start_date"], end)
 
 	opening = {b["mode_of_payment"]: flt(b["opening_amount"]) for b in shift["balances"]}
 	taken = {p["mode_of_payment"]: flt(p["amount"]) for p in data.get("payments", [])}
@@ -456,6 +508,126 @@ def _credit_summary(start, end):
 	}
 
 
+def _shift_invoices(pos_profile, start, end):
+	"""Every sale tied to this shift's profile in the window, any cashier.
+
+	ERPNext's own `get_invoices` scopes to one `owner`, on the assumption that
+	a shift belongs to whoever opened it. That breaks the moment a shift is
+	shared (`_shared_open_shift`): only one `POS Opening Entry` is ever open
+	per profile, so a sale tagged with that profile during this window belongs
+	to this shift by construction, whoever rang it up. Mirrors ERPNext's own
+	`build_invoice_query`, with the `owner` condition dropped.
+	"""
+	from frappe.query_builder import functions as fn
+	from frappe.query_builder.custom import ConstantColumn
+
+	from erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry import get_payments, get_taxes
+
+	invoice_doctype = frappe.db.get_single_value("POS Settings", "invoice_type")
+
+	def _query(doctype):
+		dt = frappe.qb.DocType(doctype)
+		q = (
+			frappe.qb.from_(dt)
+			.select(
+				dt.name,
+				dt.customer,
+				dt.posting_date,
+				dt.grand_total,
+				dt.net_total,
+				dt.total_qty,
+				dt.total_taxes_and_charges,
+				dt.change_amount,
+				dt.account_for_change_amount,
+				dt.is_return,
+				dt.return_against,
+				fn.Timestamp(dt.posting_date, dt.posting_time).as_("timestamp"),
+				ConstantColumn(doctype).as_("doctype"),
+			)
+			.where(
+				(dt.docstatus == 1)
+				& (dt.is_pos == 1)
+				& (dt.pos_profile == pos_profile)
+				& (
+					(fn.Timestamp(dt.posting_date, dt.posting_time) >= start)
+					& (fn.Timestamp(dt.posting_date, dt.posting_time) <= end)
+				)
+			)
+		)
+		if doctype == "POS Invoice":
+			q = q.where(fn.IfNull(dt.consolidated_invoice, "").eq(""))
+		else:
+			q = q.where((dt.is_created_using_pos == 1) & fn.IfNull(dt.pos_closing_entry, "").eq(""))
+		return q
+
+	query = _query("Sales Invoice")
+	if invoice_doctype == "POS Invoice":
+		query = query + _query("POS Invoice")
+	query = query.orderby(query.timestamp)
+	invoices = query.run(as_dict=1)
+
+	return {"invoices": invoices, "payments": get_payments(invoices), "taxes": get_taxes(invoices)}
+
+
+def _build_closing_entry(opening, data, end):
+	"""Same shape as ERPNext's `make_closing_entry_from_opening`, built from
+	`data` already scoped to the shift's profile rather than to one user —
+	see `_shift_invoices`. Reimplemented rather than called: the ERPNext
+	helper's own invoice lookup is hardwired to `owner == opening_entry.user`,
+	which is exactly wrong for a shift shared between cashiers.
+	"""
+	closing_entry = frappe.new_doc("POS Closing Entry")
+	closing_entry.pos_opening_entry = opening.name
+	closing_entry.period_start_date = opening.period_start_date
+	closing_entry.period_end_date = end
+	closing_entry.pos_profile = opening.pos_profile
+	closing_entry.user = opening.user
+	closing_entry.company = opening.company
+	closing_entry.grand_total = 0
+	closing_entry.net_total = 0
+	closing_entry.total_quantity = 0
+	closing_entry.total_taxes_and_charges = 0
+
+	pos_invoices = []
+	sales_invoices = []
+	taxes = [
+		frappe._dict({"account_head": tx.account_head, "amount": tx.tax_amount})
+		for tx in data.get("taxes")
+	]
+	payments = [
+		frappe._dict(
+			{"mode_of_payment": p.mode_of_payment, "opening_amount": 0, "expected_amount": p.amount}
+		)
+		for p in data.get("payments")
+	]
+
+	for d in data.get("invoices"):
+		invoice = "pos_invoice" if d.doctype == "POS Invoice" else "sales_invoice"
+		invoice_data = frappe._dict(
+			{
+				invoice: d.name,
+				"posting_date": d.posting_date,
+				"grand_total": d.grand_total,
+				"customer": d.customer,
+				"is_return": d.is_return,
+				"return_against": d.return_against,
+			}
+		)
+		(pos_invoices if d.doctype == "POS Invoice" else sales_invoices).append(invoice_data)
+
+		closing_entry.grand_total += flt(d.grand_total)
+		closing_entry.net_total += flt(d.net_total)
+		closing_entry.total_quantity += flt(d.total_qty)
+		closing_entry.total_taxes_and_charges += flt(d.total_taxes_and_charges)
+
+	closing_entry.set("pos_invoices", pos_invoices)
+	closing_entry.set("sales_invoices", sales_invoices)
+	closing_entry.set("payment_reconciliation", payments)
+	closing_entry.set("taxes", taxes)
+
+	return closing_entry
+
+
 @frappe.whitelist(methods=["POST"])
 def close_shift(counted: list | str | None = None, shorts: list | str | None = None):
 	"""Close the shift against what the cashier physically counted.
@@ -479,27 +651,25 @@ def close_shift(counted: list | str | None = None, shorts: list | str | None = N
 	if isinstance(shorts, str):
 		shorts = frappe.parse_json(shorts)
 
-	from erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry import (
-		make_closing_entry_from_opening,
-	)
-
 	shift = get_open_shift()
 	if not shift:
 		frappe.throw(_("No open shift"))
 
 	counted_map = {c["mode_of_payment"]: flt(c.get("closing_amount")) for c in (counted or [])}
-	# Cash already taken out of the drawer this shift. ERPNext's builder only
+	# Cash already taken out of the drawer this shift. The builder below only
 	# knows about sales, so without this the expected amount would ask the
 	# cashier to produce money that was legitimately spent hours ago.
 	paid_out = _paid_out_by_mode(_movements(shift["name"]))
 
-	# ERPNext's own builder: it gathers the shift's invoices, totals, taxes and
-	# per-mode payment rows. Reimplementing that by hand would drift from what
-	# the standard POS reports expect.
+	# Gathers the shift's invoices, totals, taxes and per-mode payment rows —
+	# scoped to the profile rather than to whoever opened it, so a co-cashier's
+	# sales on a shared shift are not silently dropped from the close.
 	opening = frappe.get_doc("POS Opening Entry", shift["name"])
-	doc = make_closing_entry_from_opening(opening)
+	end = now_datetime()
+	data = _shift_invoices(opening.pos_profile, opening.period_start_date, end)
+	doc = _build_closing_entry(opening, data, end)
 	doc.posting_date = nowdate()
-	doc.posting_time = now_datetime().strftime("%H:%M:%S")
+	doc.posting_time = end.strftime("%H:%M:%S")
 
 	# It leaves opening_amount at 0, so the floats are overlaid here. ERPNext's
 	# convention (pos_closing_entry.js) is expected = opening + taken.
@@ -886,17 +1056,10 @@ def shift_activity(shift: str) -> dict:
 	opening = frappe.get_doc("POS Opening Entry", shift)
 	end = opening.period_end_date or now_datetime()
 
-	from erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry import get_invoices
-
-	# The same call the live closing screen makes, scoped to whoever owns this
-	# shift rather than to the session — a manager reading somebody else's shift
-	# must see that cashier's invoices, not their own.
-	data = get_invoices(
-		start=opening.period_start_date,
-		end=end,
-		pos_profile=opening.pos_profile,
-		user=opening.user,
-	)
+	# The same call the live closing screen makes, scoped to the profile rather
+	# than to whoever opened it — a manager reading a shared shift must see
+	# every cashier's invoices on it, not just the opener's.
+	data = _shift_invoices(opening.pos_profile, opening.period_start_date, end)
 	movements = _movements(opening.name)
 	summary = _movement_summary(movements)
 

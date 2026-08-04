@@ -1232,6 +1232,7 @@ useShortcuts({
 					@dec="cart.dec"
 					@set-qty="cartSetQty"
 					@set-uom="cart.setUom"
+					:allow-rate-change="Boolean(till.context?.allow_rate_change)"
 				/>
 			</div>
 		</div>
@@ -1255,6 +1256,7 @@ useShortcuts({
 					@dec="cart.dec"
 					@set-qty="cartSetQty"
 					@set-uom="cart.setUom"
+					:allow-rate-change="Boolean(till.context?.allow_rate_change)"
 				/>
 			</div>
 		</BottomSheet>

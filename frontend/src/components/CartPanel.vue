@@ -13,6 +13,8 @@ import LucideTrash2 from '~icons/lucide/trash-2'
 defineProps({
 	/** Hides the panel's own header when rendered inside the mobile sheet. */
 	embedded: { type: Boolean, default: false },
+	/** From the active POS Profile — whether a cashier can override a line's rate. */
+	allowRateChange: { type: Boolean, default: false },
 })
 
 /**
@@ -92,11 +94,13 @@ watch(
 				:line="line"
 				:line-total="cart.lineTotal(line)"
 				:highlight="lastTouched === line.id"
+				:allow-rate-change="allowRateChange"
 				@inc="emit('inc', $event)"
 				@dec="emit('dec', $event)"
 				@remove="cart.remove"
 				@set-qty="(id, qty) => emit('setQty', id, qty)"
 				@set-uom="(id, uom) => emit('setUom', id, uom)"
+				@set-rate="cart.setRate"
 			/>
 		</div>
 

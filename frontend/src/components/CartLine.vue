@@ -9,9 +9,14 @@ const props = defineProps({
 	line: { type: Object, required: true },
 	lineTotal: { type: Number, required: true },
 	highlight: { type: Boolean, default: false },
+	allowRateChange: { type: Boolean, default: false },
 })
 
-defineEmits(['inc', 'dec', 'remove', 'setQty', 'setUom'])
+const emit = defineEmits(['inc', 'dec', 'remove', 'setQty', 'setUom', 'setRate'])
+
+function onRateChange(event) {
+	emit('setRate', props.line.id, event.target.value)
+}
 
 // A one-shot tint when the line is touched. Confirms the tap landed on the
 // right line without a toast — critical when scanning the same item repeatedly.
@@ -50,7 +55,22 @@ watch(
 				>
 					<option v-for="u in line.units" :key="u.uom" :value="u.uom">{{ u.uom }}</option>
 				</select>
-				<span>{{ fmtMoneyShort(line.rate) }} / {{ line.uom }}</span>
+				<span v-if="!allowRateChange">{{ fmtMoneyShort(line.rate) }} / {{ line.uom }}</span>
+				<span v-else class="inline-flex items-center gap-0.5">
+					<input
+						:value="line.rate"
+						type="number"
+						min="0"
+						step="0.01"
+						inputmode="decimal"
+						class="tabular h-6 w-16 rounded border border-outline-gray-2 bg-surface-gray-2 px-1 text-right text-p-xs font-medium text-ink-gray-8 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						:aria-label="`Rate for ${line.item_name}`"
+						@focus="$event.target.select()"
+						@change="onRateChange"
+						@click.stop
+					/>
+					<span>/ {{ line.uom }}</span>
+				</span>
 				<!-- What actually leaves the shelf, when that differs from what was
 				     typed. A cashier selling two dozen should see "24 pcs" without
 				     doing the arithmetic. -->

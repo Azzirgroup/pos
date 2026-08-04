@@ -403,11 +403,10 @@ def _other_modes() -> list:
 	said this counter takes. Falling back to every enabled mode on the site would
 	offer a warehouse transfer account as a way to pay for lipstick.
 	"""
-	profile = frappe.db.get_value(
-		"POS Opening Entry",
-		{"user": frappe.session.user, "docstatus": 1, "status": "Open"},
-		"pos_profile",
-	)
+	from cosmestics.api.shift import get_open_shift
+
+	shift = get_open_shift()
+	profile = shift["pos_profile"] if shift else None
 	if not profile:
 		company = frappe.defaults.get_user_default("Company")
 		filters = {"disabled": 0, **({"company": company} if company else {})}
@@ -462,14 +461,12 @@ def recent_sales(
 		filters["posting_date"] = on_date
 		this_shift = 0
 	if cint(this_shift):
-		shift = frappe.db.get_value(
-			"POS Opening Entry",
-			{"user": frappe.session.user, "docstatus": 1, "status": "Open"},
-			["name", "period_start_date"],
-			as_dict=True,
-		)
-		if shift:
-			filters["creation"] = (">=", shift.period_start_date)
+		from cosmestics.api.shift import get_open_shift
+
+		open_shift = get_open_shift()
+		if open_shift:
+			shift = frappe._dict(name=open_shift["name"], period_start_date=open_shift["period_start_date"])
+			filters["creation"] = (">=", open_shift["period_start_date"])
 
 	rows = frappe.get_all(
 		"Sales Invoice",
@@ -625,12 +622,13 @@ def selling_warehouse() -> str | None:
 
 
 def _active_pos_profile() -> str | None:
-	"""POS Profile of the user's open shift, if any."""
-	return frappe.db.get_value(
-		"POS Opening Entry",
-		{"user": frappe.session.user, "docstatus": 1, "status": "Open"},
-		"pos_profile",
-	)
+	"""POS Profile of the user's open shift, if any — their own, or one shared
+	with them on the same POS Profile (see `cosmestics.api.shift.get_open_shift`).
+	"""
+	from cosmestics.api.shift import get_open_shift
+
+	shift = get_open_shift()
+	return shift["pos_profile"] if shift else None
 
 
 def _walk_in_customer() -> str:

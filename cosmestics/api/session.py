@@ -42,14 +42,11 @@ def context():
 		"company"
 	)
 
-	shift = frappe.db.get_value(
-		"POS Opening Entry",
-		{"user": frappe.session.user, "docstatus": 1, "status": "Open"},
-		["name", "pos_profile", "period_start_date"],
-		as_dict=True,
-	)
+	from cosmestics.api.shift import get_open_shift
 
-	profile = shift.pos_profile if shift else None
+	shift = get_open_shift()
+
+	profile = shift["pos_profile"] if shift else None
 	# Outside a shift the till still sells; it just reconciles nowhere. Naming the
 	# profile it *would* use keeps the header honest either way — but only when
 	# there is no ambiguity about which one that is.
@@ -68,6 +65,16 @@ def context():
 
 	warehouse = selling_warehouse()
 
+	# Read from the profile actually in use, not trusted from the client — a
+	# cashier should not be able to turn on rate editing by editing the page.
+	profile_flags = (
+		frappe.db.get_value(
+			"POS Profile", profile, ["allow_rate_change", "allow_discount_change"], as_dict=True
+		)
+		if profile
+		else None
+	)
+
 	return {
 		"company": company,
 		"branch": profile,
@@ -75,10 +82,22 @@ def context():
 		"warehouse_label": frappe.db.get_value("Warehouse", warehouse, "warehouse_name")
 		if warehouse
 		else None,
-		"shift": {"name": shift.name, "since": str(shift.period_start_date)} if shift else None,
+		"shift": {
+			"name": shift["name"],
+			"since": shift["period_start_date"],
+			"user": shift["user"],
+			"shared": shift["shared"],
+		}
+		if shift
+		else None,
 		"price_list": settings.selling_price_list,
 		# So the till can say "open a shift first" up front rather than letting a
 		# cashier build a cart and be refused at checkout. The rule itself is
 		# enforced in `pos.submit_sale`; this is only what the screen reads.
 		"requires_shift": bool(settings.get("require_shift_to_sell")),
+		# Gate the checkout cart's rate/discount editing controls. `pos.submit_sale`
+		# does not enforce these — see the note there — so keeping the sale itself
+		# safe from a client that ignores this flag is out of scope here.
+		"allow_rate_change": bool(profile_flags and profile_flags.allow_rate_change),
+		"allow_discount_change": bool(profile_flags and profile_flags.allow_discount_change),
 	}
