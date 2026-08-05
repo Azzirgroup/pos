@@ -1,10 +1,40 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { Button, Dialog, FormControl, Spinner } from 'frappe-ui'
-import { createDocument, getDocumentForm, getDocumentLinkOptions } from '@/data/api'
+import {
+	createDocument,
+	createLandedCostVoucher,
+	createMaster,
+	getDocumentForm,
+	getDocumentLinkOptions,
+	getExpenseAccounts,
+} from '@/data/api'
 import { fmtMoney } from '@/utils/format'
+import LinkField from './LinkField.vue'
 import LucidePlus from '~icons/lucide/plus'
 import LucideX from '~icons/lucide/x'
+
+/**
+ * Link fields whose target can be created from typing a name alone — every
+ * other field `master.py` exposes needs at least one more required value
+ * (an Item's group, an Account's parent), so offering "Create" there would
+ * fail on the very next line ERPNext validates. These four do not.
+ */
+const QUICK_CREATE_MASTER = {
+	Supplier: 'supplier',
+	Customer: 'customer',
+	Warehouse: 'warehouse',
+	'Item Group': 'item_group',
+}
+
+function onCreateFor(field) {
+	const masterKey = QUICK_CREATE_MASTER[field.options]
+	if (!masterKey) return null
+	return async (typed) => {
+		const res = await createMaster({ key: masterKey, values: { [`${masterKey}_name`]: typed } })
+		return { label: res.title || typed, value: res.name }
+	}
+}
 
 /**
  * Raising a document with its lines, without leaving the app.
@@ -22,6 +52,25 @@ import LucideX from '~icons/lucide/x'
 const props = defineProps({
 	open: { type: Boolean, default: false },
 	docKey: { type: String, default: null },
+	/**
+	 * Skip the draft step entirely — one button, and it submits.
+	 *
+	 * For a flow where the document only means anything once it is real: a
+	 * bulk Purchase Receipt sitting as a draft is stock that has not actually
+	 * landed yet, and "remember to come back and submit it" is exactly the
+	 * step this exists to remove. Editing still happens first, in the same
+	 * form — this only removes the *choice* to leave it a draft, not the
+	 * chance to fix a line before it posts.
+	 */
+	forceSubmit: { type: Boolean, default: false },
+	/**
+	 * Off for the nested instance this sheet opens on itself to raise a
+	 * vendor's invoice — that invoice is the *source* of a landed cost, not
+	 * itself a place to start another one, and letting it offer its own
+	 * checkbox would let a landed cost voucher nest inside a landed cost
+	 * voucher's own vendor invoice.
+	 */
+	allowLandedCost: { type: Boolean, default: true },
 })
 
 const emit = defineEmits(['update:open', 'created', 'notify'])
@@ -29,9 +78,49 @@ const emit = defineEmits(['update:open', 'created', 'notify'])
 const form = ref(null)
 const values = ref({})
 const lines = ref([])
-const options = ref({})
 const loading = ref(false)
 const saving = ref('')
+
+/**
+ * Freight, customs, anything that lands on top of what the supplier billed
+ * for the goods themselves — offered only for the two document types it
+ * means anything for. See `create_landed_cost_voucher`.
+ */
+const LANDED_COST_KEYS = new Set(['purchase-receipt', 'purchase-invoice'])
+const showsLandedCost = computed(
+	() => props.allowLandedCost && LANDED_COST_KEYS.has(props.docKey),
+)
+const landedCost = ref({ enabled: false, distributeBasedOn: 'Qty', charges: [] })
+/** The nested sheet a charge's "Create vendor invoice" button opens. */
+const vendorInvoiceOpen = ref(false)
+const vendorInvoiceCharge = ref(null)
+
+function blankCharge() {
+	return { description: '', amount: '', expense_account: '', vendorInvoice: null }
+}
+
+function addCharge() {
+	landedCost.value.charges.push(blankCharge())
+}
+
+function removeCharge(i) {
+	landedCost.value.charges.splice(i, 1)
+}
+
+function openVendorInvoice(charge) {
+	vendorInvoiceCharge.value = charge
+	vendorInvoiceOpen.value = true
+}
+
+function onVendorInvoiceCreated(res) {
+	const charge = vendorInvoiceCharge.value
+	if (!charge) return
+	charge.vendorInvoice = { name: res.name, grandTotal: res.grand_total }
+	// A default, not a lock: the amount actually allocated can differ from
+	// what the freight company billed in total, so it stays editable.
+	if (!charge.amount) charge.amount = res.grand_total || ''
+	if (!charge.description) charge.description = `Freight/customs — ${res.name}`
+}
 
 watch(
 	() => [props.open, props.docKey],
@@ -44,7 +133,6 @@ watch(
 async function load() {
 	loading.value = true
 	form.value = null
-	options.value = {}
 	try {
 		form.value = await getDocumentForm({ key: props.docKey })
 
@@ -52,17 +140,11 @@ async function load() {
 			form.value.fields.map((f) => [f.fieldname, f.default ?? '']),
 		)
 		lines.value = [blankLine()]
-
-		await Promise.all(
-			[...form.value.fields, ...form.value.items]
-				.filter((f) => f.type === 'link' || f.type === 'item')
-				.map(async (f) => {
-					options.value[f.fieldname] = await getDocumentLinkOptions({
-						key: props.docKey,
-						fieldname: f.fieldname,
-					}).catch(() => [])
-				}),
-		)
+		landedCost.value = { enabled: false, distributeBasedOn: 'Qty', charges: [] }
+		// Link and item fields search the server themselves as the cashier
+		// types (`LinkField`) rather than choosing from a list pre-fetched
+		// here — a fixed twenty rows meant the supplier or item actually
+		// wanted was often simply never in it.
 	} catch (e) {
 		emit('notify', { message: e.message || 'Could not open the form', tone: 'bad' })
 		close()
@@ -70,6 +152,12 @@ async function load() {
 		loading.value = false
 	}
 }
+
+function linkFetcher(fieldname) {
+	return (search) => getDocumentLinkOptions({ key: props.docKey, fieldname, search })
+}
+
+const expenseAccountFetcher = (search) => getExpenseAccounts(search)
 
 function blankLine() {
 	return Object.fromEntries((form.value?.items || []).map((f) => [f.fieldname, f.default ?? '']))
@@ -92,6 +180,12 @@ const filled = computed(() =>
 	lines.value.filter((l) => l.item_code && Number(l.qty) > 0),
 )
 
+/** Charges with an amount above zero — the rest are unfinished rows, dropped
+ *  rather than sent as zero-cost lines nobody meant to add. */
+const filledCharges = computed(() =>
+	landedCost.value.charges.filter((c) => Number(c.amount) > 0 && c.expense_account),
+)
+
 /** What is stopping the save, or null. Named so the button can say it. */
 const blocker = computed(() => {
 	if (!form.value) return 'Loading'
@@ -100,6 +194,9 @@ const blocker = computed(() => {
 		.map((f) => f.label)
 	if (missing.length) return `Fill in ${missing.join(', ')}`
 	if (!filled.value.length) return 'Add at least one line'
+	if (landedCost.value.enabled && !filledCharges.value.length) {
+		return 'Add a charge with an amount and an expense account, or turn off landed cost'
+	}
 	return null
 })
 
@@ -120,6 +217,34 @@ async function save(submit) {
 		})
 		emit('notify', { message: res.message, tone: 'good' })
 		emit('created', res)
+
+		// The receipt/invoice is real and submitted at this point regardless of
+		// what happens next — a failed landed cost voucher must not read as a
+		// failed purchase. Reported as its own notification either way.
+		if (landedCost.value.enabled && filledCharges.value.length) {
+			try {
+				const lcv = await createLandedCostVoucher({
+					receiptKey: props.docKey,
+					receiptName: res.name,
+					charges: filledCharges.value.map((c) => ({
+						description: c.description,
+						amount: c.amount,
+						expense_account: c.expense_account,
+					})),
+					vendorInvoices: filledCharges.value
+						.filter((c) => c.vendorInvoice)
+						.map((c) => ({ name: c.vendorInvoice.name, amount: c.vendorInvoice.grandTotal })),
+					distributeBasedOn: landedCost.value.distributeBasedOn,
+				})
+				emit('notify', { message: lcv.message, tone: 'good' })
+			} catch (e) {
+				emit('notify', {
+					message: `${res.name} is fine, but the landed cost voucher failed: ${e.message || 'server error'}`,
+					tone: 'bad',
+				})
+			}
+		}
+
 		close()
 	} catch (e) {
 		emit('notify', { message: e.message || 'Could not create the document', tone: 'bad' })
@@ -129,15 +254,14 @@ async function save(submit) {
 }
 
 function controlType(field) {
-	if (field.type === 'link' || field.type === 'item' || field.type === 'select') return 'select'
+	if (field.type === 'select') return 'select'
 	if (field.type === 'date') return 'date'
 	if (field.type === 'number' || field.type === 'currency') return 'number'
 	return 'text'
 }
 
 function optionsFor(field) {
-	if (field.type === 'select') return (field.options || []).map((o) => ({ label: o, value: o }))
-	return options.value[field.fieldname] || []
+	return (field.options || []).map((o) => ({ label: o, value: o }))
 }
 </script>
 
@@ -159,14 +283,23 @@ function optionsFor(field) {
 				</p>
 
 				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-					<FormControl
-						v-for="field in form.fields"
-						:key="field.fieldname"
-						v-model="values[field.fieldname]"
-						:type="controlType(field)"
-						:label="field.required ? `${field.label} *` : field.label"
-						:options="controlType(field) === 'select' ? optionsFor(field) : undefined"
-					/>
+					<template v-for="field in form.fields" :key="field.fieldname">
+						<LinkField
+							v-if="field.type === 'link' || field.type === 'item'"
+							v-model="values[field.fieldname]"
+							:fetcher="linkFetcher(field.fieldname)"
+							:on-create="onCreateFor(field)"
+							:label="field.label"
+							:required="field.required"
+						/>
+						<FormControl
+							v-else
+							v-model="values[field.fieldname]"
+							:type="controlType(field)"
+							:label="field.required ? `${field.label} *` : field.label"
+							:options="controlType(field) === 'select' ? optionsFor(field) : undefined"
+						/>
+					</template>
 				</div>
 
 				<div class="flex flex-col gap-2">
@@ -187,7 +320,15 @@ function optionsFor(field) {
 							:key="field.fieldname"
 							:class="field.type === 'item' ? 'min-w-[200px] flex-1' : 'w-[120px]'"
 						>
+							<LinkField
+								v-if="field.type === 'link' || field.type === 'item'"
+								v-model="line[field.fieldname]"
+								:fetcher="linkFetcher(field.fieldname)"
+								:on-create="onCreateFor(field)"
+								:label="field.label"
+							/>
 							<FormControl
+								v-else
 								v-model="line[field.fieldname]"
 								:type="controlType(field)"
 								:label="field.label"
@@ -211,11 +352,112 @@ function optionsFor(field) {
 						</span>
 					</div>
 				</div>
+
+				<!-- Freight, customs -- cost that lands on top of what the supplier
+				     billed for the goods. Offered here because this is the moment
+				     it is actually known, not a reason to come back and open a
+				     second form once the receipt already exists. -->
+				<div v-if="showsLandedCost" class="flex flex-col gap-2 rounded-lg border border-outline-gray-2 p-3">
+					<label class="flex min-h-touch cursor-pointer items-center gap-3">
+						<input
+							v-model="landedCost.enabled"
+							type="checkbox"
+							class="h-5 w-5 shrink-0 rounded border-outline-gray-3 text-ink-gray-8 focus:ring-outline-gray-3"
+						/>
+						<span class="min-w-0 flex-1">
+							<span class="block text-p-base font-medium text-ink-gray-9">Add landed cost</span>
+							<span class="block text-p-xs text-ink-gray-5">
+								Allocate freight, customs or other charges across these items
+							</span>
+						</span>
+					</label>
+
+					<template v-if="landedCost.enabled">
+						<div
+							v-for="(charge, i) in landedCost.charges"
+							:key="i"
+							class="flex flex-col gap-2 rounded-lg border border-outline-gray-2 p-2.5"
+						>
+							<div class="flex flex-wrap items-end gap-2">
+								<FormControl
+									v-model="charge.description"
+									type="text"
+									label="Charge"
+									placeholder="Freight, customs..."
+									class="min-w-[160px] flex-1"
+								/>
+								<FormControl v-model="charge.amount" type="number" label="Amount" class="w-[120px]" />
+								<LinkField
+									v-model="charge.expense_account"
+									:fetcher="expenseAccountFetcher"
+									label="Expense account"
+									class="min-w-[160px] flex-1"
+								/>
+								<button
+									class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ink-gray-5 transition-colors hover:bg-surface-gray-2 hover:text-ink-red-3"
+									:aria-label="`Remove charge ${i + 1}`"
+									@click="removeCharge(i)"
+								>
+									<LucideX class="h-4 w-4" />
+								</button>
+							</div>
+
+							<!-- Optional: the real bill this charge came from, created
+							     without leaving this form. Reference only -- the amount
+							     above is what actually gets allocated, and stays
+							     editable even once this is attached. -->
+							<div
+								v-if="charge.vendorInvoice"
+								class="flex items-center gap-2 rounded-md bg-surface-green-2 px-2.5 py-1.5 text-p-xs text-ink-green-3"
+							>
+								<span class="min-w-0 flex-1 truncate font-medium">
+									Backed by {{ charge.vendorInvoice.name }}
+									<span v-if="charge.vendorInvoice.grandTotal" class="font-normal">
+										({{ fmtMoney(charge.vendorInvoice.grandTotal) }})
+									</span>
+								</span>
+								<button class="shrink-0 font-medium underline" @click="charge.vendorInvoice = null">
+									Unlink
+								</button>
+							</div>
+							<Button
+								v-else
+								variant="subtle"
+								:icon-left="LucidePlus"
+								label="Create vendor invoice"
+								class="self-start"
+								@click="openVendorInvoice(charge)"
+							/>
+						</div>
+
+						<div class="flex items-center gap-3">
+							<Button variant="subtle" :icon-left="LucidePlus" label="Add charge" @click="addCharge" />
+							<div class="ml-auto w-[180px]">
+								<FormControl
+									v-model="landedCost.distributeBasedOn"
+									type="select"
+									label="Distribute by"
+									:options="['Qty', 'Amount', 'Distribute Manually']"
+								/>
+							</div>
+						</div>
+					</template>
+				</div>
 			</div>
 		</template>
 
 		<template #actions>
-			<div v-if="form" class="flex flex-wrap items-center gap-2">
+			<div v-if="form && forceSubmit" class="flex flex-wrap items-center gap-2">
+				<Button
+					theme="gray"
+					variant="solid"
+					:loading="saving === 'submit'"
+					:disabled="!!blocker || !form.can_submit"
+					:label="blocker || (form.can_submit ? 'Create & submit' : 'You cannot submit this document')"
+					@click="save(true)"
+				/>
+			</div>
+			<div v-else-if="form" class="flex flex-wrap items-center gap-2">
 				<Button
 					theme="gray"
 					variant="solid"
@@ -237,4 +479,23 @@ function optionsFor(field) {
 			</div>
 		</template>
 	</Dialog>
+
+	<!-- Recursive on purpose: raising the freight/customs company's own
+	     invoice is the same form this component already is. Gated on
+	     `allowLandedCost` — not just the checkbox section above, but this
+	     element itself — because an unconditionally-rendered self-reference
+	     mounts its own nested copy at *mount* time regardless of whether its
+	     dialog is open, and that copy mounts another: infinite recursion
+	     before any of them are ever shown. `allow-landed-cost="false"` on the
+	     nested instance means its own copy of this same element does not
+	     render at all, which is what actually breaks the chain. -->
+	<DocumentFormSheet
+		v-if="allowLandedCost"
+		v-model:open="vendorInvoiceOpen"
+		doc-key="purchase-invoice"
+		force-submit
+		:allow-landed-cost="false"
+		@created="onVendorInvoiceCreated"
+		@notify="emit('notify', $event)"
+	/>
 </template>

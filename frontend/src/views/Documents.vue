@@ -79,6 +79,16 @@ const inModule = computed(() => !!moduleFor(route.path))
 const activeKey = computed(() => route.params.key || types.value[0]?.key || null)
 const activeType = computed(() => types.value.find((t) => t.key === activeKey.value) || null)
 
+/**
+ * A receipt or bill is stock or money that has already actually moved, so
+ * these two types get a second, explicit "Bulk" entry point beside the
+ * normal one — same multi-line form, forced straight to submit rather than
+ * left as a draft to remember to come back to. Every other document type
+ * keeps its single "New" button and its normal draft-first default.
+ */
+const BULK_SUBMIT_KEYS = new Set(['purchase-receipt', 'purchase-invoice'])
+const showsBulkButton = computed(() => BULK_SUBMIT_KEYS.has(activeKey.value))
+
 /** Grouped exactly as the reports picker groups reports, for the same reason. */
 const grouped = computed(() => {
 	const m = {}
@@ -184,6 +194,13 @@ const open = ref(false)
 const selected = ref(null)
 /** Raising a new document of the type currently on screen. */
 const newOpen = ref(false)
+/** Whether the form now open should submit immediately rather than draft. */
+const newForceSubmit = ref(false)
+
+function openNew(forceSubmit = false) {
+	newForceSubmit.value = forceSubmit
+	newOpen.value = true
+}
 
 function openRow(row) {
 	selected.value = row.name
@@ -328,25 +345,18 @@ function notify(message, tone = 'good') {
 
 		<div class="flex min-w-0 flex-1 flex-col overflow-hidden">
 			<PageHeader :title="activeType?.label || 'Documents'" :subtitle="subtitle">
-				<!-- Only for types that declare a form and that this user may
-				     create; the server decides both. On the title line rather than
-				     among the filters, so the one control that raises a document is
-				     not a mis-tap away from a period picker. -->
-				<template v-if="activeType?.creatable" #primary>
-					<Button
-						theme="gray"
-						variant="solid"
-						:icon-left="LucidePlus"
-						:label="`New ${activeType.label}`"
-						@click="newOpen = true"
-					/>
-				</template>
-
 				<template #actions>
 					<!-- No button, and the reason why. A missing control with no
 					     explanation reads as something broken. -->
 					<span
-						v-if="!activeType?.creatable && activeType?.create_hint"
+						v-if="!activeType?.creatable && activeType?.no_permission"
+						class="max-w-[320px] text-p-xs text-ink-amber-3"
+					>
+						You don't have permission to create a {{ activeType.label }} — ask an
+						administrator to grant it.
+					</span>
+					<span
+						v-else-if="!activeType?.creatable && activeType?.create_hint"
 						class="max-w-[320px] text-p-xs text-ink-gray-5"
 						:title="activeType.create_hint"
 					>
@@ -383,6 +393,27 @@ function notify(message, tone = 'good') {
 						:loading="loading"
 						@click="load"
 					/>
+					<!-- Last, and pushed to the far end of the row with `ml-auto`: the
+					     title line wraps on a narrow screen before this row's filters
+					     do, so a button anchored there moves around depending on how
+					     long the title happens to be. This row is the stable one. -->
+					<div v-if="activeType?.creatable" class="ml-auto flex flex-wrap items-center gap-2">
+						<Button
+							theme="gray"
+							variant="solid"
+							:icon-left="LucidePlus"
+							:label="`New ${activeType.label}`"
+							@click="openNew(false)"
+						/>
+						<!-- Same form, forced to submit — see `showsBulkButton`. -->
+						<Button
+							v-if="showsBulkButton"
+							variant="outline"
+							:icon-left="LucidePlus"
+							:label="`Bulk ${activeType.label}`"
+							@click="openNew(true)"
+						/>
+					</div>
 				</template>
 			</PageHeader>
 
@@ -499,6 +530,7 @@ function notify(message, tone = 'good') {
 		<DocumentFormSheet
 			v-model:open="newOpen"
 			:doc-key="activeKey"
+			:force-submit="newForceSubmit"
 			@created="load"
 			@notify="notify($event.message, $event.tone)"
 		/>

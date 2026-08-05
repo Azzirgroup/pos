@@ -36,7 +36,7 @@ export const useCartStore = defineStore('cart', () => {
 	 * in-stock line — they have different costs, and merging them would hide
 	 * the margin and produce a wrong Purchase Receipt.
 	 */
-	function add(item, qty = 1, { sourced = null, uom = null } = {}) {
+	function add(item, qty = 1, { sourced = null, uom = null, negativeStockOk = false } = {}) {
 		// The unit being sold, and what one of it costs. `uoms[0]` is always the
 		// stock unit at factor 1, so an item nobody has configured a second unit
 		// for behaves exactly as before.
@@ -52,6 +52,10 @@ export const useCartStore = defineStore('cart', () => {
 			)
 			if (existing) {
 				existing.qty = round2(existing.qty + qty)
+				// Sticky once granted: a line already sold past the shelf count has
+				// already had that conversation, and re-asking on every `+` tap is
+				// the bug this flag exists to fix.
+				if (negativeStockOk) existing.negativeStockOk = true
 				lastTouched.value = existing.id
 				return existing
 			}
@@ -75,6 +79,10 @@ export const useCartStore = defineStore('cart', () => {
 			qty,
 			discountPct: 0,
 			sourced,
+			// Once a cashier has agreed to sell this line past the shelf count, the
+			// question is answered — every `+` after that should just increment,
+			// not ask again for the same line.
+			negativeStockOk,
 		}
 		lines.value.push(line)
 		lastTouched.value = line.id

@@ -36,6 +36,9 @@ export const MODULE_TABS = {
 	],
 	sales: [
 		{ label: 'Overview', to: '/sales' },
+		// Ahead of the fulfilment tabs, in the order a sale actually happens: a
+		// price is given before anything is delivered or invoiced.
+		{ label: 'Quotations', to: '/documents/quotation' },
 		{ label: 'Deliveries', to: '/documents/delivery-note' },
 		{ label: 'Invoices', to: '/documents/sales-invoice' },
 		{ label: 'Payments', to: '/documents/payment-entry' },
@@ -67,6 +70,7 @@ export const MODULE_TABS = {
  * rather than to a back-office module.
  */
 const DOCUMENT_MODULE = {
+	quotation: 'sales',
 	'sales-order': 'sales',
 	'delivery-note': 'sales',
 	'sales-invoice': 'sales',

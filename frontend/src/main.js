@@ -31,6 +31,20 @@ app.mount('#app')
  * unless the server sends `Service-Worker-Allowed`, so this does not ask — the
  * assets get cached, and offline *navigation* waits for that header to exist.
  *
+ * `updateViaCache: 'none'` matters more than it looks: this file is served
+ * from the same `/assets/…` mount as the hashed build output, which the
+ * server sends with a long `max-age` — correct for a file whose name changes
+ * every build, wrong for this one, whose name never does. Without this
+ * option, a browser can keep running yesterday's worker, cache-first-serving
+ * hashes a new deploy already deleted, for as long as that header says —
+ * surviving a normal reload. This forces every registration check straight to
+ * the network regardless of that header, which is what actually makes a new
+ * deploy take effect promptly.
+ *
+ * A plain runtime path, not `new URL(..., import.meta.url)`: the worker is
+ * copied verbatim from `public/` and is not a module the bundler resolves, so
+ * asking Rollup to trace it only produces a warning and the wrong URL.
+ *
  * Failure is swallowed on purpose. A worker is an optimisation; a till that
  * refuses to start because caching is unavailable would be a much worse bug
  * than a slow first load.
@@ -38,35 +52,8 @@ app.mount('#app')
 if (import.meta.env.PROD && 'serviceWorker' in navigator) {
 	window.addEventListener('load', () => {
 		navigator.serviceWorker
-			.register('/assets/cosmestics/frontend/sw.js')
+			.register('/assets/cosmestics/frontend/sw.js', { updateViaCache: 'none' })
 			.catch((e) => console.warn('[pos] service worker not registered:', e.message))
-	})
-}
-
-/**
- * Cache the build assets so a cold load on a bad connection is not a blank
- * screen.
- *
- * Registered without an explicit scope, so it takes the directory it is served
- * from — the built asset folder. That is all it can claim: a worker may only
- * control URLs beneath its own path, and widening it to `/pos` needs a
- * `Service-Worker-Allowed` header the app cannot set from here.
- *
- * So this speeds up loading and does not make the app work offline. Registering
- * with `{ scope: '/pos' }` would simply throw, which is worse than being clear
- * about the limit.
- *
- * Failure is ignored on purpose: an unregistered worker costs a slower load,
- * and a till must never fail to start over a cache.
- */
-if ('serviceWorker' in navigator && import.meta.env.PROD) {
-	window.addEventListener('load', () => {
-		// A plain runtime path, not `new URL(..., import.meta.url)`: the worker is
-		// copied verbatim from `public/` and is not a module the bundler resolves,
-		// so asking Rollup to trace it only produces a warning and the wrong URL.
-		navigator.serviceWorker
-			.register('/assets/cosmestics/frontend/sw.js')
-			.catch((e) => console.warn('[pos] asset cache unavailable:', e.message))
 	})
 }
 

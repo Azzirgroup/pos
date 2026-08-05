@@ -55,15 +55,20 @@ watch(
 				>
 					<option v-for="u in line.units" :key="u.uom" :value="u.uom">{{ u.uom }}</option>
 				</select>
-				<span v-if="!allowRateChange">{{ fmtMoneyShort(line.rate) }} / {{ line.uom }}</span>
-				<span v-else class="inline-flex items-center gap-0.5">
+				<!-- Blue: a per-unit price is the same kind of figure as the running
+				     total in the toolbar and the subtotal below — a number to read,
+				     not a warning or a result. -->
+				<span v-if="!allowRateChange" class="font-medium text-ink-blue-3">
+					{{ fmtMoneyShort(line.rate) }} / {{ line.uom }}
+				</span>
+				<span v-else class="inline-flex items-center gap-0.5 text-ink-blue-3">
 					<input
 						:value="line.rate"
 						type="number"
 						min="0"
 						step="0.01"
 						inputmode="decimal"
-						class="tabular h-6 w-16 rounded border border-outline-gray-2 bg-surface-gray-2 px-1 text-right text-p-xs font-medium text-ink-gray-8 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						class="tabular h-6 w-16 rounded border border-outline-blue-1 bg-surface-blue-1 px-1 text-right text-p-xs font-medium text-ink-blue-3 focus:border-outline-blue-2 focus:bg-surface-white focus:outline-none"
 						:aria-label="`Rate for ${line.item_name}`"
 						@focus="$event.target.select()"
 						@change="onRateChange"
@@ -73,8 +78,10 @@ watch(
 				</span>
 				<!-- What actually leaves the shelf, when that differs from what was
 				     typed. A cashier selling two dozen should see "24 pcs" without
-				     doing the arithmetic. -->
-				<span v-if="(line.conversionFactor || 1) !== 1" class="text-ink-gray-4">
+				     doing the arithmetic. Violet, matching the same "this counter,
+				     right now" family the active tab and signed-in chip use — it is
+				     a fact about this specific sale, not a price or a warning. -->
+				<span v-if="(line.conversionFactor || 1) !== 1" class="font-medium text-violet-600">
 					= {{ (line.qty * line.conversionFactor).toLocaleString() }} {{ line.units?.[0]?.uom }}
 				</span>
 				<span

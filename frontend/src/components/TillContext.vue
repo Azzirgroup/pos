@@ -63,7 +63,7 @@ const chips = computed(() => {
 			icon: LucideStore,
 			label: c.branch,
 			title: `Till ${c.branch}`,
-			tone: 'plain',
+			tone: 'branch',
 		})
 	}
 	if (c.warehouse) {
@@ -72,16 +72,21 @@ const chips = computed(() => {
 			icon: LucideWarehouse,
 			label: c.warehouse_label || c.warehouse,
 			title: `Selling from ${c.warehouse}`,
-			tone: 'plain',
+			tone: 'warehouse',
 		})
 	}
 	return out
 })
 
+// One tone per kind of fact, not per chip — a cashier scanning this row reads
+// colour before text, and "till" and "warehouse" should look different from
+// each other even when their labels are both short place names.
 const CHIP_TONES = {
 	open: 'bg-surface-green-2 text-ink-green-3',
 	shut: 'bg-surface-amber-2 text-ink-amber-3',
 	plain: 'bg-surface-gray-2 text-ink-gray-7',
+	branch: 'bg-surface-blue-2 text-ink-blue-3',
+	warehouse: 'bg-surface-violet-1 text-violet-600',
 }
 </script>
 
@@ -106,7 +111,7 @@ const CHIP_TONES = {
 			:title="me?.user"
 		>
 			<span
-				class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-surface-gray-7 text-[9px] font-semibold text-ink-white"
+				class="grid h-5 w-5 shrink-0 place-items-center rounded-full bg-violet-600 text-[9px] font-semibold text-ink-white"
 			>
 				{{ initials }}
 			</span>

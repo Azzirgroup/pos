@@ -5,18 +5,47 @@ from frappe import _
 from frappe.utils import add_to_date, flt, nowdate
 
 
+@frappe.whitelist()
+def warehouse_qtys(item_codes: list | str, warehouse: str) -> dict:
+	"""Actual stock of each item in one named warehouse.
+
+	For the material-request sheet: a cashier picking "Request from" a branch
+	should see what that branch actually holds before asking for more of it
+	than it has — the request still goes through either way, but a number on
+	screen beats finding out from whoever reads the WhatsApp message.
+	"""
+	if isinstance(item_codes, str):
+		item_codes = frappe.parse_json(item_codes)
+
+	if not item_codes or not warehouse:
+		return {}
+
+	rows = frappe.get_all(
+		"Bin",
+		filters={"item_code": ("in", item_codes), "warehouse": warehouse},
+		fields=["item_code", "actual_qty"],
+	)
+	return {r.item_code: flt(r.actual_qty) for r in rows}
+
+
 @frappe.whitelist(methods=["POST"])
 def request_transfer(
 	items: list | str,
-	from_warehouse: str,
+	from_warehouse: str | None = None,
 	to_warehouse: str | None = None,
 	company: str | None = None,
 ):
 	"""Raise a Material Transfer request for stock held at another branch.
 
-	`items` is a list of {item_code, qty}. Submitted immediately — a draft sitting
-	in a queue helps nobody when a customer is standing at the counter, and the
-	WhatsApp notification fires off `on_submit`.
+	`items` is a list of {item_code, qty, from_warehouse}. Different lines can
+	each name their own branch — a shop with more than one place to ask does
+	not always want everything from the same one. The top-level
+	`from_warehouse` is only a fallback for a line that does not name its own,
+	kept for callers with a single source for the whole request.
+
+	Submitted immediately — a draft sitting in a queue helps nobody when a
+	customer is standing at the counter, and the WhatsApp notification fires
+	off `on_submit`.
 	"""
 	if isinstance(items, str):
 		items = frappe.parse_json(items)
@@ -24,14 +53,8 @@ def request_transfer(
 	if not items:
 		frappe.throw(_("No items to request"))
 
-	if not from_warehouse:
-		frappe.throw(_("Select the branch to request from"))
-
 	company = company or frappe.defaults.get_user_default("Company")
 	to_warehouse = to_warehouse or _default_warehouse(company)
-
-	if from_warehouse == to_warehouse:
-		frappe.throw(_("Source and target branch cannot be the same"))
 
 	mr = frappe.new_doc("Material Request")
 	mr.material_request_type = "Material Transfer"
@@ -39,19 +62,28 @@ def request_transfer(
 	mr.transaction_date = nowdate()
 	# Same-day: the customer is waiting, not scheduling a replenishment.
 	mr.schedule_date = nowdate()
-	mr.set_from_warehouse = from_warehouse
+	# Only meaningful when every line agrees — set as a convenience default for
+	# the desk to show, never relied on for what actually gets requested.
+	warehouses_used = {row.get("from_warehouse") or from_warehouse for row in items}
+	if len(warehouses_used) == 1:
+		mr.set_from_warehouse = next(iter(warehouses_used))
 
 	for row in items:
 		qty = flt(row.get("qty"))
 		if qty <= 0:
 			continue
+		row_from = row.get("from_warehouse") or from_warehouse
+		if not row_from:
+			frappe.throw(_("Select which branch to request {0} from").format(row.get("item_code")))
+		if row_from == to_warehouse:
+			frappe.throw(_("Source and target branch cannot be the same"))
 		mr.append(
 			"items",
 			{
 				"item_code": row.get("item_code"),
 				"qty": qty,
 				"warehouse": to_warehouse,
-				"from_warehouse": from_warehouse,
+				"from_warehouse": row_from,
 				"schedule_date": nowdate(),
 			},
 		)

@@ -30,7 +30,8 @@ import {
 	payCreditSale,
 } from '@/data/api'
 
-import { Button, Dialog, FormControl, TabButtons } from 'frappe-ui'
+import { Button, Dialog, FormControl } from 'frappe-ui'
+import PillTabs from '@/components/PillTabs.vue'
 import ItemGrid from '@/components/ItemGrid.vue'
 import CartPanel from '@/components/CartPanel.vue'
 import MobileCartBar from '@/components/MobileCartBar.vue'
@@ -104,6 +105,16 @@ const stockSheet = ref(false)
 const stockItem = ref(null)
 /** How many units short the cart is — pre-fills the sourcing form. */
 const stockShortfall = ref(1)
+/**
+ * The total quantity actually wanted on the line, as opposed to the shortfall.
+ *
+ * The two agree only when nothing of the item is in the cart yet and none of
+ * it is sourced — otherwise the shortfall undercounts what should end up on
+ * the line. "Sell anyway" needs the real total: it sets the line to this
+ * quantity rather than adding to it, so pressing `+` on an already-short line
+ * moves it from 1 to 2, not from 1 to 1-plus-whatever-the-shortfall-was.
+ */
+const stockWantQty = ref(1)
 const scanFlash = ref(0)
 
 /* ---------- shift ---------- */
@@ -556,6 +567,13 @@ function notify(message, tone = 'info') {
  * Returns true when the sheet was opened, so callers can leave the cart alone.
  */
 function promptIfShort(item, wantQty) {
+	// Already agreed once for this line — a `+` on a cart line that is
+	// deliberately selling past the shelf count is a quantity change, not a
+	// new decision, and re-opening the sheet on every tap was the bug.
+	if (lines.value.some((l) => l.item_code === item.item_code && l.negativeStockOk)) {
+		return false
+	}
+
 	const stock = Number(item.stock) || 0
 	const sourcedQty = lines.value
 		.filter((l) => l.item_code === item.item_code && l.sourced)
@@ -567,6 +585,7 @@ function promptIfShort(item, wantQty) {
 	// Pre-filled with the gap rather than 1: the cashier is short by a specific
 	// number and should not have to work it out under a queue.
 	stockShortfall.value = Math.max(1, Math.ceil(wantQty - sourcedQty - stock))
+	stockWantQty.value = Math.max(1, Math.ceil(wantQty))
 	stockSheet.value = true
 	return true
 }
@@ -632,8 +651,20 @@ function cartSetQty(id, qty) {
 	cart.setQty(id, qty)
 }
 
-function sellAnyway({ item, qty }) {
-	cart.add(item, qty)
+function sellAnyway({ item }) {
+	// Ignores the sheet's own `qty` — that field carries the shelf shortfall,
+	// which is only the right number to *add* when the cart holds none of the
+	// item yet. Once some is already on the line, `cart.add` would stack the
+	// shortfall on top of it instead of reaching the total actually wanted —
+	// see `stockWantQty`.
+	const line = lines.value.find((l) => l.item_code === item.item_code && !l.sourced)
+	if (line) {
+		cart.setQty(line.id, stockWantQty.value)
+		// Marks the line so future `+` taps skip the sheet — see `promptIfShort`.
+		line.negativeStockOk = true
+	} else {
+		cart.add(item, stockWantQty.value, { negativeStockOk: true })
+	}
 	notify(`${item.item_name} added — stock will go negative`, 'warn')
 }
 
@@ -650,10 +681,10 @@ function sourceFromNeighbour({ item, qty, buyQty, supplier, buyRate, paidNow }) 
 	)
 }
 
-async function requestTransfer({ item, qty, warehouse }) {
+async function requestTransfer({ items, warehouse }) {
 	try {
 		const res = await apiRequestTransfer({
-			items: [{ item_code: item.item_code, qty }],
+			items,
 			fromWarehouse: warehouse,
 		})
 		// It used to say "sent to WhatsApp" unconditionally, which the app had no
@@ -1074,13 +1105,16 @@ useShortcuts({
 		<div
 			class="flex shrink-0 items-center gap-2 border-b border-outline-gray-2 bg-surface-white px-3 py-1.5"
 		>
-			<TabButtons v-model="mode" :buttons="MODES" />
+			<PillTabs v-model="mode" :buttons="MODES" inset />
 			<div class="ml-auto flex min-w-0 items-center gap-2">
 				<!-- Who is selling, from which till and warehouse. Moved off the app
 				     header, where it sat above screens it had nothing to do with;
 				     here it is beside the cart it actually describes. -->
 				<TillContext class="hidden md:flex" />
-				<span class="tabular shrink-0 rounded-md border border-outline-gray-2 px-2 py-1 text-p-xs text-ink-gray-6">
+				<!-- Blue for the same reason `utils/tone.js` reserves it for any
+				     figure with no good/bad meaning of its own — this is a running
+				     total, not a warning or a result. -->
+				<span class="tabular shrink-0 rounded-md border border-outline-blue-2 bg-surface-blue-2 px-2 py-1 text-p-xs font-medium text-ink-blue-3">
 					{{ count }} {{ count === 1 ? 'item' : 'items' }} · {{ fmtMoney(total) }}
 				</span>
 			</div>
@@ -1152,41 +1186,69 @@ useShortcuts({
 			<!-- Appears only once there is something to print, and names the
 			     invoice: a cashier three customers later needs to know which sale
 			     this receipt is for before pressing it. -->
+			<!-- Green: a receipt to reprint is a sale that already went through. -->
 			<Button
 				v-if="lastSale"
 				variant="subtle"
+				theme="green"
 				:icon-left="LucidePrinter"
 				:label="`Receipt ${lastSale.invoice}`"
 				@click="printReceipt()"
 			/>
+			<!-- Blue, matching the running total beside it — both are "figures to
+			     look up", not warnings or results. -->
 			<Button
 				variant="subtle"
+				theme="blue"
 				:icon-left="LucideReceiptText"
 				label="Recent sales"
 				@click="openRecent"
 			/>
+			<!-- Green to start a shift, amber to end one — the same open/shut
+			     colours `TillContext`'s shift chip uses, so the two never disagree
+			     about what "open" looks like. -->
+			<!-- `!` on each utility below: Button defaults to a gray theme
+			     internally even with no `theme` prop passed, so a plain override
+			     class collides with its bg/text at equal specificity and the
+			     winner depends on Tailwind's generated source order — not which
+			     class was written last here. The `!important` modifier makes the
+			     override actually win. -->
 			<Button
 				variant="subtle"
+				:class="
+					shift
+						? '!bg-surface-amber-2 !text-ink-amber-3 hover:!bg-amber-200 active:!bg-amber-300'
+						: '!bg-surface-green-2 !text-green-800 hover:!bg-green-200 active:!bg-green-300'
+				"
 				:icon-left="shift ? LucideSunset : LucideSunrise"
 				:label="shift ? 'Close shift' : 'Open shift'"
 				@click="openShiftSheet()"
 			/>
+			<!-- Violet: a cart set aside, same family as the signed-in chip and the
+			     active mode tab — all three are "this counter, right now". -->
 			<Button
 				variant="subtle"
+				class="!bg-surface-violet-1 !text-violet-600 hover:!bg-violet-200 active:!bg-violet-300"
 				:icon-left="LucideLayers"
 				:label="held.length ? `Held (${held.length})` : 'Held'"
 				@click="heldSheet = true"
 			/>
+			<!-- Amber: a quote is a price nothing has been paid against yet — the
+			     same "not settled" meaning amber carries on the shift chip. -->
 			<!-- Beside Held on purpose: both answer "keep this basket for later",
 			     and the difference is only whether it has to survive the tab. -->
 			<Button
 				variant="subtle"
+				class="!bg-surface-amber-2 !text-ink-amber-3 hover:!bg-amber-200 active:!bg-amber-300"
 				:icon-left="LucideFileText"
 				label="Quotes"
 				@click="quotationSheet = true"
 			/>
+			<!-- Blue once a real customer is named — walk-in stays neutral because
+			     there is nothing yet to look up. -->
 			<Button
 				variant="subtle"
+				:theme="customer ? 'blue' : 'gray'"
 				:icon-left="LucideUserRound"
 				:label="customer ? (customer.customer_name || customer.name) : 'Walk-in'"
 				@click="pickCustomer(false)"

@@ -137,9 +137,11 @@ watch(
 			</div>
 
 			<dl class="tabular space-y-1.5 text-p-sm">
-				<div class="flex justify-between text-ink-gray-6">
-					<dt>Subtotal</dt>
-					<dd>{{ fmtMoneyShort(grossTotal) }}</dd>
+				<!-- Blue, matching the per-unit price on every line above and the
+				     running total in the toolbar — the same figure, summed. -->
+				<div class="flex justify-between text-ink-blue-3">
+					<dt class="font-medium text-ink-gray-6">Subtotal</dt>
+					<dd class="font-medium">{{ fmtMoneyShort(grossTotal) }}</dd>
 				</div>
 				<!-- A whole-sale discount, on top of anything already taken off a
 				     line. Always editable rather than hidden behind a button: the
@@ -171,9 +173,12 @@ watch(
 						/>
 					</dd>
 				</div>
-				<div class="flex justify-between text-ink-gray-5">
-					<dt>VAT {{ Math.round(cart.vatRate * 100) }}% (incl.)</dt>
-					<dd>{{ fmtMoneyShort(taxAmount) }}</dd>
+				<!-- Violet: the same "detail about this specific sale" family the
+				     conversion note on each line uses, distinct from the blue money
+				     figures either side of it. -->
+				<div class="flex justify-between">
+					<dt class="text-ink-gray-6">VAT {{ Math.round(cart.vatRate * 100) }}% (incl.)</dt>
+					<dd class="font-medium text-violet-600">{{ fmtMoneyShort(taxAmount) }}</dd>
 				</div>
 			</dl>
 

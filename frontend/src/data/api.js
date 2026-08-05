@@ -273,10 +273,20 @@ export const createCustomer = ({ customerName, mobileNo }) =>
 /** Raise a Material Transfer request for stock held at another store. */
 export function requestTransfer({ items, fromWarehouse }) {
 	return call('cosmestics.api.stock.request_transfer', {
-		items: items.map((i) => ({ item_code: i.item_code, qty: i.qty })),
-		from_warehouse: fromWarehouse,
+		items: items.map((i) => ({
+			item_code: i.item_code,
+			qty: i.qty,
+			// Each line can name its own branch; `fromWarehouse` below is only
+			// the fallback for a caller with a single source for everything.
+			from_warehouse: i.from_warehouse || i.fromWarehouse || null,
+		})),
+		from_warehouse: fromWarehouse || null,
 	})
 }
+
+/** What a specific warehouse actually holds of each item — {item_code: qty}. */
+export const getWarehouseQtys = ({ itemCodes, warehouse }) =>
+	call('cosmestics.api.stock.warehouse_qtys', { item_codes: itemCodes, warehouse })
 
 /* ---------- reorder ---------- */
 
@@ -408,6 +418,20 @@ export const createDocument = ({ key, values, items, submit }) =>
 
 export const getDocumentInsights = ({ key, days }) =>
 	call('cosmestics.api.documents.insights', { key, days })
+
+/** Accounts a landed cost charge can book to. */
+export const getExpenseAccounts = (search) =>
+	call('cosmestics.api.documents.expense_accounts', { search: search || null })
+
+/** Allocate freight/customs/etc. across a just-submitted receipt or invoice. */
+export const createLandedCostVoucher = ({ receiptKey, receiptName, charges, vendorInvoices, distributeBasedOn }) =>
+	call('cosmestics.api.documents.create_landed_cost_voucher', {
+		receipt_key: receiptKey,
+		receipt_name: receiptName,
+		charges,
+		vendor_invoices: vendorInvoices || null,
+		distribute_based_on: distributeBasedOn || 'Qty',
+	})
 
 /* ---------- barcodes ---------- */
 

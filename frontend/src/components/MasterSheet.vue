@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { Button, Dialog, FormControl, Spinner } from 'frappe-ui'
 import { createMaster, getMasterOptions, getMasterRecord, listMasterTypes, updateMaster } from '@/data/api'
 import { resolveIcon } from '@/utils/icons'
+import LinkField from './LinkField.vue'
 import LucidePlus from '~icons/lucide/plus'
 import LucideExternalLink from '~icons/lucide/external-link'
 
@@ -31,7 +32,6 @@ const emit = defineEmits(['update:open', 'created', 'notify'])
 const types = ref([])
 const activeKey = ref(null)
 const values = ref({})
-const linkOptions = ref({})
 const saving = ref(false)
 const loading = ref(false)
 const created = ref(null)
@@ -63,28 +63,16 @@ watch(
 	{ immediate: true },
 )
 
-async function pick(key) {
+function pick(key) {
 	if (!key) return
 	activeKey.value = key
 	editing.value = null
 	values.value = {}
 	created.value = null
-	linkOptions.value = {}
-
-	// Link options are fetched per field so each dropdown is scoped to what that
-	// field can actually hold — a generic "search any doctype" call would be a
-	// way to read any table in the system.
-	const type = types.value.find((t) => t.key === key)
-	await Promise.all(
-		(type?.fields || [])
-			.filter((f) => f.type === 'link')
-			.map(async (f) => {
-				linkOptions.value[f.fieldname] = await getMasterOptions({
-					key,
-					fieldname: f.fieldname,
-				}).catch(() => [])
-			}),
-	)
+	// Link fields (`LinkField`) search the server themselves as the cashier
+	// types, rather than choosing from a list pre-fetched here — see that
+	// component for why. Only plain `select` fields still read from
+	// `field.options`, fixed choices the server already sent with the type.
 }
 
 const canSave = computed(
@@ -132,8 +120,7 @@ async function save() {
 }
 
 function optionsFor(field) {
-	if (field.type === 'select') return (field.options || []).map((o) => ({ label: o || '—', value: o }))
-	return linkOptions.value[field.fieldname] || []
+	return (field.options || []).map((o) => ({ label: o || '—', value: o }))
 }
 </script>
 
@@ -183,14 +170,22 @@ function optionsFor(field) {
 				</p>
 
 				<div v-if="active" class="grid gap-3 sm:grid-cols-2">
-					<FormControl
-						v-for="field in active.fields"
-						:key="field.fieldname"
-						v-model="values[field.fieldname]"
-						:type="field.type === 'link' || field.type === 'select' ? 'select' : field.type === 'currency' ? 'number' : 'text'"
-						:label="field.required ? `${field.label} *` : field.label"
-						:options="field.type === 'link' || field.type === 'select' ? optionsFor(field) : undefined"
-					/>
+					<template v-for="field in active.fields" :key="field.fieldname">
+						<LinkField
+							v-if="field.type === 'link'"
+							v-model="values[field.fieldname]"
+							:fetcher="(search) => getMasterOptions({ key: activeKey, fieldname: field.fieldname, search })"
+							:label="field.label"
+							:required="field.required"
+						/>
+						<FormControl
+							v-else
+							v-model="values[field.fieldname]"
+							:type="field.type === 'select' ? 'select' : field.type === 'currency' ? 'number' : 'text'"
+							:label="field.required ? `${field.label} *` : field.label"
+							:options="field.type === 'select' ? optionsFor(field) : undefined"
+						/>
+					</template>
 				</div>
 
 				<!-- Confirmation stays on screen so several can be added in a row,

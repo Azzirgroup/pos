@@ -25,6 +25,7 @@ declare module 'vue' {
     HeldSheet: typeof import('./src/components/HeldSheet.vue')['default']
     ItemCell: typeof import('./src/components/ItemCell.vue')['default']
     ItemGrid: typeof import('./src/components/ItemGrid.vue')['default']
+    LinkField: typeof import('./src/components/LinkField.vue')['default']
     MasterSheet: typeof import('./src/components/MasterSheet.vue')['default']
     MobileCartBar: typeof import('./src/components/MobileCartBar.vue')['default']
     ModuleTabs: typeof import('./src/components/ModuleTabs.vue')['default']

@@ -49,6 +49,7 @@ TOTAL_FIELDS = (
 # instead. Stated rather than left blank: a screen with no New button and no
 # reason looks broken, when in fact making one here would be the wrong move.
 NOT_CREATABLE = {
+	"quotation": "Given at the till, where a price is what a customer was actually told. Load one back into the cart from there to turn it into a sale.",
 	"pos-invoice": "ERPNext's offline till document. This app posts Sales Invoices, so raise one of those.",
 	"pos-opening": "Created by opening a shift at the till.",
 	"pos-closing": "Created by closing a shift at the till, so it reconciles against what was counted.",
@@ -109,6 +110,25 @@ DOCUMENTS = [
 			"items": _lines(),
 			"hint": "For invoices raised off the till. Sales rung up at the counter post themselves.",
 		},
+	},
+	{
+		# Raised at the till by `cosmestics.api.quotations.create`, or from the
+		# desk. Not creatable from this generic form — the till's own flow is
+		# where a quote is actually given, and it prices lines from what the
+		# cashier told the customer rather than re-deriving them here.
+		"key": "quotation",
+		"doctype": "Quotation",
+		"group": "Sales",
+		"icon": "file",
+		"date_field": "transaction_date",
+		"party_field": "party_name",
+		"amount_field": "grand_total",
+		"columns": ["name", "transaction_date", "party_name", "status", "valid_till", "grand_total"],
+		"detail": ["quotation_to", "valid_till", "order_type", "company", "terms"],
+		"tables": [
+			("items", ["item_code", "item_name", "qty", "uom", "rate", "amount"]),
+			("taxes", ["description", "rate", "tax_amount"]),
+		],
 	},
 	{
 		# ERPNext's own POS Invoice, used by sites running the offline till. This
@@ -587,6 +607,16 @@ def list_types() -> list:
 				if d["key"] in NOT_CREATABLE
 				else (_(d["create"]["hint"]) if d.get("create", {}).get("hint") else None),
 				"cannot_create": d["key"] in NOT_CREATABLE,
+				# Distinct from `cannot_create`: this type *can* be raised from here in
+				# principle — it has a form — but this user's role cannot submit one.
+				# Without this, the screen fell back to `create_hint`'s creation tip
+				# (meant to sit beside the button, not explain its absence) or, for a
+				# type with no hint at all, to plain silence — a missing button with
+				# no reason looks like a bug rather than a permission a manager needs
+				# to grant.
+				"no_permission": bool(d.get("create"))
+				and d["key"] not in NOT_CREATABLE
+				and not frappe.has_permission(d["doctype"], "create"),
 			}
 		)
 	return out
@@ -1158,9 +1188,123 @@ def create_document(key: str, values: dict | str, items: list | str, submit: int
 		"doctype": doctype,
 		"name": doc.name,
 		"docstatus": cint(doc.docstatus),
+		# So a caller chaining a second document off this one (a landed cost
+		# voucher off a bulk receipt, say) has a total to default a charge to
+		# without a second round trip just to read it back.
+		"grand_total": flt(doc.get("grand_total")) if _has(doctype, "grand_total") else None,
 		"message": _("{0} created").format(doc.name)
 		if not cint(submit)
 		else _("{0} created and submitted").format(doc.name),
+	}
+
+
+@frappe.whitelist()
+def expense_accounts(search: str | None = None, limit: int = 20) -> list:
+	"""Accounts a landed cost charge can book to.
+
+	Its own lookup rather than routed through `link_options`, which only
+	serves fields a `create` spec actually declares — no registered document
+	asks for an account this way, a landed cost charge is the first.
+	"""
+	filters = {"is_group": 0, "disabled": 0}
+	company = _company()
+	if company:
+		filters["company"] = company
+	if search:
+		filters["name"] = ("like", f"%{search}%")
+
+	return [
+		{"label": r, "value": r}
+		for r in frappe.get_all(
+			"Account", filters=filters, pluck="name", order_by="name asc", limit_page_length=cint(limit)
+		)
+	]
+
+
+@frappe.whitelist(methods=["POST"])
+def create_landed_cost_voucher(
+	receipt_key: str,
+	receipt_name: str,
+	charges: list | str,
+	vendor_invoices: list | str | None = None,
+	distribute_based_on: str = "Qty",
+) -> dict:
+	"""Allocate additional cost — freight, customs — across a receipt or
+	invoice's items, the same way ERPNext's own Landed Cost Voucher does.
+
+	`charges` is [{description, amount, expense_account}] — what the voucher
+	actually distributes across the items; the whole reason it exists.
+	`vendor_invoices` is [{name, amount}], optional: real Purchase Invoices
+	from whoever billed the charge (a freight or customs company), kept as a
+	reference total rather than part of the allocation itself — that is what
+	ERPNext's own `total_vendor_invoices_cost` does with them, and reworking
+	that split would drift from what the standard voucher reports.
+
+	`items` is deliberately left unset: ERPNext's own `validate()` pulls them
+	from `purchase_receipts` via `get_items_from_purchase_receipts` when the
+	table is empty, and reimplementing that by hand would drift from what the
+	standard report expects.
+	"""
+	if isinstance(charges, str):
+		charges = frappe.parse_json(charges)
+	if isinstance(vendor_invoices, str):
+		vendor_invoices = frappe.parse_json(vendor_invoices)
+
+	if not charges:
+		frappe.throw(_("Add at least one charge to allocate"))
+
+	entry = _entry(receipt_key)
+	doctype = entry["doctype"]
+	if doctype not in ("Purchase Receipt", "Purchase Invoice"):
+		frappe.throw(_("Landed cost can only be added to a Purchase Receipt or Purchase Invoice"))
+
+	receipt = frappe.get_doc(doctype, receipt_name)
+	if receipt.docstatus != 1:
+		frappe.throw(_("{0} must be submitted before landed cost can be added").format(receipt.name))
+
+	lcv = frappe.new_doc("Landed Cost Voucher")
+	lcv.company = receipt.company
+	lcv.posting_date = nowdate()
+	lcv.distribute_charges_based_on = distribute_based_on or "Qty"
+	lcv.append(
+		"purchase_receipts",
+		{
+			"receipt_document_type": doctype,
+			"receipt_document": receipt.name,
+			"supplier": receipt.get("supplier"),
+			"posting_date": receipt.posting_date,
+			"grand_total": receipt.grand_total,
+		},
+	)
+
+	for c in charges:
+		amount = flt(c.get("amount"))
+		if amount <= 0:
+			continue
+		lcv.append(
+			"taxes",
+			{
+				"description": c.get("description") or _("Landed cost"),
+				"amount": amount,
+				"expense_account": c.get("expense_account"),
+			},
+		)
+
+	if not lcv.taxes:
+		frappe.throw(_("Add at least one charge with an amount above zero"))
+
+	for v in vendor_invoices or []:
+		if not v.get("name"):
+			continue
+		lcv.append("vendor_invoices", {"vendor_invoice": v["name"], "amount": flt(v.get("amount"))})
+
+	lcv.insert()
+	lcv.submit()
+
+	return {
+		"name": lcv.name,
+		"total_taxes_and_charges": flt(lcv.total_taxes_and_charges),
+		"message": _("{0} created — landed cost applied to {1}").format(lcv.name, receipt.name),
 	}
 
 
