@@ -30,7 +30,7 @@ export const MODULE_TABS = {
 		{ label: 'Overview', to: '/purchasing' },
 		{ label: 'Requests', to: '/documents/material-request' },
 		{ label: 'Receipts', to: '/documents/purchase-receipt' },
-		{ label: 'Bills', to: '/documents/purchase-invoice' },
+		{ label: 'Invoices', to: '/documents/purchase-invoice' },
 		{ label: 'Landed costs', to: '/documents/landed-cost-voucher' },
 		{ label: 'Suppliers', to: '/suppliers' },
 	],

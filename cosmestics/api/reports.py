@@ -611,14 +611,11 @@ def _sales_returns(days, _wh):
 def _neighbour_returns(days, _wh):
 	"""Stock sent back to the shop it was bought from.
 
-	Scoped to the neighbour supplier group, because a return to a wholesaler is
-	ordinary purchasing and a return to the shop next door is the till undoing
-	something it did mid-sale — different people chase them.
+	Scoped to suppliers flagged as neighbour shops, because a return to a
+	wholesaler is ordinary purchasing and a return to the shop next door is
+	the till undoing something it did mid-sale — different people chase them.
 	"""
 	start, end = _window(days)
-	group = frappe.db.get_single_value("Cosmestics POS Settings", "neighbour_supplier_group")
-	if not group:
-		return {"columns": [_text("Supplier", "supplier")], "rows": [], "totals": {}}
 
 	rows = frappe.db.sql(
 		"""select pi.posting_date as day, pi.name, pi.supplier,
@@ -627,10 +624,10 @@ def _neighbour_returns(days, _wh):
 		   from `tabPurchase Invoice` pi
 		   join tabSupplier s on s.name = pi.supplier
 		   where pi.docstatus = 1 and pi.is_return = 1
-		     and s.supplier_group = %s
+		     and s.cosmestics_is_neighbour_shop = 1
 		     and pi.posting_date between %s and %s
 		   order by pi.posting_date desc, pi.creation desc limit 300""",
-		(group, start, end),
+		(start, end),
 		as_dict=True,
 	)
 	return {

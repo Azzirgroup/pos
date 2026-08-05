@@ -44,11 +44,14 @@ MASTERS = [
 			{"fieldname": "supplier_name", "label": "Name", "type": "text", "required": True},
 			{"fieldname": "mobile_no", "label": "Phone", "type": "text"},
 			{"fieldname": "supplier_group", "label": "Group", "type": "link", "options": "Supplier Group"},
+			# Independent of Group — see `cosmestics_is_neighbour_shop` on the
+			# Supplier doctype. A wholesaler and a neighbour shop can carry the
+			# same group; this is the actual fact the till checks.
+			{"fieldname": "cosmestics_is_neighbour_shop", "label": "Neighbour shop", "type": "checkbox"},
 		],
-		# The one group that makes a supplier appear at the till. Called out
-		# because "buy from neighbour does nothing" is almost always an empty
-		# group rather than a broken feature.
-		"hint": "Put shops you buy from mid-sale in the neighbour supplier group, or they will not be offered at the till.",
+		# Called out because "buy from neighbour does nothing" is almost always
+		# this left unchecked rather than a broken feature.
+		"hint": "Check Neighbour shop for shops you buy from mid-sale, or they will not be offered at the till.",
 	},
 	{
 		"key": "item",

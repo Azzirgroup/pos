@@ -192,8 +192,10 @@ watch(
 			</div>
 
 			<div class="mt-3 flex gap-2 pb-3">
+				<!-- Colored at rest, same reasoning as the per-line remove button:
+				     a destructive action should read as one before it is touched. -->
 				<button
-					class="grid h-12 w-12 shrink-0 place-items-center rounded-xl border border-outline-gray-2 text-ink-gray-6 transition-colors hover:bg-surface-gray-2 disabled:opacity-40"
+					class="grid h-12 w-12 shrink-0 place-items-center rounded-xl border border-outline-red-1 bg-surface-red-1 text-ink-red-3 transition-colors hover:bg-surface-red-2 hover:text-ink-red-4 disabled:border-outline-gray-2 disabled:bg-transparent disabled:text-ink-gray-4 disabled:opacity-40"
 					:disabled="isEmpty"
 					aria-label="Clear cart"
 					@click="cart.clear()"

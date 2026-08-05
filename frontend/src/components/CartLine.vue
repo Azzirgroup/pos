@@ -45,10 +45,13 @@ watch(
 				<!-- A unit picker only where there is a choice. Most items have one
 				     unit, and a select with a single option is a control that looks
 				     like a decision and is not. -->
+				<!-- Violet, same "detail about this specific sale" family as the
+				     conversion note beside it — a unit is a fact about the line,
+				     not a price. -->
 				<select
 					v-if="line.units && line.units.length > 1"
 					:value="line.uom"
-					class="h-6 rounded border border-outline-gray-2 bg-surface-gray-2 px-1 text-p-xs font-medium text-ink-gray-8 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					class="h-6 rounded border border-violet-200 bg-surface-violet-1 px-1 text-p-xs font-medium text-violet-600 focus:border-violet-400 focus:bg-surface-white focus:outline-none"
 					:aria-label="`Unit for ${line.item_name}`"
 					@change="$emit('setUom', line.id, $event.target.value)"
 					@click.stop
@@ -134,8 +137,10 @@ watch(
 			{{ fmtMoneyShort(lineTotal) }}
 		</div>
 
+		<!-- Colored at rest, not only on hover: a destructive action should read
+		     as one before it is touched, not only after. -->
 		<button
-			class="grid h-8 w-7 shrink-0 place-items-center rounded-md text-ink-gray-4 transition-colors hover:bg-surface-red-2 hover:text-ink-red-3"
+			class="grid h-8 w-7 shrink-0 place-items-center rounded-md bg-surface-red-1 text-ink-red-3 transition-colors hover:bg-surface-red-2 hover:text-ink-red-4"
 			:aria-label="`Remove ${line.item_name}`"
 			@click="$emit('remove', line.id)"
 		>

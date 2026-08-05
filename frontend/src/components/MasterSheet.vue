@@ -178,6 +178,16 @@ function optionsFor(field) {
 							:label="field.label"
 							:required="field.required"
 						/>
+						<!-- Own branch: FormControl renders a checkbox as label-beside-box,
+						     not label-above-control like every other field type, and needs
+						     no options/number coercion. -->
+						<FormControl
+							v-else-if="field.type === 'checkbox'"
+							v-model="values[field.fieldname]"
+							type="checkbox"
+							:label="field.label"
+							class="self-center"
+						/>
 						<FormControl
 							v-else
 							v-model="values[field.fieldname]"

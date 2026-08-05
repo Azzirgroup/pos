@@ -225,15 +225,15 @@ def _warehouses(exclude) -> list:
 
 
 def _neighbours() -> list:
-	"""Shops we buy from when we are out of stock and the customer is waiting."""
-	settings = frappe.get_cached_doc("Cosmestics POS Settings")
-	group = settings.neighbour_supplier_group
-	if not group:
-		return []
+	"""Shops we buy from when we are out of stock and the customer is waiting.
 
+	Flagged on the Supplier itself (`cosmestics_is_neighbour_shop`), not by
+	Supplier Group — a neighbour keeps whatever group actually classifies it;
+	being a source for mid-sale purchases is a separate fact about it.
+	"""
 	rows = frappe.get_all(
 		"Supplier",
-		filters={"supplier_group": group, "disabled": 0},
+		filters={"cosmestics_is_neighbour_shop": 1, "disabled": 0},
 		fields=["name", "mobile_no"],
 	)
 	return [{"name": r.name, "phone": r.mobile_no} for r in rows]
@@ -244,26 +244,17 @@ def _sourcing_status() -> dict:
 
 	An empty neighbour list and a feature that was never configured look
 	identical at the till — the button is simply dead either way. This says
-	which it is, because "no shops are set up in the Neighbour Shop group" is
-	something a manager can act on and a blank panel is not.
+	which it is, because "no shop is checked as a neighbour yet" is something
+	a manager can act on and a blank panel is not.
 	"""
-	settings = frappe.get_cached_doc("Cosmestics POS Settings")
-	group = settings.neighbour_supplier_group
-
-	if not group:
-		return {
-			"available": False,
-			"reason": _("No neighbour supplier group is set in Cosmestics POS Settings."),
-		}
-
-	count = frappe.db.count("Supplier", {"supplier_group": group, "disabled": 0})
+	count = frappe.db.count("Supplier", {"cosmestics_is_neighbour_shop": 1, "disabled": 0})
 	if not count:
 		return {
 			"available": False,
-			"group": group,
 			"reason": _(
-				"No shops in the {0} supplier group yet. Add the shops you buy from as Suppliers in that group."
-			).format(group),
+				"No Supplier is checked as a Neighbour Shop yet. Open a Supplier and "
+				"check Neighbour Shop on the ones you buy from mid-sale."
+			),
 		}
 
-	return {"available": True, "group": group, "count": count}
+	return {"available": True, "count": count}

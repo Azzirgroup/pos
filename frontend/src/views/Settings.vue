@@ -218,8 +218,11 @@ const POS_GROUPS = [
 	},
 	{
 		title: 'Neighbour sourcing',
-		hint: 'Suppliers in this group are offered at the till when an item runs short.',
-		fields: ['neighbour_supplier_group', 'default_source_warehouse'],
+		// No group to configure here any more — check "Neighbour Shop" on the
+		// Supplier itself (Suppliers → open one → Neighbour Shop) to offer it
+		// at the till when an item runs short.
+		hint: 'Which shops are offered is set per Supplier now — open a Supplier and check "Neighbour Shop".',
+		fields: ['default_source_warehouse'],
 	},
 	{
 		title: 'Till movements',

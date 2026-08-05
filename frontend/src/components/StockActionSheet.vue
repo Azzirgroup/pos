@@ -193,6 +193,8 @@ const canSource = computed(
 const canRequest = computed(() =>
 	requestLines.value.some((l) => l.qty > 0 && l.warehouse),
 )
+/** A transfer needs somewhere else to ask — a one-branch shop has none. */
+const otherBranches = computed(() => props.warehouses.filter((x) => !x.is_default))
 
 function close() {
 	emit('update:modelValue', false)
@@ -299,7 +301,11 @@ function submitSource() {
 					</div>
 				</button>
 
+				<!-- Not offered on a one-branch shop — there is nowhere else to ask,
+				     and a form that opens onto an empty selector and a button that
+				     can never turn on reads as broken rather than as "not for you". -->
 				<button
+					v-if="otherBranches.length"
 					class="flex items-center gap-3 rounded-xl border border-outline-gray-2 bg-surface-white p-3.5 text-left transition-colors hover:bg-surface-gray-2"
 					@click="mode = 'transfer'"
 				>
@@ -477,7 +483,7 @@ function submitSource() {
 					     line below has its own selector and can be changed independently. -->
 					<div class="flex flex-col gap-2">
 						<button
-							v-for="w in warehouses.filter((x) => !x.is_default)"
+							v-for="w in otherBranches"
 							:key="w.name"
 							class="min-h-touch rounded-lg border px-3 py-2.5 text-left text-p-base transition-colors"
 							:class="
@@ -523,7 +529,7 @@ function submitSource() {
 									:aria-label="`Branch for ${line.item_name}`"
 								>
 									<option
-										v-for="w in warehouses.filter((x) => !x.is_default)"
+										v-for="w in otherBranches"
 										:key="w.name"
 										:value="w.name"
 									>

@@ -436,11 +436,7 @@ def _neighbour_summary(start, end):
 	again; a paid one is cash out of the drawer, already subtracted from the
 	expected amounts through its movement record.
 	"""
-	group = frappe.db.get_single_value("Cosmestics POS Settings", "neighbour_supplier_group")
-	if not group:
-		return {"count": 0, "unpaid_count": 0, "unpaid": 0, "paid": 0, "invoices": []}
-
-	suppliers = frappe.get_all("Supplier", filters={"supplier_group": group}, pluck="name")
+	suppliers = frappe.get_all("Supplier", filters={"cosmestics_is_neighbour_shop": 1}, pluck="name")
 	if not suppliers:
 		return {"count": 0, "unpaid_count": 0, "unpaid": 0, "paid": 0, "invoices": []}
 
@@ -1157,11 +1153,8 @@ def get_movement_options() -> dict:
 		)
 
 	settings = frappe.get_cached_doc("Cosmestics POS Settings")
-	group = settings.neighbour_supplier_group
-	neighbours = (
-		frappe.get_all("Supplier", filters={"supplier_group": group}, pluck="name", order_by="name asc")
-		if group
-		else []
+	neighbours = frappe.get_all(
+		"Supplier", filters={"cosmestics_is_neighbour_shop": 1}, pluck="name", order_by="name asc"
 	)
 
 	return {

@@ -7,12 +7,9 @@ import PillTabs from '@/components/PillTabs.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
-import DocumentFormSheet from '@/components/DocumentFormSheet.vue'
 import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideSend from '~icons/lucide/send'
-import LucidePackage from '~icons/lucide/package'
-import LucideReceipt from '~icons/lucide/receipt'
 
 const data = ref({ invoices: [], orders: [], requests: [], totals: {}, period: {} })
 const days = ref(30)
@@ -109,34 +106,6 @@ async function load() {
 	}
 }
 
-/**
- * Bulk-entry document forms — Receipt and Invoice each open the same generic
- * form used everywhere else, forced to submit rather than save as a draft.
- * Kept as two independent flows rather than one generating the other: a
- * receipt is raised when goods physically arrive, a bill often lands later
- * from the supplier, and forcing one to imply the other would be wrong on
- * the common case where they do not happen at the same moment.
- */
-const newDocKey = ref(null)
-const newOpen = ref(false)
-
-function openNew(key) {
-	newDocKey.value = key
-	newOpen.value = true
-}
-
-function onCreated(res) {
-	notify(res?.message || 'Created', 'good')
-	load()
-}
-
-const toast = ref(null)
-let toastTimer = null
-function notify(message, tone = 'good') {
-	toast.value = { message, tone }
-	clearTimeout(toastTimer)
-	toastTimer = setTimeout(() => (toast.value = null), 2600)
-}
 </script>
 
 <template>
@@ -151,22 +120,10 @@ function notify(message, tone = 'good') {
 				<div class="w-[160px]">
 					<FormControl type="select" v-model="days" :options="PERIODS" />
 				</div>
-				<!-- Bulk entry, submitted immediately — no drafts to remember to come
-				     back to. Both open the same multi-line form the rest of the app
-				     uses, so a supplier bill with fifteen items is no more work than
-				     one with one. -->
-				<Button
-					variant="subtle"
-					:icon-left="LucidePackage"
-					label="New receipt"
-					@click="openNew('purchase-receipt')"
-				/>
-				<Button
-					variant="subtle"
-					:icon-left="LucideReceipt"
-					label="New invoice"
-					@click="openNew('purchase-invoice')"
-				/>
+				<!-- New/Bulk receipt and invoice live on the Receipts and Invoices
+				     tabs themselves now, not here — this overview mixes both
+				     document types in one table, and "new" only ever means one of
+				     them at a time. -->
 				<Button
 					variant="subtle"
 					:icon-left="LucideSend"
@@ -202,28 +159,5 @@ function notify(message, tone = 'good') {
 		</DataTable>
 
 		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
-
-		<DocumentFormSheet
-			v-model:open="newOpen"
-			:doc-key="newDocKey"
-			force-submit
-			@created="onCreated"
-			@notify="notify($event.message, $event.tone)"
-		/>
-
-		<Transition
-			enter-active-class="transition-all duration-200"
-			leave-active-class="transition-all duration-200"
-			enter-from-class="opacity-0 translate-y-2"
-			leave-to-class="opacity-0"
-		>
-			<div
-				v-if="toast"
-				class="pos-toast pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2 rounded-lg px-4 py-2.5 text-p-sm font-medium text-ink-white shadow-lg"
-				:class="toast.tone === 'bad' ? 'bg-surface-red-5' : 'bg-surface-green-3'"
-			>
-				{{ toast.message }}
-			</div>
-		</Transition>
 	</div>
 </template>

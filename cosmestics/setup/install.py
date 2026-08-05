@@ -46,6 +46,7 @@ def after_migrate():
 
 def setup_prerequisites():
 	group = ensure_neighbour_supplier_group()
+	ensure_neighbour_shop_field()
 	ensure_default_neighbour(group)
 	ensure_mpesa_mode_of_payment()
 	ensure_mpesa_channel_modes()
@@ -56,6 +57,9 @@ def setup_prerequisites():
 	ensure_pos_settings()
 	ensure_partial_payment_allowed()
 	ensure_short_account_field()
+	# Must run after the field exists, and after `group` is known so a site
+	# upgrading from the group-only scheme keeps its existing neighbours.
+	backfill_neighbour_shop_flag(group)
 
 
 def ensure_short_account_field():
@@ -91,6 +95,65 @@ def ensure_short_account_field():
 				"Unattributed Short Account in Cosmetics POS Settings."
 			),
 		},
+	)
+
+
+def ensure_neighbour_shop_field():
+	"""Give Supplier its own way to say "this is a shop we buy from mid-sale".
+
+	A Custom Field rather than the Supplier Group, which is what this used to
+	be inferred from: a shop's group is its own real classification (a
+	wholesaler is still a wholesaler), and forcing every neighbour into one
+	particular group to make it discoverable at the till overwrote whatever
+	that classification should have been. This is independent of it — a
+	neighbour can carry any group, or none.
+
+	Created here rather than shipped as a fixture so it survives a migrate on
+	a site that already has the app — see `after_migrate`.
+	"""
+	if not frappe.db.exists("DocType", "Supplier"):
+		return
+
+	if frappe.db.exists("Custom Field", {"dt": "Supplier", "fieldname": "cosmestics_is_neighbour_shop"}):
+		return
+
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	create_custom_field(
+		"Supplier",
+		{
+			"fieldname": "cosmestics_is_neighbour_shop",
+			"label": "Neighbour Shop",
+			"fieldtype": "Check",
+			"insert_after": "supplier_group",
+			"description": (
+				"Offered as a source when a cashier runs out of stock mid-sale. "
+				"Independent of Supplier Group — check this regardless of what "
+				"group the shop is otherwise classified under."
+			),
+		},
+	)
+
+
+def backfill_neighbour_shop_flag(group: str | None):
+	"""One-time migration for a site upgrading from the group-only scheme.
+
+	Every existing supplier in the (now legacy) neighbour group is flagged,
+	once, so switching the till's own lookups over to the new field does not
+	silently drop shops that were already working. Idempotent: only ever sets
+	the flag, never clears it, so a shop that unchecked it on purpose stays
+	unchecked on the next migrate.
+	"""
+	if not group or not frappe.db.exists("DocType", "Supplier"):
+		return
+	if not frappe.db.has_column("Supplier", "cosmestics_is_neighbour_shop"):
+		return
+
+	frappe.db.set_value(
+		"Supplier",
+		{"supplier_group": group, "cosmestics_is_neighbour_shop": 0},
+		"cosmestics_is_neighbour_shop",
+		1,
 	)
 
 
@@ -300,15 +363,17 @@ def ensure_default_neighbour(group: str | None) -> str | None:
 	if frappe.db.exists("Supplier", DEFAULT_NEIGHBOUR):
 		return DEFAULT_NEIGHBOUR
 
-	# Only seed when the group is genuinely empty: a shop that has already added
-	# its real neighbours does not want a placeholder appearing beside them.
-	if frappe.db.count("Supplier", {"supplier_group": group, "disabled": 0}):
+	# Only seed when there is genuinely no neighbour yet: a shop that has
+	# already added its real ones does not want a placeholder beside them.
+	if frappe.db.count("Supplier", {"cosmestics_is_neighbour_shop": 1, "disabled": 0}):
 		return None
 
 	doc = frappe.new_doc("Supplier")
 	doc.supplier_name = DEFAULT_NEIGHBOUR
 	doc.supplier_group = group
 	doc.supplier_type = "Company"
+	if frappe.db.has_column("Supplier", "cosmestics_is_neighbour_shop"):
+		doc.cosmestics_is_neighbour_shop = 1
 	doc.insert(ignore_permissions=True)
 	return doc.name
 

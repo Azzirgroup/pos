@@ -346,12 +346,8 @@ def list_neighbours() -> dict:
 	pairs them on selection — the list is about who is next door, not about which
 	doctypes happen to exist yet.
 	"""
-	group = frappe.db.get_single_value("Cosmestics POS Settings", "neighbour_supplier_group")
-	if not group:
-		return {"rows": [], "reason": "No neighbour supplier group is configured."}
-
 	suppliers = frappe.get_all(
-		"Supplier", filters={"supplier_group": group}, pluck="name", order_by="name asc"
+		"Supplier", filters={"cosmestics_is_neighbour_shop": 1}, pluck="name", order_by="name asc"
 	)
 	customers = set(
 		frappe.get_all("Customer", filters={"name": ("in", suppliers)}, pluck="name")
@@ -359,7 +355,7 @@ def list_neighbours() -> dict:
 
 	return {
 		"rows": [{"name": s, "sellable": s in customers} for s in suppliers],
-		"reason": None if suppliers else "No shops are registered in the neighbour group yet.",
+		"reason": None if suppliers else "No Supplier is checked as a Neighbour Shop yet.",
 	}
 
 
@@ -370,10 +366,7 @@ def _assert_neighbour(supplier: str):
 	till has no business issuing one, and this endpoint is reachable by any
 	cashier.
 	"""
-	group = frappe.db.get_single_value("Cosmestics POS Settings", "neighbour_supplier_group")
-	if not group:
-		frappe.throw(_("No neighbour supplier group is configured"))
-	if frappe.db.get_value("Supplier", supplier, "supplier_group") != group:
+	if not frappe.db.get_value("Supplier", supplier, "cosmestics_is_neighbour_shop"):
 		frappe.throw(_("{0} is not a neighbouring shop").format(supplier))
 
 
@@ -498,13 +491,9 @@ def list_purchases(days: int = 30, status: str | None = None, limit: int = 200) 
 	purchase. What went back is reported per purchase instead, as `returned`, so
 	one line says what was bought, what came back and what is still owed.
 	"""
-	group = frappe.db.get_single_value("Cosmestics POS Settings", "neighbour_supplier_group")
-	if not group:
-		return _empty_purchases("No neighbour supplier group is configured.")
-
-	suppliers = frappe.get_all("Supplier", filters={"supplier_group": group}, pluck="name")
+	suppliers = frappe.get_all("Supplier", filters={"cosmestics_is_neighbour_shop": 1}, pluck="name")
 	if not suppliers:
-		return _empty_purchases("No shops are registered in the neighbour group yet.")
+		return _empty_purchases("No Supplier is checked as a Neighbour Shop yet.")
 
 	filters = {
 		"supplier": ("in", suppliers),
@@ -674,17 +663,16 @@ def _ensure_supplier(supplier):
 	the shop next door to a master list beforehand blocks a sale that has, in
 	every practical sense, already happened.
 
-	It lands in the neighbour group, which is where it belongs and where the till
-	will offer it next time, so this fills the list in as the shop actually
-	trades rather than demanding it be filled in up front.
+	Flagged as a neighbour shop, which is where it belongs and is what makes
+	the till offer it next time — a fact about it, not the Supplier Group it
+	happens to carry. The group is still filled in, because ERPNext requires
+	one on every Supplier, but any non-group group will do; it is not what
+	the till checks any more.
 	"""
 	if frappe.db.exists("Supplier", supplier):
 		return
 
-	settings = frappe.get_cached_doc("Cosmestics POS Settings")
-	group = settings.neighbour_supplier_group or frappe.db.get_value(
-		"Supplier Group", {"is_group": 0}, "name"
-	)
+	group = frappe.db.get_value("Supplier Group", {"is_group": 0}, "name")
 	if not group:
 		frappe.throw(
 			_("{0} is not a supplier, and there is no supplier group to file it under.").format(
@@ -696,6 +684,7 @@ def _ensure_supplier(supplier):
 	doc.supplier_name = supplier
 	doc.supplier_group = group
 	doc.supplier_type = "Company"
+	doc.cosmestics_is_neighbour_shop = 1
 	doc.insert(ignore_permissions=True)
 
 

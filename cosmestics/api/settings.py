@@ -32,7 +32,9 @@ POS_SETTINGS_FIELDS = (
 	"notify_material_request",
 	"whatsapp_group_jid",
 	"whatsapp_sender",
-	"neighbour_supplier_group",
+	# Not `neighbour_supplier_group` any more — which shops the till offers
+	# mid-sale is now a checkbox on the Supplier itself
+	# (`cosmestics_is_neighbour_shop`), not a single shop-wide group setting.
 	"default_source_warehouse",
 	"default_expense_account",
 	"require_shift_to_sell",

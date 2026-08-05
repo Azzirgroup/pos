@@ -129,6 +129,7 @@ DOCUMENTS = [
 			("items", ["item_code", "item_name", "qty", "uom", "rate", "amount"]),
 			("taxes", ["description", "rate", "tax_amount"]),
 		],
+		"reports": [],
 	},
 	{
 		# ERPNext's own POS Invoice, used by sites running the offline till. This
@@ -220,13 +221,24 @@ DOCUMENTS = [
 		"reports": ["payables"],
 		"create": {
 			"fields": [
-				{"fieldname": "supplier", "label": "Supplier", "type": "link", "options": "Supplier", "required": True},
+				# Not required: a line can name its own supplier instead (see
+				# the `items` spec below) — required only when nothing else
+				# will supply one, which `create_document` checks itself once
+				# every line is known.
+				{"fieldname": "supplier", "label": "Default supplier", "type": "link", "options": "Supplier"},
 				*_dated(
 					("posting_date", "Date", "today", True),
 					("due_date", "Due", "week", False),
 				),
 			],
-			"items": _lines(),
+			# A Purchase Invoice is one supplier's document — this per-line
+			# override exists so a bulk entry spanning several suppliers can
+			# still be filled in as one list, and `create_document` splits it
+			# into one invoice per supplier actually used rather than
+			# pretending a single invoice could hold all of them.
+			"items": _lines(
+				extra=[{"fieldname": "supplier", "label": "Supplier", "type": "link", "options": "Supplier"}]
+			),
 		},
 	},
 	{
@@ -275,13 +287,17 @@ DOCUMENTS = [
 		"reports": ["stock_movement", "payables"],
 		"create": {
 			"fields": [
-				{"fieldname": "supplier", "label": "Supplier", "type": "link", "options": "Supplier", "required": True},
+				# Not required — see the matching note on Purchase Invoice.
+				{"fieldname": "supplier", "label": "Default supplier", "type": "link", "options": "Supplier"},
 				*_dated(("posting_date", "Date", "today", True)),
 				{"fieldname": "set_warehouse", "label": "Into", "type": "link", "options": "Warehouse", "required": True},
 			],
-			"items": _lines(warehouse=None),
+			"items": _lines(
+				warehouse=None,
+				extra=[{"fieldname": "supplier", "label": "Supplier", "type": "link", "options": "Supplier"}],
+			),
 			"line_from_header": {"warehouse": "set_warehouse"},
-			"hint": "Receiving goods without a purchase order. Bill it afterwards with a Purchase Invoice.",
+			"hint": "Receiving goods without a purchase order. Bill it afterwards with a Purchase Invoice. Different lines can name different suppliers — one receipt is raised per supplier used.",
 		},
 	},
 	{
@@ -594,7 +610,14 @@ def list_types() -> list:
 				"label": _(d["doctype"]),
 				"group": d["group"],
 				"icon": d["icon"],
-				"reports": d["reports"],
+				# `.get`, not `d["reports"]`: one entry missing this key used to take
+				# the whole list down for every document type at once — the
+				# frontend's `.catch(() => [])` around this call turns any exception
+				# here into a silently empty registry, so every "New" button and
+				# permission message on the whole screen disappears with no error
+				# anywhere a person would see it. A missing key from here on is a
+				# document type with no reports, not a broken screen.
+				"reports": d.get("reports") or [],
 				"has_party": bool(d.get("party_field")),
 				"party_label": _(d["party_field"]).title() if d.get("party_field") else None,
 				# Only offered when the type declares a form *and* this user may
@@ -1113,9 +1136,16 @@ def link_options(key: str, fieldname: str, search: str | None = None, limit: int
 	]
 
 
+# A Purchase Invoice or Purchase Receipt is one supplier's document by
+# ERPNext's own model — it cannot hold lines from two. These are the only
+# two specs that give a line its own `supplier` override for exactly that
+# reason; see the note on each in `DOCUMENTS`.
+_MULTI_SUPPLIER_DOCTYPES = {"Purchase Invoice", "Purchase Receipt"}
+
+
 @frappe.whitelist(methods=["POST"])
 def create_document(key: str, values: dict | str, items: list | str, submit: int = 0) -> dict:
-	"""Create one document with its lines.
+	"""Create one document with its lines — or several, split by supplier.
 
 	Built through `frappe.new_doc(...).insert()` with permissions intact, so
 	ERPNext's own validation, pricing and mandatory-field rules apply exactly as
@@ -1124,6 +1154,11 @@ def create_document(key: str, values: dict | str, items: list | str, submit: int
 
 	Saved as a draft unless `submit` is set: a purchase order raised in a hurry
 	is usually worth a second look before it goes to the supplier.
+
+	When the lines carry their own `supplier` (Purchase Invoice / Purchase
+	Receipt only) and name more than one between them, one document is raised
+	per supplier rather than raising a single one that quietly kept only the
+	last supplier it saw.
 	"""
 	if isinstance(values, str):
 		values = frappe.parse_json(values)
@@ -1136,7 +1171,14 @@ def create_document(key: str, values: dict | str, items: list | str, submit: int
 	spec = _create_spec(entry)
 	doctype = entry["doctype"]
 
-	missing = [f["label"] for f in spec["fields"] if f.get("required") and not values.get(f["fieldname"])]
+	missing = [
+		f["label"]
+		for f in spec["fields"]
+		# The header's own `supplier` is a default now, not a requirement — a
+		# line naming its own is just as good, checked below once every line
+		# is known.
+		if f.get("required") and f["fieldname"] != "supplier" and not values.get(f["fieldname"])
+	]
 	if missing:
 		frappe.throw(_("Fill in: {0}").format(", ".join(missing)))
 
@@ -1144,6 +1186,65 @@ def create_document(key: str, values: dict | str, items: list | str, submit: int
 	if not lines:
 		frappe.throw(_("Add at least one line with a quantity above zero"))
 
+	line_fields = {f["fieldname"] for f in spec["items"]}
+
+	# groups: [(supplier_or_None, [line, ...])]. A single group whose supplier
+	# is None is the ordinary path every other document type takes — nothing
+	# here changes for them.
+	groups = [(None, lines)]
+	if doctype in _MULTI_SUPPLIER_DOCTYPES and "supplier" in line_fields:
+		by_supplier = {}
+		for row in lines:
+			supplier = row.get("supplier") or values.get("supplier")
+			if not supplier:
+				frappe.throw(
+					_("{0} has no supplier, and no default supplier is set").format(
+						row.get("item_name") or row.get("item_code")
+					)
+				)
+			by_supplier.setdefault(supplier, []).append(row)
+		# More than one supplier in use: split. Exactly one keeps the single-
+		# document path — a bulk entry that happens to use only one supplier
+		# should not be treated any differently from the ordinary case.
+		if len(by_supplier) > 1:
+			groups = list(by_supplier.items())
+
+	created = [
+		_insert_one(doctype, spec, values, line_fields, group_lines, supplier, submit)
+		for supplier, group_lines in groups
+	]
+
+	first = created[0]
+	if len(created) == 1:
+		message = (
+			_("{0} created and submitted") if cint(submit) else _("{0} created")
+		).format(first["name"])
+	else:
+		names = ", ".join(d["name"] for d in created)
+		message = (
+			_("{0} documents raised across {1} suppliers: {2}")
+			if cint(submit)
+			else _("{0} draft documents raised across {1} suppliers: {2}")
+		).format(len(created), len(created), names)
+
+	return {
+		"key": key,
+		"doctype": doctype,
+		"name": first["name"],
+		"docstatus": first["docstatus"],
+		# So a caller chaining a second document off this one (a landed cost
+		# voucher off a bulk receipt, say) has a total to default a charge to
+		# without a second round trip just to read it back. Only meaningful
+		# for the single-document case; a multi-supplier split reads `created`.
+		"grand_total": first["grand_total"] if len(created) == 1 else None,
+		"created": created,
+		"message": message,
+	}
+
+
+def _insert_one(doctype, spec, values, line_fields, lines, supplier_override, submit):
+	"""One document, one supplier. `supplier_override` is set only mid-split;
+	the ordinary single-document path leaves the header's own value alone."""
 	doc = frappe.new_doc(doctype)
 	company = _company()
 	if _has(doctype, "company"):
@@ -1164,11 +1265,18 @@ def create_document(key: str, values: dict | str, items: list | str, submit: int
 		if fieldname in allowed and value not in (None, ""):
 			doc.set(fieldname, value)
 
-	line_fields = {f["fieldname"] for f in spec["items"]}
+	if supplier_override:
+		doc.supplier = supplier_override
+
 	inherited = spec.get("line_from_header") or {}
 
 	for row in lines:
-		line = {f: row[f] for f in line_fields if row.get(f) not in (None, "")}
+		# `supplier` is this module's own grouping key, not a real field on
+		# Purchase Invoice Item / Purchase Receipt Item — it does the
+		# splitting above and has no business on the child row itself.
+		line = {
+			f: row[f] for f in line_fields if f != "supplier" and row.get(f) not in (None, "")
+		}
 		# Fields ERPNext validates per row but a small form should only ask once.
 		for line_field, header_field in inherited.items():
 			if values.get(header_field):
@@ -1184,17 +1292,10 @@ def create_document(key: str, values: dict | str, items: list | str, submit: int
 		doc.submit()
 
 	return {
-		"key": key,
-		"doctype": doctype,
 		"name": doc.name,
+		"supplier": doc.get("supplier"),
 		"docstatus": cint(doc.docstatus),
-		# So a caller chaining a second document off this one (a landed cost
-		# voucher off a bulk receipt, say) has a total to default a charge to
-		# without a second round trip just to read it back.
 		"grand_total": flt(doc.get("grand_total")) if _has(doctype, "grand_total") else None,
-		"message": _("{0} created").format(doc.name)
-		if not cint(submit)
-		else _("{0} created and submitted").format(doc.name),
 	}
 
 

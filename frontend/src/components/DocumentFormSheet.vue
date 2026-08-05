@@ -172,6 +172,55 @@ function removeLine(i) {
 	if (!lines.value.length) addLine()
 }
 
+/**
+ * Purchase Invoice / Purchase Receipt only: the per-line field that lets a
+ * bulk entry span more than one supplier. Its presence, not the doc key
+ * itself, is what switches the lines below from a flat list to sections
+ * grouped by supplier — the same field spec drives the `LinkField` this
+ * component already renders for it in the flat view.
+ */
+const supplierField = computed(() => form.value?.items?.find((f) => f.fieldname === 'supplier') || null)
+
+/**
+ * Runs of consecutive lines sharing a supplier, in the order they were
+ * added — not a lookup by supplier name. Deriving groups from array order
+ * rather than from a separate group id is what makes "add supplier, add its
+ * items, add another supplier" work with no bookkeeping beyond the lines
+ * array `save()` already sends: appending a line with a different supplier
+ * starts a new section purely because it no longer matches the run before
+ * it.
+ */
+const supplierGroups = computed(() => {
+	if (!supplierField.value) return null
+	const groups = []
+	for (const line of lines.value) {
+		const supplier = line.supplier || ''
+		const last = groups[groups.length - 1]
+		if (last && last.supplier === supplier) last.lines.push(line)
+		else groups.push({ supplier, lines: [line] })
+	}
+	return groups
+})
+
+function addSupplierGroup() {
+	lines.value.push(blankLine())
+}
+
+function addItemToGroup(group) {
+	const line = blankLine()
+	line.supplier = group.supplier
+	lines.value.push(line)
+}
+
+function setGroupSupplier(group, value) {
+	for (const line of group.lines) line.supplier = value
+}
+
+function removeGroup(group) {
+	lines.value = lines.value.filter((l) => !group.lines.includes(l))
+	if (!lines.value.length) addLine()
+}
+
 function close() {
 	emit('update:open', false)
 }
@@ -221,7 +270,18 @@ async function save(submit) {
 		// The receipt/invoice is real and submitted at this point regardless of
 		// what happens next — a failed landed cost voucher must not read as a
 		// failed purchase. Reported as its own notification either way.
-		if (landedCost.value.enabled && filledCharges.value.length) {
+		if (res.created?.length > 1) {
+			// A multi-supplier bulk entry became several documents, and a
+			// landed cost voucher can only point at one — applying it to just
+			// the first would silently drop the charge from the rest, which
+			// is worse than not applying it and saying so.
+			if (landedCost.value.enabled && filledCharges.value.length) {
+				emit('notify', {
+					message: `${res.created.length} documents were raised (one per supplier) — add landed cost to each from its own page, it cannot be split across them here.`,
+					tone: 'warn',
+				})
+			}
+		} else if (landedCost.value.enabled && filledCharges.value.length) {
 			try {
 				const lcv = await createLandedCostVoucher({
 					receiptKey: props.docKey,
@@ -310,47 +370,138 @@ function optionsFor(field) {
 						</span>
 					</div>
 
-					<div
-						v-for="(line, i) in lines"
-						:key="i"
-						class="flex flex-wrap items-end gap-2 rounded-lg border border-outline-gray-2 p-2.5"
-					>
+					<!-- Purchase Invoice / Purchase Receipt: grouped by supplier rather
+					     than one flat list with a supplier dropdown repeated on every
+					     row — pick a supplier once per section, add its items under it,
+					     then start the next section for the next supplier. `save()`
+					     still just sees a flat list of lines; the grouping is a way of
+					     filling it in, not a different shape sent to the server. -->
+					<template v-if="supplierField">
 						<div
-							v-for="field in form.items"
-							:key="field.fieldname"
-							:class="field.type === 'item' ? 'min-w-[200px] flex-1' : 'w-[120px]'"
+							v-for="(group, gi) in supplierGroups"
+							:key="gi"
+							class="flex flex-col gap-2 rounded-lg border border-outline-gray-2 p-2.5"
 						>
-							<LinkField
-								v-if="field.type === 'link' || field.type === 'item'"
-								v-model="line[field.fieldname]"
-								:fetcher="linkFetcher(field.fieldname)"
-								:on-create="onCreateFor(field)"
-								:label="field.label"
-							/>
-							<FormControl
-								v-else
-								v-model="line[field.fieldname]"
-								:type="controlType(field)"
-								:label="field.label"
-								:options="controlType(field) === 'select' ? optionsFor(field) : undefined"
+							<div class="flex items-end gap-2">
+								<LinkField
+									:model-value="group.supplier"
+									@update:model-value="(v) => setGroupSupplier(group, v)"
+									:fetcher="linkFetcher('supplier')"
+									:on-create="onCreateFor(supplierField)"
+									:label="`Supplier ${gi + 1}`"
+									class="min-w-[200px] flex-1"
+								/>
+								<button
+									class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ink-gray-5 transition-colors hover:bg-surface-gray-2 hover:text-ink-red-3"
+									:aria-label="`Remove supplier ${gi + 1} and its items`"
+									@click="removeGroup(group)"
+								>
+									<LucideX class="h-4 w-4" />
+								</button>
+							</div>
+
+							<div
+								v-for="line in group.lines"
+								:key="lines.indexOf(line)"
+								class="flex flex-wrap items-end gap-2 rounded-lg bg-surface-gray-1 p-2"
+							>
+								<template v-for="field in form.items" :key="field.fieldname">
+									<div
+										v-if="field.fieldname !== 'supplier'"
+										:class="field.type === 'item' ? 'min-w-[200px] flex-1' : 'w-[120px]'"
+									>
+										<LinkField
+											v-if="field.type === 'link' || field.type === 'item'"
+											v-model="line[field.fieldname]"
+											:fetcher="linkFetcher(field.fieldname)"
+											:on-create="onCreateFor(field)"
+											:label="field.label"
+										/>
+										<FormControl
+											v-else
+											v-model="line[field.fieldname]"
+											:type="controlType(field)"
+											:label="field.label"
+											:options="controlType(field) === 'select' ? optionsFor(field) : undefined"
+										/>
+									</div>
+								</template>
+								<button
+									class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ink-gray-5 transition-colors hover:bg-surface-gray-2 hover:text-ink-red-3"
+									:aria-label="`Remove line`"
+									@click="removeLine(lines.indexOf(line))"
+								>
+									<LucideX class="h-4 w-4" />
+								</button>
+							</div>
+
+							<Button
+								variant="subtle"
+								:icon-left="LucidePlus"
+								label="Add item"
+								class="self-start"
+								@click="addItemToGroup(group)"
 							/>
 						</div>
-						<button
-							class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ink-gray-5 transition-colors hover:bg-surface-gray-2 hover:text-ink-red-3"
-							:aria-label="`Remove line ${i + 1}`"
-							@click="removeLine(i)"
-						>
-							<LucideX class="h-4 w-4" />
-						</button>
-					</div>
 
-					<div class="flex items-center gap-3">
-						<Button variant="subtle" :icon-left="LucidePlus" label="Add line" @click="addLine" />
-						<span v-if="estimate" class="tabular ml-auto text-p-sm text-ink-gray-6">
-							Roughly {{ fmtMoney(estimate) }}
-							<span class="text-ink-gray-5">· priced properly on save</span>
-						</span>
-					</div>
+						<div class="flex items-center gap-3">
+							<Button
+								variant="subtle"
+								:icon-left="LucidePlus"
+								label="Add supplier"
+								@click="addSupplierGroup"
+							/>
+							<span v-if="estimate" class="tabular ml-auto text-p-sm text-ink-gray-6">
+								Roughly {{ fmtMoney(estimate) }}
+								<span class="text-ink-gray-5">· priced properly on save</span>
+							</span>
+						</div>
+					</template>
+
+					<!-- Every other document type: the flat list this always was. -->
+					<template v-else>
+						<div
+							v-for="(line, i) in lines"
+							:key="i"
+							class="flex flex-wrap items-end gap-2 rounded-lg border border-outline-gray-2 p-2.5"
+						>
+							<div
+								v-for="field in form.items"
+								:key="field.fieldname"
+								:class="field.type === 'item' ? 'min-w-[200px] flex-1' : 'w-[120px]'"
+							>
+								<LinkField
+									v-if="field.type === 'link' || field.type === 'item'"
+									v-model="line[field.fieldname]"
+									:fetcher="linkFetcher(field.fieldname)"
+									:on-create="onCreateFor(field)"
+									:label="field.label"
+								/>
+								<FormControl
+									v-else
+									v-model="line[field.fieldname]"
+									:type="controlType(field)"
+									:label="field.label"
+									:options="controlType(field) === 'select' ? optionsFor(field) : undefined"
+								/>
+							</div>
+							<button
+								class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ink-gray-5 transition-colors hover:bg-surface-gray-2 hover:text-ink-red-3"
+								:aria-label="`Remove line ${i + 1}`"
+								@click="removeLine(i)"
+							>
+								<LucideX class="h-4 w-4" />
+							</button>
+						</div>
+
+						<div class="flex items-center gap-3">
+							<Button variant="subtle" :icon-left="LucidePlus" label="Add line" @click="addLine" />
+							<span v-if="estimate" class="tabular ml-auto text-p-sm text-ink-gray-6">
+								Roughly {{ fmtMoney(estimate) }}
+								<span class="text-ink-gray-5">· priced properly on save</span>
+							</span>
+						</div>
+					</template>
 				</div>
 
 				<!-- Freight, customs -- cost that lands on top of what the supplier

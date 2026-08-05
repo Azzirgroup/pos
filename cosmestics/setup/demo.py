@@ -151,6 +151,8 @@ def _seed_neighbours(catalog) -> int:
 			doc.supplier_group = NEIGHBOUR_GROUP
 		doc.supplier_type = "Company"
 		doc.mobile_no = n.get("phone")
+		if frappe.db.has_column("Supplier", "cosmestics_is_neighbour_shop"):
+			doc.cosmestics_is_neighbour_shop = 1
 		doc.insert(ignore_permissions=True)
 		count += 1
 	return count
