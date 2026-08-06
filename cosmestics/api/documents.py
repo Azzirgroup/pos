@@ -456,6 +456,23 @@ DOCUMENTS = [
 		},
 	},
 	{
+		# Several sales bundled onto one delivery run. Not creatable from the
+		# generic form below — its "lines" are invoices, not items with a
+		# quantity, which is the one shape this whole registry otherwise
+		# assumes. Raised instead from its own sheet; see `api/deliveries.py`.
+		"key": "delivery-trip",
+		"doctype": "Cosmestics Delivery Trip",
+		"group": "Sales",
+		"icon": "truck",
+		"date_field": "departure_time",
+		"columns": ["name", "departure_time", "driver_name", "vehicle", "status", "total_amount"],
+		"detail": ["driver_phone", "company"],
+		"tables": [
+			("invoices", ["sales_invoice", "customer", "amount", "delivered"]),
+		],
+		"reports": [],
+	},
+	{
 		"key": "pos-opening",
 		"doctype": "POS Opening Entry",
 		"group": "Till",

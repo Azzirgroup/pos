@@ -12,6 +12,7 @@ import LucideSettings from '~icons/lucide/settings-2'
 import LucideChartColumn from '~icons/lucide/chart-column'
 import LucideFactory from '~icons/lucide/factory'
 import LucideClock from '~icons/lucide/clock'
+import LucidePackage from '~icons/lucide/package'
 
 const props = defineProps({
 	/** 'icons' | 'labels'. 'hidden' is handled by the shell not rendering us. */
@@ -68,6 +69,10 @@ const GROUPS = [
 	],
 	[
 		{ to: '/sales', icon: LucideReceipt, label: 'Sales', tone: 'money' },
+		// Also reachable as a tab under Sales — this is a second, more
+		// discoverable door to the same Delivery Note list for anyone who
+		// wants it without going through Sales first.
+		{ to: '/documents/delivery-note', icon: LucidePackage, label: 'Deliveries', tone: 'money' },
 		{ to: '/customers', icon: LucideUsers, label: 'Customers', tone: 'money' },
 		{ to: '/accounts', icon: LucideLandmark, label: 'Accounts', tone: 'money' },
 	],

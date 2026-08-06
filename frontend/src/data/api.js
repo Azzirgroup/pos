@@ -433,6 +433,22 @@ export const createLandedCostVoucher = ({ receiptKey, receiptName, charges, vend
 		distribute_based_on: distributeBasedOn || 'Qty',
 	})
 
+/* ---------- delivery trips ---------- */
+
+/** Submitted sales to pick from — {name, customer, grand_total} each. */
+export const searchTripInvoices = (search) =>
+	call('cosmestics.api.deliveries.search_invoices', { search: search || null })
+
+/** Raise and dispatch a trip carrying several invoices at once. */
+export const createDeliveryTrip = ({ driverName, driverPhone, vehicle, departureTime, invoices }) =>
+	call('cosmestics.api.deliveries.create_trip', {
+		driver_name: driverName,
+		driver_phone: driverPhone || null,
+		vehicle: vehicle || null,
+		departure_time: departureTime || null,
+		invoices,
+	})
+
 /* ---------- barcodes ---------- */
 
 export const listBarcodeItems = ({ search, onlyMissing, limit } = {}) =>

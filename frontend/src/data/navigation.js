@@ -40,6 +40,10 @@ export const MODULE_TABS = {
 		// price is given before anything is delivered or invoiced.
 		{ label: 'Quotations', to: '/documents/quotation' },
 		{ label: 'Deliveries', to: '/documents/delivery-note' },
+		// Several invoices bundled onto one driver's run — its own tab because
+		// it groups Sales Invoices rather than being one, which the "New"
+		// button on this tab handles with its own form.
+		{ label: 'Delivery Trips', to: '/documents/delivery-trip' },
 		{ label: 'Invoices', to: '/documents/sales-invoice' },
 		{ label: 'Payments', to: '/documents/payment-entry' },
 		{ label: 'Returns', to: '/returns' },
@@ -73,6 +77,7 @@ const DOCUMENT_MODULE = {
 	quotation: 'sales',
 	'sales-order': 'sales',
 	'delivery-note': 'sales',
+	'delivery-trip': 'sales',
 	'sales-invoice': 'sales',
 	'payment-entry': 'sales',
 	'material-request': 'purchasing',

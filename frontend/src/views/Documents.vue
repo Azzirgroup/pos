@@ -16,6 +16,7 @@ import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
 import DocumentModal from '@/components/DocumentModal.vue'
 import DocumentFormSheet from '@/components/DocumentFormSheet.vue'
+import DeliveryTripSheet from '@/components/DeliveryTripSheet.vue'
 import Reports from '@/views/Reports.vue'
 import { moduleFor } from '@/data/navigation'
 import { resolveIcon } from '@/utils/icons'
@@ -201,6 +202,9 @@ function openNew(forceSubmit = false) {
 	newForceSubmit.value = forceSubmit
 	newOpen.value = true
 }
+
+/** Delivery Trip has no generic "New" — its own sheet, its own button. */
+const tripOpen = ref(false)
 
 function openRow(row) {
 	selected.value = row.name
@@ -397,22 +401,36 @@ function notify(message, tone = 'good') {
 					     title line wraps on a narrow screen before this row's filters
 					     do, so a button anchored there moves around depending on how
 					     long the title happens to be. This row is the stable one. -->
-					<div v-if="activeType?.creatable" class="ml-auto flex flex-wrap items-center gap-2">
+					<div
+						v-if="activeType?.creatable || activeKey === 'delivery-trip'"
+						class="ml-auto flex flex-wrap items-center gap-2"
+					>
+						<!-- Its own form, not the generic one — see `DeliveryTripSheet`. -->
 						<Button
+							v-if="activeKey === 'delivery-trip'"
 							theme="gray"
 							variant="solid"
 							:icon-left="LucidePlus"
-							:label="`New ${activeType.label}`"
-							@click="openNew(false)"
+							label="New Delivery Trip"
+							@click="tripOpen = true"
 						/>
-						<!-- Same form, forced to submit — see `showsBulkButton`. -->
-						<Button
-							v-if="showsBulkButton"
-							variant="outline"
-							:icon-left="LucidePlus"
-							:label="`Bulk ${activeType.label}`"
-							@click="openNew(true)"
-						/>
+						<template v-else-if="activeType?.creatable">
+							<Button
+								theme="gray"
+								variant="solid"
+								:icon-left="LucidePlus"
+								:label="`New ${activeType.label}`"
+								@click="openNew(false)"
+							/>
+							<!-- Same form, forced to submit — see `showsBulkButton`. -->
+							<Button
+								v-if="showsBulkButton"
+								variant="outline"
+								:icon-left="LucidePlus"
+								:label="`Bulk ${activeType.label}`"
+								@click="openNew(true)"
+							/>
+						</template>
 					</div>
 				</template>
 			</PageHeader>
@@ -531,6 +549,12 @@ function notify(message, tone = 'good') {
 			v-model:open="newOpen"
 			:doc-key="activeKey"
 			:force-submit="newForceSubmit"
+			@created="load"
+			@notify="notify($event.message, $event.tone)"
+		/>
+
+		<DeliveryTripSheet
+			v-model:open="tripOpen"
 			@created="load"
 			@notify="notify($event.message, $event.tone)"
 		/>
