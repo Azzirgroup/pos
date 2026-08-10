@@ -45,6 +45,9 @@ import ScanSheet from '@/components/ScanSheet.vue'
 import QuotationSheet from '@/components/QuotationSheet.vue'
 import TillContext from '@/components/TillContext.vue'
 import ReturnSheet from '@/components/ReturnSheet.vue'
+import ShareSheet from '@/components/ShareSheet.vue'
+import { saleMessage } from '@/utils/salesMessage'
+import { openPrintWindow } from '@/utils/printWindow'
 import { cameraScanSupported } from '@/composables/useCameraScanner'
 import LucideTriangleAlert from '~icons/lucide/triangle-alert'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
@@ -279,15 +282,36 @@ async function sendReceiptWhatsapp() {
 	}
 }
 
+/**
+ * Send one recent sale to WhatsApp — a number, or the shop's own group.
+ *
+ * Goes through `ShareSheet`, the same control every other list uses, rather
+ * than the bespoke box in the post-sale prompt: that one only ever knew about
+ * the sale just rung up, and "send me yesterday's receipt" is asked at the
+ * counter as often as "print it again".
+ *
+ * The message is composed here and shown before it goes, carrying the fields a
+ * shop reconciles its group chat against — see `utils/salesMessage`.
+ */
+const shareOpen = ref(false)
+const sharePayload = ref(null)
+
+function shareSale(row) {
+	sharePayload.value = {
+		title: `Send ${row.name}`,
+		message: saleMessage(row, { shift: recent.value?.shift }),
+		doctype: 'Sales Invoice',
+		name: row.name,
+	}
+	shareOpen.value = true
+}
+
 async function printReceipt(invoice) {
 	const target = invoice || lastSale.value?.invoice
 	if (!target) return
-	try {
-		const { url } = await getReceiptUrl({ invoice: target })
-		window.open(url, '_blank', 'noopener')
-	} catch (e) {
-		notify(e.message || 'Could not open the receipt', 'warn')
-	}
+	await openPrintWindow(async () => (await getReceiptUrl({ invoice: target })).url, {
+		onError: (e) => notify(e.message || 'Could not open the receipt', 'warn'),
+	})
 }
 
 /* ---------- recent sales ---------- */
@@ -1293,6 +1317,7 @@ useShortcuts({
 			>
 				<CartPanel @pay="openPay"
 					@hold="holdSale"
+					@quote="quotationSheet = true"
 					@pick-customer="pickCustomer(false)"
 					@inc="cartInc"
 					@dec="cart.dec"
@@ -1318,6 +1343,7 @@ useShortcuts({
 			<div class="flex h-[64dvh] flex-col">
 				<CartPanel embedded class="min-h-0 flex-1" @pay="openPay"
 					@hold="holdSale"
+					@quote="quotationSheet = true"
 					@pick-customer="pickCustomer(false)"
 					@inc="cartInc"
 					@dec="cart.dec"
@@ -1555,6 +1581,17 @@ useShortcuts({
 					</div>
 					<LucidePrinter class="h-4 w-4 shrink-0 text-ink-gray-5" />
 					</button>
+					<!-- Beside the printer, because "send it to them" and "print it
+					     again" are the same request answered two ways — and the shop
+					     posts the same summary to its own group to reconcile the day. -->
+					<button
+						class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-gray-5 transition-colors hover:bg-surface-green-2 hover:text-ink-green-3"
+						:aria-label="`Send ${row.name} on WhatsApp`"
+						title="Send on WhatsApp"
+						@click="shareSale(row)"
+					>
+						<LucideSend class="h-4 w-4" />
+					</button>
 					<!-- Kept a separate control: a customer wanting a reprint and one
 					     wanting their money back must not be one mis-tap apart.
 					     Absent on a credit note — a return is not itself returnable,
@@ -1611,6 +1648,10 @@ useShortcuts({
 		<ScanSheet v-model="scanSheet" :last-result="scanResult" @scan="onCameraScan" />
 
 		<ReturnSheet v-model="returnSheet" :invoice="returnInvoice" @returned="onReturned" />
+
+		<!-- Sends the real PDF, and offers the shop's WhatsApp groups as well as a
+		     number — the same control the back-office lists share rows through. -->
+		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
 
 		<QuotationSheet
 			v-model="quotationSheet"

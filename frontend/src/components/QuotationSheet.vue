@@ -1,6 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { fmtMoney, fmtMoneyShort } from '@/utils/format'
+import { openPrintWindow } from '@/utils/printWindow'
 import {
 	listQuotations,
 	getQuotation,
@@ -119,8 +120,7 @@ const sendingFor = ref('')
 async function printQuote(row) {
 	busyOne.value = row.name
 	try {
-		const { url } = await getQuotationPrintUrl({ name: row.name })
-		window.open(url, '_blank', 'noopener')
+		await openPrintWindow(async () => (await getQuotationPrintUrl({ name: row.name })).url)
 	} catch (e) {
 		console.error('[quotations] print failed', e)
 	} finally {

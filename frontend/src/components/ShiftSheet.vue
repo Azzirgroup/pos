@@ -2,9 +2,11 @@
 import { ref, computed, watch } from 'vue'
 import { fmtMoney, fmtMoneyShort } from '@/utils/format'
 import BottomSheet from './BottomSheet.vue'
+import { listCashiers } from '@/data/api'
 import LucideSunrise from '~icons/lucide/sunrise'
 import LucideSunset from '~icons/lucide/sunset'
 import LucideCheck from '~icons/lucide/check'
+import LucideChevronDown from '~icons/lucide/chevron-down'
 import LucideBanknote from '~icons/lucide/banknote'
 import LucideStore from '~icons/lucide/store'
 import LucideX from '~icons/lucide/x'
@@ -60,6 +62,79 @@ const counted = ref({})
 const shortPeople = ref({})
 
 /**
+ * Who else is on the counter this shift — a Set of user ids.
+ *
+ * Named people rather than "whoever the profile permits", because those are two
+ * different facts: a cashier allowed on a till is not a cashier working it, and
+ * only the second one should be able to settle money against this drawer. The
+ * person opening the shift is never in here — they are on it by opening it.
+ */
+const pickedCashiers = ref(new Set())
+
+/** Whether the dropdown is showing. Stays open across ticks — picking two
+ *  people is two taps, and a menu that closed after the first would make the
+ *  second one a rediscovery. */
+const cashierMenu = ref(false)
+
+function toggleCashier(user) {
+	// The row is disabled too, but the server refuses these outright — so not
+	// relying on the markup alone to keep an unpickable name out of the payload.
+	if (!cashierOptions.value.find((c) => c.user === user)?.eligible) return
+	// Reassigned rather than mutated: Vue does not track Set mutations.
+	const next = new Set(pickedCashiers.value)
+	next.has(user) ? next.delete(user) : next.add(user)
+	pickedCashiers.value = next
+}
+
+function onCashierBlur(event) {
+	// Only when focus actually left the control. `focusout` also fires moving
+	// between the rows inside it, and closing then would make the second tick
+	// impossible.
+	if (!event.currentTarget.contains(event.relatedTarget)) cashierMenu.value = false
+}
+
+/**
+ * The co-cashiers this till permits, fetched here rather than by the parent.
+ *
+ * A departure from `summary` and `options` above, which the parents load and
+ * pass in — and deliberate. Those are read by the parent too; this list is used
+ * nowhere but the markup below. Requiring each parent to fetch it meant two
+ * screens open this sheet and only one of them wired it up, so opening a shift
+ * from the Shifts page silently offered no cashiers at all. A prop nobody else
+ * reads is a prop somebody will forget.
+ */
+const cashierOptions = ref([])
+const cashiersBusy = ref(false)
+
+async function loadCashiers(posProfile) {
+	if (!posProfile) {
+		cashierOptions.value = []
+		return
+	}
+	cashiersBusy.value = true
+	try {
+		cashierOptions.value = await listCashiers({ posProfile })
+	} catch (e) {
+		// Not being offered co-cashiers is a smaller problem than a red toast in
+		// front of somebody trying to start their day. The shift still opens.
+		console.warn('[shift] cashier list failed', e)
+		cashierOptions.value = []
+	} finally {
+		cashiersBusy.value = false
+	}
+}
+
+/** What the closed dropdown reads. Names while they fit, a count past that —
+ *  "3 selected" is useless when you are checking whether you forgot someone,
+ *  and a truncated list of eight is unreadable. */
+const cashierSummary = computed(() => {
+	const picked = cashierOptions.value.filter((c) => pickedCashiers.value.has(c.user))
+	if (!picked.length) return 'Nobody else'
+	if (picked.length <= 2) return picked.map((c) => c.label).join(', ')
+	return `${picked.length} cashiers`
+})
+
+/**
  * One tab per kind of money, which is the only division a cashier can hold in
  * their head. "Money out" used to carry expenses *and* neighbour purchases
  * behind a toggle, so the Expenses tab was never only expenses and the
@@ -91,7 +166,9 @@ watch(
 		profile.value = props.profiles[0]?.name || null
 		floats.value = Object.fromEntries(modesForProfile().map((m) => [m, '']))
 		shortPeople.value = {}
+		pickedCashiers.value = new Set()
 		resetExpense()
+		if (props.mode === 'open') loadCashiers(profile.value)
 	},
 )
 
@@ -122,11 +199,18 @@ function modesForProfile() {
 	return chosen?.modes?.length ? chosen.modes : props.paymentModes
 }
 
-watch(profile, () => {
+watch(profile, (name) => {
 	floats.value = Object.fromEntries(modesForProfile().map((m) => [m, floats.value[m] ?? '']))
+	// Two counters can permit different staff, so the roster has to be re-asked
+	// for — and anyone already ticked was ticked for the other till.
+	pickedCashiers.value = new Set()
+	loadCashiers(name)
 })
 
 const openingModes = computed(() => modesForProfile())
+
+/** Everyone the shift being closed is settling for, opener included. */
+const shiftCashiers = computed(() => props.summary?.shift?.cashiers || [])
 
 const rows = computed(() => props.summary?.rows || [])
 const movements = computed(() => props.summary?.movements || null)
@@ -311,6 +395,7 @@ function submitOpen() {
 			mode_of_payment: m,
 			opening_amount: Number(floats.value[m]) || 0,
 		})),
+		cashiers: [...pickedCashiers.value],
 	})
 }
 
@@ -392,6 +477,98 @@ const CASH_IN_TYPES = ['Neighbour Refund', 'Credit Payment']
 				</div>
 			</div>
 
+			<!-- Who else is on the counter. Offered on the way in rather than
+			     settled at closing time: a cashier who is not on the shift cannot
+			     have their sales counted into this drawer, and discovering that
+			     while trying to close it is discovering it far too late.
+
+			     A dropdown rather than a row of chips: a shop with a dozen staff
+			     turns chips into a wall of names above the float, which is the
+			     part of this form somebody actually came to fill in. -->
+			<div v-if="profile">
+				<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
+					Others on this till
+					<span class="font-normal text-ink-gray-5">— optional</span>
+				</label>
+
+				<div v-if="cashiersBusy" class="text-p-sm text-ink-gray-5">Loading…</div>
+
+				<!-- Says so rather than disappearing. A section that hides itself when
+				     the till permits nobody else is indistinguishable from a feature
+				     that is broken, and the fix — add staff to the POS Profile — is
+				     not something anybody guesses. -->
+				<p
+					v-else-if="!cashierOptions.length"
+					class="rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 py-2.5 text-p-sm text-ink-gray-5"
+				>
+					Only you are set up on this till. Add staff under <b>Applicable for Users</b>
+					on POS Profile <b>{{ profile }}</b> to share a shift with them.
+				</p>
+
+				<div v-else class="relative" @focusout="onCashierBlur">
+					<button
+						type="button"
+						class="flex h-12 w-full items-center justify-between gap-2 rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-left text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						@click="cashierMenu = !cashierMenu"
+					>
+						<span class="truncate" :class="{ 'text-ink-gray-5': !pickedCashiers.size }">
+							{{ cashierSummary }}
+						</span>
+						<LucideChevronDown class="h-4 w-4 shrink-0 text-ink-gray-5" />
+					</button>
+
+					<!-- Capped and scrollable: the sheet itself scrolls, and a list
+					     long enough to push the Open button off screen would make the
+					     form look broken at exactly the wrong moment. -->
+					<div
+						v-if="cashierMenu"
+						class="absolute z-10 mt-1 max-h-56 w-full overflow-y-auto rounded-xl border border-outline-gray-2 bg-surface-white py-1 shadow-lg"
+					>
+						<!-- Accounts that cannot sell are listed too, disabled, with the
+						     reason. Filtering them out is what made somebody add a user
+						     to the till and then not find them here. -->
+						<button
+							v-for="c in cashierOptions"
+							:key="c.user"
+							type="button"
+							:disabled="!c.eligible"
+							class="flex min-h-touch w-full items-center gap-2 px-3 py-2 text-left text-p-base disabled:cursor-not-allowed enabled:hover:bg-surface-gray-2"
+							:class="
+								!c.eligible
+									? 'text-ink-gray-4'
+									: pickedCashiers.has(c.user)
+										? 'font-medium text-ink-gray-9'
+										: 'text-ink-gray-7'
+							"
+							@click="toggleCashier(c.user)"
+						>
+							<span
+								class="grid h-4 w-4 shrink-0 place-items-center rounded border"
+								:class="
+									!c.eligible
+										? 'border-outline-gray-2 bg-surface-gray-2'
+										: pickedCashiers.has(c.user)
+											? 'border-outline-gray-4 bg-surface-gray-7'
+											: 'border-outline-gray-3'
+								"
+							>
+								<LucideCheck v-if="pickedCashiers.has(c.user)" class="h-3 w-3 text-ink-white" />
+							</span>
+							<span class="min-w-0 flex-1">
+								<span class="block truncate">{{ c.label }}</span>
+								<span v-if="!c.eligible" class="block truncate text-p-sm text-ink-gray-4">
+									{{ c.reason }}
+								</span>
+							</span>
+						</button>
+					</div>
+				</div>
+
+				<p class="mt-1.5 text-p-sm text-ink-gray-5">
+					Their sales settle on this shift. You are on it already.
+				</p>
+			</div>
+
 			<div class="flex flex-col gap-2">
 				<label class="text-p-sm font-medium text-ink-gray-7">Opening float</label>
 				<div v-for="m in openingModes" :key="m" class="flex items-center gap-3">
@@ -428,6 +605,15 @@ const CASH_IN_TYPES = ['Neighbour Refund', 'Credit Payment']
 					<div class="text-p-sm text-ink-gray-5">
 						{{ summary?.invoice_count || 0 }} sales ·
 						{{ fmtMoneyShort(summary?.grand_total || 0) }}
+						<!-- Named, not counted. Closing a drawer for two people is a
+						     different act from closing your own, and the money on the
+						     counter belongs to whoever is listed here. -->
+						<template v-if="shiftCashiers.length > 1">
+							· {{ shiftCashiers.length }} cashiers
+						</template>
+					</div>
+					<div v-if="shiftCashiers.length > 1" class="truncate text-p-sm text-ink-gray-5">
+						{{ shiftCashiers.join(', ') }}
 					</div>
 				</div>
 			</div>

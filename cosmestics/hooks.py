@@ -53,6 +53,14 @@ after_migrate = "cosmestics.setup.install.after_migrate"
 # include js in page
 # page_js = {"page" : "public/js/file.js"}
 
+# The Cashiers table's Link field would otherwise offer every User on the site
+# for a field that decides who may settle money against a till. Scopes it to the
+# chosen POS Profile's applicable users.
+doctype_js = {
+	"POS Opening Entry": "public/js/pos_shift_cashiers.js",
+	"POS Closing Entry": "public/js/pos_shift_cashiers.js",
+}
+
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
@@ -208,10 +216,15 @@ doc_events = {
 # Extend DocType Class
 # ------------------------------
 #
-# Specify custom mixins to extend the standard doctype controller.
-# extend_doctype_class = {
-# 	"Task": "cosmestics.custom.task.CustomTaskMixin"
-# }
+# A till shift can have more than one cashier on it. ERPNext's two POS entries
+# each assume it has exactly one — the closing entry refuses another cashier's
+# invoices outright, which leaves a shared shift unclosable. These mixins widen
+# the three checks that read the single `user` field to read the shift's roster
+# instead; everything else ERPNext validates is untouched. See the modules.
+extend_doctype_class = {
+	"POS Opening Entry": "cosmestics.overrides.pos_opening_entry.SharedShiftOpeningMixin",
+	"POS Closing Entry": "cosmestics.overrides.pos_closing_entry.SharedShiftClosingMixin",
+}
 
 # Overriding Methods
 # ------------------------------

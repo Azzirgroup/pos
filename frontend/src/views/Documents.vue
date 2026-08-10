@@ -20,6 +20,7 @@ import DeliveryTripSheet from '@/components/DeliveryTripSheet.vue'
 import Reports from '@/views/Reports.vue'
 import { moduleFor } from '@/data/navigation'
 import { resolveIcon } from '@/utils/icons'
+import { openPrintWindow } from '@/utils/printWindow'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideMore from '~icons/lucide/ellipsis'
 import LucideCheck from '~icons/lucide/check'
@@ -269,8 +270,9 @@ async function rowAction(row, action) {
 
 	if (action === 'print') {
 		try {
-			const { url } = await getPrintUrl({ key: activeKey.value, name: row.name })
-			window.open(url, '_blank', 'noopener')
+			await openPrintWindow(
+				async () => (await getPrintUrl({ key: activeKey.value, name: row.name })).url,
+			)
 		} catch (e) {
 			notify(e.message || 'Could not build a print view', 'bad')
 		}

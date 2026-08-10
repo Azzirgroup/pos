@@ -63,42 +63,82 @@ def _profile_modes(pos_profile: str) -> list:
 def _user_profiles() -> list:
 	"""POS Profiles this user can transact against.
 
-	Explicit `POS Profile User` rows when the profile lists any, otherwise
-	every enabled profile for the company — the same fallback `get_profiles`
-	uses, so a one-till shop that never bothered to list users still works.
+	A profile that lists users is a profile the shop has made a decision about,
+	so membership is required. One that lists nobody is open to anyone at the
+	company — a one-till shop should not have to configure that.
+
+	The test is deliberately *per profile*, not per user. It used to be "does
+	this user have any POS Profile User rows anywhere" — which meant a user with
+	no rows at all fell through to every enabled profile on the site, including
+	tills whose cashiers had been listed precisely to keep other people off them.
+	A new employee therefore got access to every counter, and the more carefully
+	a shop configured its tills the more wrong the answer became.
 	"""
 	user = frappe.session.user
-	allowed = frappe.get_all(
-		"POS Profile User", filters={"user": user, "parenttype": "POS Profile"}, pluck="parent"
-	)
-	if allowed:
-		return allowed
-
 	company = frappe.defaults.get_user_default("Company")
+
 	filters = {"disabled": 0}
 	if company:
 		filters["company"] = company
-	return frappe.get_all("POS Profile", filters=filters, pluck="name")
+	profiles = frappe.get_all("POS Profile", filters=filters, pluck="name")
+	if not profiles:
+		return []
+
+	# One query for every profile's user list, rather than one per profile.
+	listed = {}
+	for row in frappe.get_all(
+		"POS Profile User",
+		filters={"parent": ("in", profiles), "parenttype": "POS Profile"},
+		fields=["parent", "user"],
+		limit_page_length=0,
+	):
+		listed.setdefault(row.parent, set()).add(row.user)
+
+	return [p for p in profiles if user in listed.get(p, set()) or p not in listed]
 
 
 def _shared_open_shift():
-	"""The open shift on a POS Profile this user shares with someone else.
+	"""The open shift this user may transact against, opened by somebody else.
 
 	ERPNext allows only one open `POS Opening Entry` per profile at a time
-	(`check_open_pos_exists`), regardless of who opened it. A profile with
-	several `applicable_for_users` therefore has exactly one open shift,
-	belonging to whichever of them started it first — everyone else on that
-	profile sells against that same shift rather than being locked out until
-	it closes.
+	(`check_open_pos_exists`), regardless of who opened it. So a counter has
+	exactly one open shift, belonging to whichever cashier started it, and
+	everyone else has to sell against that same one rather than being locked out
+	until it closes.
+
+	Who "everyone else" is has two answers, in order:
+
+	1. **The shift's own roster** (`cosmestics_cashiers`), when it has one. That
+	   is the shop stating who is on this counter today, which is a different and
+	   better answer than what the profile happens to permit in general — a
+	   cashier allowed on a till is not the same as a cashier working it.
+	2. **The POS Profile**, when the shift names nobody. Shifts opened before the
+	   roster existed have no rows, and they must keep working exactly as they
+	   did.
 	"""
 	profiles = _user_profiles()
 	if not profiles:
 		return None
-	return frappe.db.get_value(
+
+	name = frappe.db.get_value(
 		"POS Opening Entry",
 		{"pos_profile": ("in", profiles), "docstatus": 1, "status": "Open"},
 		"name",
 	)
+	if not name:
+		return None
+
+	from cosmestics.overrides.shift_roster import ROSTER_FIELD
+
+	rostered = frappe.get_all(
+		"Cosmestics Shift Cashier",
+		filters={"parent": name, "parenttype": "POS Opening Entry", "parentfield": ROSTER_FIELD},
+		pluck="user",
+	)
+	if rostered and frappe.session.user not in rostered:
+		return None
+
+	return name
 
 
 @frappe.whitelist()
@@ -120,12 +160,18 @@ def get_open_shift():
 	if not name:
 		return None
 
+	from cosmestics.overrides.shift_roster import roster_users
+
 	doc = frappe.get_doc("POS Opening Entry", name)
+	cashiers = sorted(roster_users(doc))
 	return {
 		"name": doc.name,
 		"pos_profile": doc.pos_profile,
 		"company": doc.company,
 		"user": doc.user,
+		# Everyone on the counter, opener included, so the till can say who it is
+		# reconciling for rather than naming only whoever unlocked the drawer.
+		"cashiers": cashiers,
 		# So the till can say whose shift it is when it is not the viewer's own.
 		"shared": doc.user != frappe.session.user,
 		"period_start_date": str(doc.period_start_date),
@@ -143,10 +189,22 @@ def get_open_shift():
 
 
 @frappe.whitelist(methods=["POST"])
-def open_shift(pos_profile: str, balances: list | str | None = None):
-	"""Start a shift with the cash float already in the drawer."""
+def open_shift(
+	pos_profile: str,
+	balances: list | str | None = None,
+	cashiers: list | str | None = None,
+):
+	"""Start a shift with the cash float already in the drawer.
+
+	`cashiers` is everyone else working this counter — the person opening it is
+	always on the shift and never needs listing. Their sales settle on this
+	shift's closing entry; see `cosmestics.overrides.pos_closing_entry` for what
+	that takes.
+	"""
 	if isinstance(balances, str):
 		balances = frappe.parse_json(balances)
+	if isinstance(cashiers, str):
+		cashiers = frappe.parse_json(cashiers)
 
 	existing = get_open_shift()
 	if existing and existing.get("shared"):
@@ -174,6 +232,8 @@ def open_shift(pos_profile: str, balances: list | str | None = None):
 	doc.period_start_date = now_datetime()
 	doc.posting_date = nowdate()
 
+	_set_roster(doc, cashiers, pos_profile)
+
 	for row in balances or _default_balances(pos_profile):
 		doc.append(
 			"balance_details",
@@ -190,6 +250,193 @@ def open_shift(pos_profile: str, balances: list | str | None = None):
 	doc.submit()
 
 	return get_open_shift()
+
+
+def _set_roster(doc, cashiers, pos_profile):
+	"""Write the shift's cashiers, opener first, having checked they belong.
+
+	`cashiers` is everyone *else* the till named — the opener is added here
+	rather than asked for, because they are on the shift by opening it and a
+	picker that offers you your own name invites a duplicate row.
+
+	Opener first is load-bearing, not cosmetic: `before_validate` on the entry
+	sets ERPNext's single `user` field from the first row, so row order is what
+	decides who owns the shift.
+
+	Validated server-side rather than trusted from the browser. A roster row is
+	what lets somebody's sales settle on this drawer, so an unchecked list would
+	let a caller put any user on the site onto a counter they were never
+	permitted on — and then close it for them.
+	"""
+	from cosmestics.overrides.shift_roster import ROSTER_FIELD
+
+	if not doc.meta.has_field(ROSTER_FIELD):
+		# The Custom Field is created by `setup_prerequisites`. Missing means a
+		# site mid-upgrade. Silently dropping the roster would open a shift the
+		# named cashiers cannot actually sell on, so say so instead.
+		if cashiers:
+			frappe.throw(
+				_("This site cannot record extra cashiers yet. Run `bench migrate` and try again.")
+			)
+		return
+
+	permitted = set(_profile_users(pos_profile))
+
+	for user in dict.fromkeys([frappe.session.user, *(cashiers or [])]):
+		if not user:
+			continue
+		if user != frappe.session.user:
+			account = frappe.db.get_value(
+				"User", user, ["name", "enabled", "user_type"], as_dict=True
+			)
+			if not account:
+				frappe.throw(_("{0} is not a user on this site").format(user))
+			problem = _cashier_problem(account)
+			if problem:
+				frappe.throw(_("{0} cannot be put on a shift — {1}").format(user, problem))
+			if permitted and user not in permitted:
+				frappe.throw(
+					_(
+						"{0} is not allowed on {1}. Add them under Applicable for Users on "
+						"the POS Profile first."
+					).format(user, pos_profile)
+				)
+		doc.append(ROSTER_FIELD, {"user": user})
+
+
+def _profile_users(pos_profile: str) -> list:
+	"""Users the POS Profile lists. Empty means the till is open to anyone —
+	the same convention `_user_profiles` reads it by."""
+	return frappe.get_all(
+		"POS Profile User",
+		filters={"parent": pos_profile, "parenttype": "POS Profile"},
+		pluck="user",
+	)
+
+
+def _cashier_problem(user) -> str | None:
+	"""Why this account cannot work a till, or None if it can.
+
+	One place, so the picker and `_set_roster` cannot give different answers to
+	the same question — which is how somebody ends up offered a name that is
+	then refused on save.
+	"""
+	if not user.enabled:
+		return _("Account is disabled")
+	if user.user_type != "System User":
+		# A Website User cannot be given the roles that posting a Sales Invoice
+		# needs, so they could be added to a shift and still not be able to sell.
+		return _("Website User — needs to be a System User to sell")
+	return None
+
+
+@frappe.whitelist()
+def list_cashiers(pos_profile: str) -> list:
+	"""Who may be put on a shift at this till, and who may not, with reasons.
+
+	The profile's own `applicable_for_users` where it has them. Where it has
+	none the till is open to anyone, so this offers every user rather than
+	nobody — an empty picker on a till that in fact permits everyone reads as
+	"this feature is broken".
+
+	**Accounts that cannot sell are returned too, marked `eligible: False`.**
+	They used to be filtered out server-side, which meant somebody added a
+	Website User to the POS Profile, opened this picker, and found them simply
+	absent — no row, no reason, nothing to act on. A name with "needs to be a
+	System User" beside it is a thing a manager can fix; a missing name is a
+	bug report.
+
+	Excludes the caller: they are on the shift by opening it, and offering to add
+	yourself invites a duplicate row that means nothing. Guest is excluded
+	because it is not a person.
+	"""
+	if not frappe.db.exists("POS Profile", pos_profile):
+		frappe.throw(_("{0} is not a valid POS Profile").format(pos_profile))
+
+	names = _profile_users(pos_profile)
+	filters = {"name": ("in", names)} if names else {}
+
+	rows = frappe.get_all(
+		"User",
+		filters=filters,
+		fields=["name", "full_name", "enabled", "user_type"],
+		order_by="full_name asc",
+		limit_page_length=0,
+	)
+
+	# Administrator is deliberately *not* filtered out: on a small shop it is
+	# often the owner's own login, and removing it would make the person who set
+	# the site up unaddable to their own counter.
+	out = []
+	for r in rows:
+		if r.name in (frappe.session.user, "Guest"):
+			continue
+		problem = _cashier_problem(r)
+		out.append(
+			{
+				"user": r.name,
+				"label": r.full_name or r.name,
+				"eligible": not problem,
+				"reason": problem,
+			}
+		)
+
+	# Selectable names first, so a long list does not bury them under accounts
+	# nobody can pick.
+	out.sort(key=lambda c: (not c["eligible"], c["label"].lower()))
+	return out
+
+
+@frappe.whitelist()
+@frappe.validate_and_sanitize_search_inputs
+def cashier_query(
+	doctype: str,
+	txt: str | None = None,
+	searchfield: str | None = None,
+	start: int = 0,
+	page_len: int = 20,
+	filters: dict | str | None = None,
+):
+	"""Link-field search for the Cashiers table, scoped to the chosen till.
+
+	Without this the desk offers every User on the site — Guest and the support
+	login included — for a field whose whole purpose is to say who may settle
+	money against this drawer. The picker should not be able to suggest an answer
+	the server will then refuse, which is exactly what `_set_roster` does to
+	anyone the profile does not permit.
+
+	A search query rather than a static `filters` list because the desk expects
+	one for typing and paging, and a pre-fetched list would go stale the moment
+	the POS Profile field changed.
+	"""
+	# The desk usually sends filters as a dict, but the same endpoint is reachable
+	# with a JSON string, and `.get` on a string is an AttributeError rather than
+	# an empty picker.
+	if isinstance(filters, str):
+		filters = frappe.parse_json(filters)
+
+	profile = (filters or {}).get("pos_profile")
+
+	conditions = {"enabled": 1, "user_type": "System User", "name": ("!=", "Guest")}
+
+	# A profile that lists nobody is open to anyone at the company — the same
+	# convention `_user_profiles` reads it by. Only narrow when it actually said.
+	permitted = _profile_users(profile) if profile else []
+	if permitted:
+		conditions["name"] = ("in", permitted)
+
+	return frappe.get_all(
+		"User",
+		filters=conditions,
+		or_filters=(
+			{"name": ("like", f"%{txt}%"), "full_name": ("like", f"%{txt}%")} if txt else None
+		),
+		fields=["name", "full_name"],
+		order_by="full_name asc",
+		start=start,
+		page_length=page_len,
+		as_list=True,
+	)
 
 
 def _default_balances(pos_profile):
@@ -577,6 +824,9 @@ def _build_closing_entry(opening, data, end):
 	closing_entry.period_start_date = opening.period_start_date
 	closing_entry.period_end_date = end
 	closing_entry.pos_profile = opening.pos_profile
+	# Still the opener. ERPNext's `user` is one field and one person, and the
+	# roster below is what actually decides whose sales may be settled here —
+	# see `cosmestics.overrides.pos_closing_entry`.
 	closing_entry.user = opening.user
 	closing_entry.company = opening.company
 	closing_entry.grand_total = 0

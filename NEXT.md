@@ -4,6 +4,90 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 52. `bench execute smoke.run` does **not** roll back everything
+
+The docstring's promise — "Safe to run against a live site: the transaction is
+always rolled back" — is false, and has been since the suite started closing a
+shift. `close_shift` submits a POS Closing Entry, whose `on_submit` calls
+ERPNext's `consolidate_pos_invoices`, which calls `create_merge_logs`, which
+ends in `finally: frappe.db.commit()`. In Sales Invoice mode there is nothing to
+merge — `closing_entry.pos_invoices` is empty — so the function loops over
+nothing and commits anyway.
+
+Everything created before that point is therefore permanent. Measured on a fresh
+site: one run left **28 Sales Invoices, 6 POS Opening/Closing Entry pairs, 9
+Journal Entries and 9 shift movements** behind. Proven directly — count
+invoices, open a shift, sell, close, roll back, count again: one leaked.
+
+This is not "prices only" (item 51's known `pricing.py` / `reorder.py` commits).
+It is every document the suite raises up to the last `close_shift`. **Do not run
+the suite against a live shop until this is fixed.** The likely fix is to stop
+short of submitting the closing entry — build and validate it, then roll back —
+since submitting is the one step whose side effects escape the transaction.
+
+### 51. More than one cashier on a shift
+
+ERPNext models a till shift as one person's: `POS Opening Entry` has a single
+`user`, `check_open_pos_exists` allows one open entry per POS Profile, and
+`POS Closing Entry.validate_sales_invoices` rejects any invoice whose `owner` is
+not that person. The app already let a second cashier *sell* against a shared
+shift (`_shared_open_shift`, and `_shift_invoices` dropping ERPNext's `owner`
+filter) — but nobody had closed one, and it could not be done. The sales were
+banked, the cashiers had gone home, and the drawer would not close.
+
+**The roster.** `Cosmestics Shift Cashier` is a child table added to both POS
+entries as the Custom Field `cosmestics_cashiers`. The opening entry declares who
+is on the counter; the closing entry keeps a copy, because that is the document
+somebody actually reads afterwards.
+
+**One control, not two.** ERPNext's `user` cannot be removed — it is `reqd` and
+read by the closing entry, the cancellation guard and every standard POS report —
+so it is hidden by a Property Setter and *derived*: `before_validate` sets it to
+the first roster row. Filling in the table is the whole interaction, in the desk
+and at the till. Row order is therefore load-bearing; `_set_roster` puts the
+opener first.
+
+Three ERPNext checks are widened, via `extend_doctype_class` mixins in
+`cosmestics/overrides/`:
+
+| Check | Was | Now |
+| --- | --- | --- |
+| `POS Closing Entry.validate_sales_invoices` | `owner == self.user` | owner is on the roster |
+| `POS Opening Entry.check_user_already_assigned` | the opener only | everyone on the roster |
+| `POS Opening Entry.check_poe_is_cancellable` | the opener's sales | every sale on the shift |
+
+Every other guard ERPNext applies is untouched and still runs. Both fall back to
+`self.user` alone when there is no roster, so a site that never uses this is
+unaffected by the override existing.
+
+**A leak fixed on the way.** `_user_profiles()` asked "does this user have any
+POS Profile User rows *anywhere*", so a user with none fell through to every
+enabled profile on the site — the more carefully a shop listed its cashiers, the
+more tills a new employee could reach. The test is now per profile: a profile
+that lists users requires membership, one that lists nobody stays open to all.
+
+**At the till**, the opening sheet gained an "Others on this till" picker, fed by
+`shift.list_cashiers` and re-asked whenever the till changes, since two counters
+can permit different staff. The closing sheet names who it is settling for.
+`open_shift` validates the list server-side — a roster row is what lets somebody
+settle money against this drawer, so an unchecked one would be a way onto any
+counter.
+
+Covered by `smoke.py::_shared_shift`: eight checks, ending in a two-cashier shift
+that closes and a closing entry carrying both names.
+
+**The desk picker is scoped to the till.** The child table's `user` is a plain
+Link, so the grid offered every account on the site — Guest and the support login
+among them — for the field that decides who may settle money against a drawer.
+Worse than untidy: `_set_roster` refuses anyone the profile does not permit, so
+the picker was suggesting answers the server would reject on save.
+`shift.cashier_query` is now a search query filtered by the chosen POS Profile's
+`applicable_for_users`, wired through `doctype_js` on both POS entries
+(`public/js/pos_shift_cashiers.js`). Changing the till clears rows already
+picked, since two counters can permit different staff. A profile that lists
+nobody still offers every enabled System User — the same "open to anyone"
+convention `_user_profiles` reads.
+
 ### 50. Selling by the dozen, and opening a shift honestly
 
 **UOM at the till.** `get_catalog` now returns every unit an item may be sold

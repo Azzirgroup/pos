@@ -523,10 +523,18 @@ def recent_sales(
 			"is_return",
 			"return_against",
 			"status",
+			# For the WhatsApp summary a shop posts to its own group: who rang it
+			# up and on which counter. Both are already on the invoice, and asking
+			# for them per row when the list is shared is an N+1 on the one action
+			# that is always done in a hurry.
+			"owner",
+			"pos_profile",
 		],
 		order_by="creation desc",
 		limit_page_length=min(max(cint(limit) or 20, 1), 100),
 	)
+
+	_attach_payment_modes(rows)
 
 	return {
 		"rows": rows,
@@ -542,6 +550,35 @@ def recent_sales(
 		"since": str(shift.period_start_date) if shift else None,
 		"on_date": on_date,
 	}
+
+
+def _attach_payment_modes(rows):
+	"""How each sale was paid, in one query rather than one per row.
+
+	A summary that says what was sold but not how it was settled cannot be
+	reconciled against anything, which is the whole point of posting the day's
+	sales to a group. Several modes on one invoice is a split tender and is
+	reported as such rather than reduced to the first one.
+	"""
+	if not rows:
+		return
+
+	names = [r.name for r in rows]
+	modes = {}
+	for row in frappe.get_all(
+		"Sales Invoice Payment",
+		filters={"parent": ("in", names)},
+		fields=["parent", "mode_of_payment"],
+		limit_page_length=0,
+	):
+		modes.setdefault(row.parent, []).append(row.mode_of_payment)
+
+	for r in rows:
+		paid = list(dict.fromkeys(modes.get(r.name) or []))
+		# A credit sale has no payment row at all — it is money owed, not money
+		# taken, and calling that "unpaid" is what the drawer needs to hear.
+		r.payment_modes = paid
+		r.payment_summary = ", ".join(paid) if paid else _("On account")
 
 
 @frappe.whitelist()

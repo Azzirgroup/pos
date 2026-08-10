@@ -4,6 +4,7 @@
  * Shared by the live catalog and the demo seed so both produce byte-identical
  * item shapes — otherwise the demo drifts from reality and hides bugs.
  */
+import { normalise, tokenise } from '@/utils/search'
 
 /**
  * Deterministic hue per item. Avoids shipping product photos: swatches render
@@ -66,5 +67,12 @@ export function decorate(row) {
 		// Pre-lowered haystack: built once at load, not per keystroke.
 		_search:
 			`${row.item_code} ${row.item_name} ${row.brand || ''} ${row.category || ''} ${barcodes.join(' ')}`.toLowerCase(),
+		// The same haystack with punctuation flattened, plus its words. Both are
+		// built here rather than in `search()` because normalising a whole catalog
+		// on every keystroke is the cost this store exists to avoid.
+		_norm: normalise(
+			`${row.item_code} ${row.item_name} ${row.brand || ''} ${row.category || ''}`,
+		),
+		_words: tokenise(`${row.item_code} ${row.item_name} ${row.brand || ''}`),
 	}
 }

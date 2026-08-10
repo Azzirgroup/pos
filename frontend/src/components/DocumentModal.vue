@@ -11,6 +11,7 @@ import {
 } from '@/data/api'
 import { fmtMoney } from '@/utils/format'
 import { cellTone, statusTheme } from '@/utils/tone'
+import { openPrintWindow } from '@/utils/printWindow'
 import LucideCheck from '~icons/lucide/check'
 import LucideBan from '~icons/lucide/ban'
 import LucideCopy from '~icons/lucide/copy'
@@ -135,12 +136,16 @@ async function act(action) {
 async function print() {
 	busy.value = 'print'
 	try {
-		const { url } = await getPrintUrl({
-			key: props.docKey,
-			name: props.name,
-			printFormat: printFormat.value || null,
-		})
-		window.open(url, '_blank', 'noopener')
+		await openPrintWindow(
+			async () =>
+				(
+					await getPrintUrl({
+						key: props.docKey,
+						name: props.name,
+						printFormat: printFormat.value || null,
+					})
+				).url,
+		)
 	} catch (e) {
 		emit('notify', { message: e.message || 'Could not build a print view', tone: 'bad' })
 	} finally {

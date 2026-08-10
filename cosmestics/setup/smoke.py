@@ -110,8 +110,9 @@ def _run(r):
 	_catalog(r)
 	_partial_payment(r, item)
 	_shift_and_credit(r, item)
-	# That section closes its shift as part of what it tests, so anything below
-	# that posts a sale needs one opened again.
+	_shared_shift(r, item)
+	# Those sections close their shift as part of what they test, so anything
+	# below that posts a sale needs one opened again.
 	_ensure_sellable_shift()
 	_till(r, item)
 	_neighbour_sourcing(r, item)
@@ -520,6 +521,157 @@ def _partial_payment(r, item):
 		r.check("partial without customer is rejected", False, "no error raised")
 	except frappe.ValidationError:
 		r.check("partial without customer is rejected", True)
+
+
+def _shared_shift(r, item):
+	"""Two cashiers on one shift, and closing it for both.
+
+	This is the case ERPNext cannot do unassisted. `POS Opening Entry` holds one
+	cashier, and `POS Closing Entry.validate_sales_invoices` refuses any invoice
+	whose owner is not that person — so before the roster existed, a counter
+	worked by two people sold happily all day and then could not be closed at
+	all. The failure lands at the end of the shift, with the money already
+	banked, which is the worst possible moment to discover it.
+
+	Covered here rather than by hand because every part of it is invisible until
+	the last step: the sales look right, the drawer total looks right, and only
+	`close_shift` says no.
+	"""
+	from cosmestics.api.pos import submit_sale
+	from cosmestics.api.shift import (
+		close_shift,
+		get_closing_summary,
+		get_open_shift,
+		list_cashiers,
+		open_shift,
+	)
+	from cosmestics.overrides.shift_roster import ROSTER_FIELD
+
+	print()
+	if not frappe.get_meta("POS Opening Entry").has_field(ROSTER_FIELD):
+		print("SKIP: shift roster field missing — run `bench migrate`")
+		return
+
+	profile = _sellable_profile()
+	if not profile:
+		print("SKIP: no POS Profile to open a shift on")
+		return
+
+	mate = _test_cashier(profile)
+	if not mate:
+		print("SKIP: could not prepare a second cashier")
+		return
+
+	if get_open_shift():
+		close_shift()
+
+	r.check(
+		"the till offers co-cashiers to add",
+		mate in [c["user"] for c in list_cashiers(pos_profile=profile)],
+		mate,
+	)
+
+	shift = open_shift(pos_profile=profile, cashiers=[mate])
+	r.check(
+		"the shift names everyone on it",
+		set(shift.get("cashiers") or []) == {frappe.session.user, mate},
+		str(shift.get("cashiers")),
+	)
+
+	opener = frappe.session.user
+	before = get_closing_summary()["grand_total"]
+	submit_sale(
+		items=[{"item_code": item.item_code, "qty": 1, "rate": 500, "discount_pct": 0}],
+		payment={"method": "cash", "tendered": 500, "change": 0},
+	)
+
+	# The co-cashier's own sale, rung up as them.
+	frappe.set_user(mate)
+	try:
+		joined = get_open_shift()
+		r.check(
+			"a rostered cashier joins the open shift",
+			bool(joined) and joined["name"] == shift["name"] and joined["shared"],
+			str(joined and joined["name"]),
+		)
+		mate_sale = submit_sale(
+			items=[{"item_code": item.item_code, "qty": 1, "rate": 500, "discount_pct": 0}],
+			payment={"method": "cash", "tendered": 500, "change": 0},
+		)
+	finally:
+		frappe.set_user(opener)
+
+	r.check(
+		"their invoice is owned by them, not the opener",
+		frappe.db.get_value("Sales Invoice", mate_sale["invoice"], "owner") == mate,
+	)
+
+	summary = get_closing_summary()
+	r.check(
+		"the drawer expects both cashiers' takings",
+		flt(summary["grand_total"]) - flt(before) >= 1000,
+		f"{before} -> {summary['grand_total']}",
+	)
+
+	cash = next(
+		(flt(x["expected_amount"]) for x in summary["rows"] if x["mode_of_payment"] == "Cash"), 0
+	)
+	closed = close_shift(counted=[{"mode_of_payment": "Cash", "closing_amount": cash}])
+	r.check("a two-cashier shift can be closed", bool(closed.get("name")), str(closed.get("name")))
+
+	entry = frappe.get_doc("POS Closing Entry", closed["name"])
+	owners = {
+		frappe.db.get_value("Sales Invoice", row.sales_invoice, "owner")
+		for row in entry.sales_invoices
+	}
+	r.check("the closing entry settled both cashiers' sales", mate in owners, str(sorted(owners)))
+	r.check(
+		"the closing entry records who was on shift",
+		{c.user for c in entry.get(ROSTER_FIELD)} == {opener, mate},
+		str(sorted(c.user for c in entry.get(ROSTER_FIELD))),
+	)
+
+
+def _sellable_profile() -> str | None:
+	from cosmestics.api.shift import get_profiles
+
+	profiles = get_profiles()
+	return profiles[0]["name"] if profiles else None
+
+
+def _test_cashier(profile: str) -> str | None:
+	"""A second enabled user, permitted on this till.
+
+	Created if the site has nobody else — a one-person shop is exactly where
+	this feature is least exercised and most likely to be broken. Rolled back
+	with everything else.
+	"""
+	existing = frappe.get_all(
+		"User",
+		filters={"enabled": 1, "user_type": "System User", "name": ("not in", ["Guest"])},
+		pluck="name",
+	)
+	mate = next((u for u in existing if u != frappe.session.user), None)
+
+	if not mate:
+		doc = frappe.new_doc("User")
+		doc.email = "smoke.cashier@example.com"
+		doc.first_name = "Smoke"
+		doc.last_name = "Cashier"
+		doc.send_welcome_email = 0
+		for role in ("Accounts User", "Sales User", "Stock User"):
+			doc.append("roles", {"role": role})
+		doc.insert(ignore_permissions=True)
+		mate = doc.name
+
+	# The roster refuses anyone the profile does not permit, which is the point
+	# of it — so put them on the profile the way a shop would.
+	prof = frappe.get_doc("POS Profile", profile)
+	if prof.applicable_for_users and mate not in [u.user for u in prof.applicable_for_users]:
+		prof.append("applicable_for_users", {"user": mate})
+		prof.save()
+
+	return mate
 
 
 def _shift_and_credit(r, item):
@@ -2355,6 +2507,18 @@ def _annotations(r):
 				"filename": None,
 			},
 		),
+		(shift.list_cashiers, {"pos_profile": "x"}),
+		(
+			shift.cashier_query,
+			{
+				"doctype": "User",
+				"txt": "",
+				"searchfield": "name",
+				"start": 0,
+				"page_len": 20,
+				"filters": {},
+			},
+		),
 		(shift.get_movement_options, {}),
 		(shift.list_movements, {"shift_name": None}),
 		(shift.list_recent_shifts, {"limit": 10, "mine": 1}),
@@ -2379,12 +2543,21 @@ def _annotations(r):
 		(settings.link_options, {"doctype": "Warehouse", "search": None, "limit": 20}),
 	]
 
+	# `force_types` only exists on framework versions that validate unannotated
+	# arguments too. On one that lacks it the call still exercises the same code
+	# path — it just cannot flag a *missing* annotation, only a wrong one — so
+	# degrade rather than blow up the whole suite on the first check.
+	supports_force = "force_types" in inspect.signature(transform_parameter_types).parameters
+
 	missing = []
 	for func, kwargs in endpoints:
 		# Unwrap the whitelist decorator to reach the annotated function.
 		target = inspect.unwrap(func)
 		try:
-			transform_parameter_types(target, (), dict(kwargs), force_types=True)
+			if supports_force:
+				transform_parameter_types(target, (), dict(kwargs), force_types=True)
+			else:
+				transform_parameter_types(target, (), dict(kwargs))
 		except frappe.exceptions.FrappeTypeError as e:
 			missing.append(f"{target.__name__}: {e}")
 

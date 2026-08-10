@@ -9,6 +9,7 @@ import LucideUserPlus from '~icons/lucide/user-plus'
 import LucidePause from '~icons/lucide/pause'
 import LucideUndo from '~icons/lucide/undo-2'
 import LucideTrash2 from '~icons/lucide/trash-2'
+import LucideFileText from '~icons/lucide/file-text'
 
 defineProps({
 	/** Hides the panel's own header when rendered inside the mobile sheet. */
@@ -27,7 +28,7 @@ defineProps({
  * the one that never checked. The view that owns the out-of-stock sheet decides
  * now; this panel only says what the cashier pressed.
  */
-const emit = defineEmits(['pay', 'hold', 'pickCustomer', 'inc', 'dec', 'setQty', 'setUom'])
+const emit = defineEmits(['pay', 'hold', 'quote', 'pickCustomer', 'inc', 'dec', 'setQty', 'setUom'])
 
 const cart = useCartStore()
 const {
@@ -55,14 +56,33 @@ const canUnhold = computed(() => isEmpty.value && cart.held.length > 0)
 
 const scroller = ref(null)
 
-// Keep the newest line in view. In a long cart the cashier otherwise has no
-// feedback that a scan at the bottom actually registered.
+/**
+ * Bring the line that just changed into view — the line, not the bottom.
+ *
+ * This used to jump to `scrollHeight` on every change, which is right only when
+ * the touched line *is* the last one. Re-adding an item already in a long cart
+ * merges it into its existing row somewhere in the middle and then scrolled
+ * away from it, so the quantity went up with the cashier looking at a different
+ * part of the list. It reads as "scanning the same item twice does nothing" —
+ * the row does flash, but off screen.
+ *
+ * `block: 'nearest'` so a row already visible does not move under the cashier's
+ * finger; falls back to the bottom when there is no touched row, which is the
+ * empty-cart and cleared cases.
+ */
 watch(
 	() => [lines.value.length, lastTouched.value],
 	async () => {
 		await nextTick()
 		const el = scroller.value
-		if (el) el.scrollTop = el.scrollHeight
+		if (!el) return
+
+		const row = lastTouched.value
+			? el.querySelector(`[data-line="${CSS.escape(String(lastTouched.value))}"]`)
+			: null
+
+		if (row) row.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+		else el.scrollTop = el.scrollHeight
 	},
 )
 </script>
@@ -93,6 +113,7 @@ watch(
 			<CartLine
 				v-for="line in lines"
 				:key="line.id"
+				:data-line="line.id"
 				:line="line"
 				:line-total="cart.lineTotal(line)"
 				:highlight="lastTouched === line.id"
@@ -219,6 +240,19 @@ watch(
 					@click="emit('hold')"
 				>
 					<component :is="canUnhold ? LucideUndo : LucidePause" class="h-[18px] w-[18px]" />
+				</button>
+				<!-- Quote the cart as it stands. Beside Pay because that is the
+				     moment the customer asks — "how much for all this?" is answered
+				     with the goods already rung up, and sending the cashier to the
+				     Quotes list to re-enter them is why it was being done on paper. -->
+				<button
+					class="grid h-12 w-12 shrink-0 place-items-center rounded-xl border border-outline-gray-2 text-ink-gray-6 transition-colors hover:bg-surface-gray-2 disabled:opacity-40"
+					:disabled="isEmpty"
+					aria-label="Quote this sale"
+					title="Save this cart as a quotation"
+					@click="emit('quote')"
+				>
+					<LucideFileText class="h-[18px] w-[18px]" />
 				</button>
 				<!-- The pay button carries the amount: the cashier reads one number
 				     and presses one target, and it is the largest thing on screen. -->

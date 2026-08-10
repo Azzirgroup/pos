@@ -69,8 +69,20 @@ export const getProfiles = () => call('cosmestics.api.shift.get_profiles')
 export const getOpenShift = () => call('cosmestics.api.shift.get_open_shift')
 export const getClosingSummary = () => call('cosmestics.api.shift.get_closing_summary')
 
-export const openShift = ({ posProfile, balances }) =>
-	call('cosmestics.api.shift.open_shift', { pos_profile: posProfile, balances })
+/** Who else may be put on a shift at this till. */
+export const listCashiers = ({ posProfile }) =>
+	call('cosmestics.api.shift.list_cashiers', { pos_profile: posProfile })
+
+/**
+ * `cashiers` is everyone *else* working the counter. Whoever opens the shift is
+ * on it by opening it, so the till never sends their own name.
+ */
+export const openShift = ({ posProfile, balances, cashiers }) =>
+	call('cosmestics.api.shift.open_shift', {
+		pos_profile: posProfile,
+		balances,
+		cashiers: cashiers?.length ? cashiers : null,
+	})
 
 export const closeShift = ({ counted, shorts }) =>
 	call('cosmestics.api.shift.close_shift', { counted, shorts: shorts || null })

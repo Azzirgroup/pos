@@ -57,6 +57,7 @@ def setup_prerequisites():
 	ensure_pos_settings()
 	ensure_partial_payment_allowed()
 	ensure_short_account_field()
+	ensure_shift_cashier_field()
 	# Must run after the field exists, and after `group` is known so a site
 	# upgrading from the group-only scheme keeps its existing neighbours.
 	backfill_neighbour_shop_flag(group)
@@ -95,6 +96,85 @@ def ensure_short_account_field():
 				"Unattributed Short Account in Cosmetics POS Settings."
 			),
 		},
+	)
+
+
+def ensure_shift_cashier_field():
+	"""Give a till shift somewhere to say who is on it.
+
+	ERPNext's POS Opening Entry names one cashier. A counter with two people
+	behind it needs a list, so both POS entries get a `cosmestics_cashiers`
+	table — the opening entry to declare the roster, the closing entry to keep a
+	record of it on the document a manager actually reads.
+
+	A Custom Field rather than a fork of the doctype, so ERPNext keeps owning its
+	own schema and an upgrade cannot silently drop this. Created here rather than
+	as a fixture so it survives a migrate on a site that already has the app —
+	see `after_migrate`.
+	"""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	targets = (
+		(
+			"POS Opening Entry",
+			"Everyone selling against this shift. The first row owns it; the rest "
+			"settle their sales on the same closing entry.",
+		),
+		(
+			"POS Closing Entry",
+			"Who was on the shift being closed. Copied from the opening entry; "
+			"editing it here does not change whose sales are settled.",
+		),
+	)
+
+	for doctype, description in targets:
+		if not frappe.db.exists("DocType", doctype):
+			continue
+
+		if not frappe.db.exists("Custom Field", {"dt": doctype, "fieldname": "cosmestics_cashiers"}):
+			create_custom_field(
+				doctype,
+				{
+					"fieldname": "cosmestics_cashiers",
+					"label": "Cashiers",
+					"fieldtype": "Table",
+					"options": "Cosmestics Shift Cashier",
+					"insert_after": "user",
+					"description": description,
+				},
+			)
+
+		hide_single_cashier_field(doctype)
+
+
+def hide_single_cashier_field(doctype: str):
+	"""Take ERPNext's one-cashier field off the form.
+
+	It cannot be deleted — `user` is `reqd`, and the closing entry, the
+	cancellation guard and every standard POS report read it. But leaving it
+	beside the Cashiers table puts two controls on screen asking the same
+	question, with nothing saying which one decides. That is a worse form than
+	either control alone.
+
+	So it is hidden and derived: the table is what a person fills in, and
+	`before_validate` on the entry keeps `user` equal to the first row (see
+	`cosmestics.overrides.pos_opening_entry`). The value is still there, still
+	correct, and still exactly what ERPNext expects to find.
+
+	A Property Setter rather than an edit to the DocType, so ERPNext keeps owning
+	its own schema and this is one row to delete if the shop ever wants the field
+	back.
+	"""
+	frappe.make_property_setter(
+		{
+			"doctype": doctype,
+			"fieldname": "user",
+			"property": "hidden",
+			"value": 1,
+			"property_type": "Check",
+		},
+		is_system_generated=True,
+		validate_fields_for_doctype=False,
 	)
 
 
