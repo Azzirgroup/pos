@@ -7,6 +7,7 @@ import PillTabs from '@/components/PillTabs.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
+import DocumentModal from '@/components/DocumentModal.vue'
 import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideSend from '~icons/lucide/send'
@@ -70,6 +71,13 @@ const DOCTYPE_BY_TAB = {
 	requests: 'Material Request',
 }
 
+/** The documents-hub key for each tab, so the first column can open the row. */
+const DOC_KEY_BY_TAB = {
+	invoices: 'purchase-invoice',
+	orders: 'purchase-order',
+	requests: 'material-request',
+}
+
 const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
 	columns: () => columns.value,
 	title: (row) => `${row.name}${row.supplier ? ` · ${row.supplier}` : ''}`,
@@ -106,6 +114,17 @@ async function load() {
 	}
 }
 
+/** Open whichever document type this tab is listing. */
+const docKey = ref(null)
+const docName = ref(null)
+const docOpen = ref(false)
+
+function openRow(row) {
+	if (!row?.name) return
+	docKey.value = DOC_KEY_BY_TAB[tab.value]
+	docName.value = row.name
+	docOpen.value = true
+}
 </script>
 
 <template>
@@ -142,6 +161,8 @@ async function load() {
 		</div>
 
 		<DataTable
+			row-link
+			@row-click="openRow"
 			:columns="columns"
 			:rows="rows"
 			row-key="name"
@@ -159,5 +180,6 @@ async function load() {
 		</DataTable>
 
 		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
+		<DocumentModal v-model:open="docOpen" :doc-key="docKey" :name="docName" />
 	</div>
 </template>

@@ -80,12 +80,18 @@ website_route_rules = [
 	{"from_route": "/pos/<path:app_path>", "to_route": "pos"},
 ]
 
+# The tile opens the **dashboard**, not the till.
+#
+# Whoever reaches this app from the desk apps screen is at a computer, signed
+# into ERPNext, and asking how the shop is doing — not standing at a counter
+# about to ring something up. A cashier never comes this way: they open the till
+# directly, from a bookmark or the installed app, and `/pos` still lands there.
 add_to_apps_screen = [
 	{
 		"name": "cosmestics",
 		"logo": "/assets/cosmestics/images/logo.svg",
-		"title": "POS",
-		"route": "/pos",
+		"title": "TradeFlow",
+		"route": "/pos/dashboard",
 	}
 ]
 
@@ -93,6 +99,13 @@ add_to_apps_screen = [
 # ---------------
 
 doc_events = {
+	"User": {
+		# Hashes a typed till PIN and drops the digits before the row is written,
+		# so the plaintext never reaches the database. Runs on every save path —
+		# the desk form, an import, a script — because a PIN stored in the clear
+		# by one of them is stored in the clear.
+		"validate": "cosmestics.api.pin.hash_user_pin",
+	},
 	"Material Request": {
 		# Posts the request to the staff WhatsApp group. Enqueued, best-effort:
 		# a bridge outage must never block the request itself.
@@ -103,8 +116,18 @@ doc_events = {
 # Home Pages
 # ----------
 
-# application home page (will override Website Settings)
-# home_page = "login"
+# Deliberately not set.
+#
+# A `home_page` hook here would capture *every* sign-in on the site — ERPNext's
+# own `/login`, the website root, everything — and send it to the till. That is
+# too broad a claim for one app to make: somebody signing in to do the books
+# should land in the desk, where they were going.
+#
+# The two doors this app owns are pointed where they belong instead: the apps
+# screen tile opens the dashboard (`add_to_apps_screen` above), and its own
+# `/till-login` returns to whichever POS screen sent you there.
+#
+# home_page = "pos/pos"
 
 # website user home page (by Role)
 # role_home_page = {

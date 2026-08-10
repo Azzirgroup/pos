@@ -58,6 +58,8 @@ def setup_prerequisites():
 	ensure_partial_payment_allowed()
 	ensure_short_account_field()
 	ensure_shift_cashier_field()
+	ensure_pin_login_fields()
+	ensure_app_icon()
 	# Must run after the field exists, and after `group` is known so a site
 	# upgrading from the group-only scheme keeps its existing neighbours.
 	backfill_neighbour_shop_flag(group)
@@ -145,6 +147,116 @@ def ensure_shift_cashier_field():
 			)
 
 		hide_single_cashier_field(doctype)
+
+
+def ensure_app_icon():
+	"""Keep the desk's app icon pointing where `add_to_apps_screen` says.
+
+	The icon on the desk is a **Desktop Icon row**, written once when the app is
+	installed. The hook only seeds it — editing the hook afterwards changes what a
+	*fresh* install gets and leaves every existing site clicking through to the
+	old destination, with nothing on screen to suggest why.
+
+	That is exactly what happened here: the tile kept opening the till long after
+	the hook said dashboard, and the title stayed on a name the app no longer
+	used. So the row is reconciled against the hook on every migrate.
+
+	Only the fields the hook owns are touched. Anything a shop has changed itself
+	— where the icon sits, whether it is hidden — is left alone.
+	"""
+	if not frappe.db.exists("DocType", "Desktop Icon"):
+		return
+
+	entries = frappe.get_hooks("add_to_apps_screen", app_name="cosmestics") or []
+	if not entries:
+		return
+	wanted = entries[0]
+
+	title = wanted.get("title")
+
+	for name in frappe.get_all("Desktop Icon", filters={"app": "cosmestics"}, pluck="name"):
+		# Desktop Icon is `autoname: field:label`, so the label *is* the primary
+		# key. Assigning it and saving looks like it works and silently reverts —
+		# the only way to retitle one is to rename the document.
+		if title and name != title and not frappe.db.exists("Desktop Icon", title):
+			frappe.rename_doc("Desktop Icon", name, title, force=True)
+			name = title
+
+		icon = frappe.get_doc("Desktop Icon", name)
+		changed = False
+		for field, value in (("link", wanted.get("route")), ("logo_url", wanted.get("logo"))):
+			if value and icon.get(field) != value:
+				icon.set(field, value)
+				changed = True
+		if changed:
+			icon.save(ignore_permissions=True)
+
+	# The desk reads icons from a cache keyed per user, not from the table.
+	from frappe.desk.doctype.desktop_icon.desktop_icon import clear_desktop_icons_cache
+
+	frappe.cache.delete_key("desktop_icons")
+	frappe.cache.delete_key("bootinfo")
+	clear_desktop_icons_cache()
+
+
+def ensure_pin_login_fields():
+	"""Let a cashier be given a four-digit PIN for the till.
+
+	Three fields, and the split matters. `cosmestics_pin` is only ever typed
+	into — `cosmestics.api.pin.hash_user_pin` hashes it and blanks it before the
+	document is saved, so the digits are never written anywhere. The hash lives
+	in its own read-only field, and the checkbox is a separate deliberate act:
+	setting a PIN and permitting its use are two decisions, and a shop should be
+	able to revoke the second without destroying the first.
+	"""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	fields = [
+		{
+			"fieldname": "cosmestics_pin_section",
+			"label": "Till PIN",
+			"fieldtype": "Section Break",
+			"insert_after": "username",
+			"collapsible": 1,
+		},
+		{
+			"fieldname": "cosmestics_pin_login",
+			"label": "Allow PIN sign-in at the till",
+			"fieldtype": "Check",
+			"insert_after": "cosmestics_pin_section",
+			"description": (
+				"Lets this person sign in at the POS with their PIN instead of a "
+				"password. Signs them in as themselves — it grants nothing extra."
+			),
+		},
+		{
+			"fieldname": "cosmestics_pin",
+			"label": "PIN (4 digits)",
+			"fieldtype": "Password",
+			"insert_after": "cosmestics_pin_login",
+			"depends_on": "eval:doc.cosmestics_pin_login",
+			"description": (
+				"Type four digits and save. The PIN is hashed immediately and cannot "
+				"be read back — to change it, type a new one."
+			),
+		},
+		{
+			"fieldname": "cosmestics_pin_hash",
+			"label": "PIN Hash",
+			"fieldtype": "Data",
+			"insert_after": "cosmestics_pin",
+			"hidden": 1,
+			"read_only": 1,
+			"no_copy": 1,
+			# Never a search key, never in a report, never exported by accident.
+			"print_hide": 1,
+		},
+	]
+
+	for field in fields:
+		if frappe.db.exists("Custom Field", {"dt": "User", "fieldname": field["fieldname"]}):
+			continue
+		create_custom_field("User", field)
 
 
 def hide_single_cashier_field(doctype: str):

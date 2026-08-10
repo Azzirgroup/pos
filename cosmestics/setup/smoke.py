@@ -2427,6 +2427,12 @@ def _annotations(r):
 			{"days": 30, "status": None, "search": None, "limit": 50},
 		),
 		(quotations.get, {"name": "x"}),
+		(quotations.close, {"name": "x", "reason": None}),
+		(quotations.merge, {"names": [], "customer": None, "valid_days": 14, "notes": None}),
+		(
+			quotations.update,
+			{"name": "x", "items": [], "valid_days": 14, "notes": None},
+		),
 		(quotations.print_url, {"name": "x", "print_format": None}),
 		(quotations.send_whatsapp, {"name": "x", "to": "y", "sender": None}),
 		(returns.returnable_sale, {"invoice": "x"}),

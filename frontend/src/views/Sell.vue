@@ -26,6 +26,7 @@ import {
 	recordMovement as apiRecordMovement,
 	voidMovement as apiVoidMovement,
 	createQuotation,
+	updateQuotation,
 	listCreditSales,
 	payCreditSale,
 } from '@/data/api'
@@ -955,18 +956,38 @@ function onReturned(res) {
 const quotationSheet = ref(false)
 const quotationBusy = ref(false)
 
-async function saveQuotation({ validDays, notes }) {
+/** Fold several parked sales into one ticket — see `cart.mergeHeld`. */
+function mergeHeldTickets(ids) {
+	const ticket = cart.mergeHeld(ids)
+	if (ticket) notify(`Merged into ${ticket.id} · ${fmtMoney(ticket.total)}`, 'ok')
+}
+
+async function saveQuotation({ validDays, notes, asNew }) {
 	if (isEmpty.value) return
 	quotationBusy.value = true
+	// Editing a quote loaded into the cart updates that quote rather than
+	// raising a second one with a different number — unless the cashier
+	// deliberately asked for a new document.
+	const editing = !asNew && cart.sourceQuotation
 	try {
-		const res = await createQuotation({
-			items: lines.value,
-			customer: customer.value?.name || null,
-			validDays,
-			notes,
-		})
+		const res = editing
+			? await updateQuotation({ name: editing, items: lines.value, validDays, notes })
+			: await createQuotation({
+					items: lines.value,
+					customer: customer.value?.name || null,
+					validDays,
+					notes,
+				})
 		quotationSheet.value = false
-		notify(`Quoted ${fmtMoney(res.grand_total)} — ${res.name}, valid to ${res.valid_till}`, 'ok')
+		// The cart has become the quotation, so it stops being a sale in progress.
+		// Leaving it loaded meant the next customer's items were rung up on top of
+		// somebody else's quoted basket — and the cashier, having just been told
+		// the quote saved, had no reason to look.
+		cart.clear()
+		notify(
+			`${res.updated ? 'Updated' : 'Quoted'} ${fmtMoney(res.grand_total)} — ${res.name}, valid to ${res.valid_till}`,
+			'ok',
+		)
 	} catch (e) {
 		notify(e.message || 'Could not save the quotation', 'warn')
 	} finally {
@@ -1007,6 +1028,9 @@ function loadQuotation(quote) {
 		customer.value = { name: quote.customer_id, customer_name: quote.customer }
 		cart.customer = quote.customer
 	}
+
+	// Saving after an edit now updates this quote instead of raising another.
+	cart.sourceQuotation = quote.name
 
 	quotationSheet.value = false
 
@@ -1659,6 +1683,7 @@ useShortcuts({
 			:total="total"
 			:customer="customer"
 			:busy="quotationBusy"
+			:editing-quotation="cart.sourceQuotation || ''"
 			@save="saveQuotation"
 			@load="loadQuotation"
 		/>
@@ -1670,6 +1695,7 @@ useShortcuts({
 			v-model="heldSheet"
 			:tickets="held"
 			@resume="resumeHeld"
+			@merge="mergeHeldTickets"
 			@drop="cart.dropHeld"
 		/>
 

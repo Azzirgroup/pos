@@ -48,6 +48,7 @@ export function withinDistance(a, b, max) {
 	if (Math.abs(a.length - b.length) > max) return false
 
 	const rows = a.length + 1
+	let prev2 = null
 	let prev = new Array(rows)
 	let curr = new Array(rows)
 	for (let i = 0; i < rows; i++) prev[i] = i
@@ -57,14 +58,23 @@ export function withinDistance(a, b, max) {
 		let best = curr[0]
 		for (let i = 1; i < rows; i++) {
 			const cost = a[i - 1] === b[j - 1] ? 0 : 1
-			curr[i] = Math.min(prev[i] + 1, curr[i - 1] + 1, prev[i - 1] + cost)
-			if (curr[i] < best) best = curr[i]
+			let val = Math.min(prev[i] + 1, curr[i - 1] + 1, prev[i - 1] + cost)
+			// Transpositions cost one edit, not two. Swapping two letters is the
+			// commonest way somebody mistypes a word they know — `cocao` for
+			// `cocoa` — and charging it as a delete plus an insert puts every
+			// transposed five-letter word outside the budget its length allows.
+			if (prev2 && i > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) {
+				val = Math.min(val, prev2[i - 2] + 1)
+			}
+			curr[i] = val
+			if (val < best) best = val
 		}
 		// Nothing in this row is close enough, and rows only ever grow.
 		if (best > max) return false
-		const swap = prev
+		const spare = prev2 || new Array(rows)
+		prev2 = prev
 		prev = curr
-		curr = swap
+		curr = spare
 	}
 
 	return prev[a.length] <= max

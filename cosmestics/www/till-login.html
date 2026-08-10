@@ -1,0 +1,562 @@
+<!doctype html>
+<!--
+	A complete document, not a page inside the website theme.
+
+	Frappe only wraps a www template in `web.html` when the source has no
+	`</body>` of its own — and that wrapper is what put a stray "Sign in" heading
+	and a white navbar strip above the panels. A sign-in screen for a shop
+	counter has no business carrying the site's navigation: every link on it is a
+	way for a cashier to end up somewhere that is not the till.
+-->
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<title>Sign in · {{ shop_name }}</title>
+	<link rel="icon" type="image/svg+xml" href="/assets/cosmestics/images/logo.svg" />
+<!--
+	Standalone markup rather than the website theme: this renders on a counter
+	tablet, often the first thing a cashier sees in the morning, and a page that
+	inherits the site's navbar and footer gives them three ways to end up
+	somewhere that is not the till.
+
+	Two panels. The left is the shop — its mark and its name, so somebody working
+	across two branches knows which till they are standing at before they touch
+	anything. The right is the only thing they have to interact with. On a phone
+	the left collapses to a strip, because a decorative half-screen is not worth
+	the keyboard space.
+
+	Nothing is fetched from outside: the panel is a gradient and an inline SVG.
+	A sign-in page that waits on a font or a CDN is a sign-in page that fails
+	when the shop's internet does, which is exactly when somebody is trying to
+	get the till open.
+-->
+<style>
+	:root {
+		color-scheme: light;
+		--ink: #171717;
+		--ink-soft: #6b6b6b;
+		--line: #e3e3e3;
+		--field: #f5f5f5;
+	}
+	* { box-sizing: border-box; }
+	html, body { margin: 0; padding: 0; height: 100%; }
+	body { background: #fafafa; font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: var(--ink); }
+
+	.tl-wrap {
+		min-height: 100%;
+		display: grid;
+		grid-template-columns: 1.05fr 1fr;
+	}
+
+	/* ---------- left: the shop ---------- */
+	.tl-brand {
+		position: relative;
+		overflow: hidden;
+		display: flex;
+		flex-direction: column;
+		justify-content: space-between;
+		padding: 3rem;
+		background: linear-gradient(150deg, #1f1b24 0%, #37303f 45%, #5b4a63 100%);
+		color: #fff;
+	}
+	.tl-brand-svg {
+		position: absolute;
+		inset: 0;
+		width: 100%;
+		height: 100%;
+		opacity: 0.16;
+		pointer-events: none;
+	}
+	.tl-brand-top { position: relative; display: flex; align-items: center; gap: 0.7rem; }
+	.tl-brand-logo {
+		width: 38px; height: 38px; border-radius: 10px; background: #fff; padding: 5px;
+	}
+	.tl-brand-app { font-size: 0.9rem; font-weight: 600; letter-spacing: 0.02em; opacity: 0.85; }
+	.tl-brand-body { position: relative; }
+	.tl-brand-name { margin: 0; font-size: 2.4rem; line-height: 1.1; font-weight: 680; }
+	.tl-brand-note { margin: 0.85rem 0 0; max-width: 26ch; font-size: 1rem; line-height: 1.5; opacity: 0.72; }
+	.tl-brand-foot { position: relative; font-size: 0.8rem; opacity: 0.55; }
+
+	/* ---------- right: the form ---------- */
+	.tl-panel {
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		padding: 2.5rem 1.5rem;
+		background: #fafafa;
+	}
+	/* Wide enough for four columns of faces. A narrow card was fine for two
+	   people and turned twenty into a ten-row column nobody could scan. */
+	.tl-card { width: 100%; max-width: 34rem; }
+	.tl-card.narrow { max-width: 23rem; }
+	.tl-h1 { margin: 0; font-size: 1.5rem; font-weight: 660; }
+	.tl-sub { margin: 0.3rem 0 1.6rem; font-size: 0.92rem; color: var(--ink-soft); }
+
+	.tl-error {
+		margin: 0 0 1rem;
+		padding: 0.65rem 0.8rem;
+		border-radius: 9px;
+		background: #fdf0ef;
+		color: #b8291b;
+		font-size: 0.88rem;
+	}
+
+	/* ---------- the faces ---------- */
+	.tl-filter {
+		width: 100%; height: 44px; margin-bottom: 0.9rem;
+		border: 1px solid #dcdcdc; border-radius: 10px; background: var(--field);
+		padding: 0 0.8rem; font-size: 0.95rem; font-family: inherit; color: var(--ink);
+	}
+	.tl-filter:focus { outline: none; border-color: #9a9a9a; background: #fff; }
+	/* Capped and scrollable rather than pushing the password link off screen:
+	   a rota of twenty is a list to scroll, not a page to grow. */
+	.tl-people-scroll { max-height: 22rem; overflow-y: auto; margin: 0 -0.35rem; padding: 0.35rem; }
+	.tl-people {
+		display: grid;
+		grid-template-columns: repeat(auto-fill, minmax(7.5rem, 1fr));
+		gap: 0.6rem;
+	}
+	.tl-none { padding: 1.2rem 0; font-size: 0.9rem; color: var(--ink-soft); text-align: center; }
+	.tl-person {
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		gap: 0.55rem;
+		padding: 0.95rem 0.5rem;
+		border: 1px solid var(--line);
+		border-radius: 14px;
+		background: #fff;
+		cursor: pointer;
+		transition: border-color 0.12s, transform 0.12s, box-shadow 0.12s;
+		font: inherit;
+		color: inherit;
+	}
+	.tl-person:hover { border-color: #b9b9b9; box-shadow: 0 4px 14px rgba(0,0,0,0.06); }
+	.tl-person:active { transform: scale(0.98); }
+	.tl-avatar {
+		width: 46px; height: 46px; border-radius: 50%;
+		display: grid; place-items: center;
+		font-size: 1.05rem; font-weight: 640; color: #fff;
+		background: linear-gradient(140deg, #4b3f57, #7a6488);
+	}
+	.tl-person-name {
+		font-size: 0.85rem; font-weight: 550; text-align: center;
+		overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100%;
+	}
+
+	/* ---------- pin ---------- */
+	.tl-who { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 1.4rem; }
+	.tl-who .tl-avatar { width: 44px; height: 44px; font-size: 0.95rem; }
+	.tl-who-name { font-size: 1.05rem; font-weight: 600; }
+	.tl-who-sub { font-size: 0.82rem; color: var(--ink-soft); }
+
+	.tl-dots { display: flex; justify-content: center; gap: 0.85rem; margin: 0 0 1.5rem; }
+	.tl-dot {
+		width: 15px; height: 15px; border-radius: 50%;
+		border: 1.5px solid #c2c2c2; background: transparent;
+		transition: background 0.12s, border-color 0.12s, transform 0.12s;
+	}
+	.tl-dot.on { background: var(--ink); border-color: var(--ink); transform: scale(1.08); }
+
+	.tl-pad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0.6rem; }
+	.tl-key {
+		height: 62px;
+		border: 1px solid var(--line);
+		border-radius: 13px;
+		background: #fff;
+		font-size: 1.35rem;
+		font-weight: 550;
+		color: var(--ink);
+		cursor: pointer;
+		font-family: inherit;
+	}
+	.tl-key:hover { background: #f2f2f2; }
+	.tl-key:active { transform: scale(0.97); }
+	.tl-key.muted { background: transparent; border-color: transparent; font-size: 0.95rem; color: var(--ink-soft); }
+
+	/* ---------- password ---------- */
+	.tl-label { display: block; font-size: 0.83rem; font-weight: 550; margin-bottom: 0.35rem; }
+	.tl-input {
+		width: 100%; height: 48px;
+		border: 1px solid #dcdcdc; border-radius: 10px;
+		background: var(--field); padding: 0 0.8rem; font-size: 1rem; color: var(--ink);
+		font-family: inherit;
+	}
+	.tl-input:focus { outline: none; border-color: #9a9a9a; background: #fff; }
+	.tl-field { margin-bottom: 1rem; }
+	.tl-btn {
+		width: 100%; height: 50px; border: 0; border-radius: 11px;
+		background: var(--ink); color: #fff; font-size: 1rem; font-weight: 600;
+		cursor: pointer; font-family: inherit;
+	}
+	.tl-btn[disabled] { background: #bcbcbc; cursor: default; }
+	.tl-link {
+		display: block; width: 100%; margin-top: 1.1rem;
+		border: 0; background: none; color: var(--ink-soft);
+		font-size: 0.88rem; text-decoration: underline; cursor: pointer; font-family: inherit;
+	}
+
+	[hidden] { display: none !important; }
+
+	/* The visual half is the first thing to go: on a phone the keyboard takes
+	   most of the screen and a gradient is not worth competing with it. */
+	@media (max-width: 860px) {
+		.tl-wrap { grid-template-columns: 1fr; }
+		.tl-brand { padding: 1.4rem 1.5rem; }
+		.tl-brand-body, .tl-brand-foot { display: none; }
+		.tl-panel { padding: 1.75rem 1.25rem 3rem; align-items: flex-start; }
+		.tl-people-scroll { max-height: none; overflow: visible; }
+	}
+</style>
+</head>
+<body>
+<div class="tl-wrap">
+	<!-- ---------- the shop ---------- -->
+	<aside class="tl-brand">
+		<svg class="tl-brand-svg" aria-hidden="true" preserveAspectRatio="xMidYMid slice" viewBox="0 0 400 400">
+			<defs>
+				<radialGradient id="tl-glow" cx="30%" cy="25%" r="70%">
+					<stop offset="0%" stop-color="#fff" stop-opacity="0.9" />
+					<stop offset="100%" stop-color="#fff" stop-opacity="0" />
+				</radialGradient>
+			</defs>
+			<rect width="400" height="400" fill="url(#tl-glow)" />
+			<g fill="none" stroke="#fff" stroke-width="0.6" opacity="0.5">
+				<circle cx="310" cy="90" r="120" />
+				<circle cx="310" cy="90" r="80" />
+				<circle cx="70" cy="330" r="150" />
+				<circle cx="70" cy="330" r="100" />
+			</g>
+		</svg>
+
+		<div class="tl-brand-top">
+			<img class="tl-brand-logo" src="/assets/cosmestics/images/logo.svg" alt="" />
+			<span class="tl-brand-app">TradeFlow</span>
+		</div>
+
+		<div class="tl-brand-body">
+			<h2 class="tl-brand-name">{{ shop_name }}</h2>
+			<p class="tl-brand-note">
+				Tap your name and enter your PIN to open the till.
+			</p>
+		</div>
+
+		<div class="tl-brand-foot">Point of sale</div>
+	</aside>
+	<main class="tl-panel">
+		<div class="tl-card" id="tl-card">
+			<!-- Pick a face -->
+			<section id="tl-people-view" {% if default_mode != 'pin' %}hidden{% endif %}>
+				<h1 class="tl-h1">Who's on the till?</h1>
+				<p class="tl-sub">Tap your name to sign in</p>
+
+				<!-- Only past the point where scanning a grid stops being instant.
+				     On a four-person shop a search box is furniture. -->
+				{% if people | length > 8 %}
+				<input class="tl-filter" id="tl-filter" type="text" autocomplete="off"
+					placeholder="Type to find your name" aria-label="Find your name" />
+				{% endif %}
+
+				<div class="tl-people-scroll">
+					<div class="tl-people">
+						{% for p in people %}
+						<button
+							class="tl-person"
+							type="button"
+							data-key="{{ p.key }}"
+							data-label="{{ p.label }}"
+							data-initials="{{ p.initials }}"
+							data-search="{{ p.label | lower }}"
+						>
+							<span class="tl-avatar">{{ p.initials }}</span>
+							<span class="tl-person-name">{{ p.label }}</span>
+						</button>
+						{% endfor %}
+					</div>
+					<p class="tl-none" id="tl-no-match" hidden>No one by that name.</p>
+				</div>
+
+				<button class="tl-link" type="button" id="tl-show-password">
+					Sign in with a password instead
+				</button>
+			</section>
+
+			<!-- Enter the PIN -->
+			<section id="tl-pin-view" hidden>
+				<div class="tl-who">
+					<span class="tl-avatar" id="tl-who-initials"></span>
+					<div>
+						<div class="tl-who-name" id="tl-who-name"></div>
+						<div class="tl-who-sub">Enter your PIN</div>
+					</div>
+				</div>
+
+				<p class="tl-error" id="tl-pin-error" hidden role="alert"></p>
+
+				<div class="tl-dots" id="tl-dots">
+					<span class="tl-dot"></span><span class="tl-dot"></span>
+					<span class="tl-dot"></span><span class="tl-dot"></span>
+				</div>
+
+				<!-- An on-screen pad rather than the device keyboard. A counter
+				     tablet often has no hardware keys, and the OS keypad covers the
+				     dots the cashier is checking against. Physical typing still
+				     works — see the keydown handler. -->
+				<div class="tl-pad">
+					<button class="tl-key" type="button" data-d="1">1</button>
+					<button class="tl-key" type="button" data-d="2">2</button>
+					<button class="tl-key" type="button" data-d="3">3</button>
+					<button class="tl-key" type="button" data-d="4">4</button>
+					<button class="tl-key" type="button" data-d="5">5</button>
+					<button class="tl-key" type="button" data-d="6">6</button>
+					<button class="tl-key" type="button" data-d="7">7</button>
+					<button class="tl-key" type="button" data-d="8">8</button>
+					<button class="tl-key" type="button" data-d="9">9</button>
+					<button class="tl-key muted" type="button" id="tl-clear">Clear</button>
+					<button class="tl-key" type="button" data-d="0">0</button>
+					<button class="tl-key muted" type="button" id="tl-back">Delete</button>
+				</div>
+
+				<button class="tl-link" type="button" id="tl-back-to-people">Not you? Pick again</button>
+			</section>
+
+			<!-- Password -->
+			<section id="tl-password-view" {% if default_mode == 'pin' %}hidden{% endif %}>
+				<h1 class="tl-h1">Sign in</h1>
+				<p class="tl-sub">{{ shop_name }}</p>
+
+				<p class="tl-error" id="tl-pwd-error" hidden role="alert"></p>
+
+				<form id="tl-form" autocomplete="on">
+					<div class="tl-field">
+						<label class="tl-label" for="tl-user">Username or email</label>
+						<!-- `text`, not `email`: a shop creates cashier logins as names,
+						     and an email-typed field makes a phone keyboard offer an @
+						     and refuse anything without one. -->
+						<input class="tl-input" id="tl-user" name="username" type="text"
+							autocomplete="username" autocapitalize="none" autocorrect="off"
+							spellcheck="false" required />
+					</div>
+					<div class="tl-field">
+						<label class="tl-label" for="tl-pwd">Password</label>
+						<input class="tl-input" id="tl-pwd" name="password" type="password"
+							autocomplete="current-password" required />
+					</div>
+					<button class="tl-btn" id="tl-submit" type="submit">Sign in</button>
+				</form>
+
+				{% if people %}
+				<button class="tl-link" type="button" id="tl-show-pin">Use a PIN instead</button>
+				{% endif %}
+			</section>
+		</div>
+	</main>
+</div>
+
+<script>
+	(function () {
+		// Server-validated: see `_redirect_target`. Only paths inside /pos survive.
+		var REDIRECT = {{ redirect_to | tojson }}
+
+		var peopleView = document.getElementById('tl-people-view')
+		var pinView = document.getElementById('tl-pin-view')
+		var pwdView = document.getElementById('tl-password-view')
+
+		var card = document.getElementById('tl-card')
+
+		function show(view) {
+			peopleView.hidden = view !== 'people'
+			pinView.hidden = view !== 'pin'
+			pwdView.hidden = view !== 'password'
+			// The face grid wants the room; a PIN pad and a password form read
+			// better in a column that is not half a metre wide.
+			if (card) card.classList.toggle('narrow', view !== 'people')
+		}
+		show(peopleView.hidden ? 'password' : 'people')
+
+		function post(method, body) {
+			return fetch('/api/method/' + method, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				credentials: 'same-origin',
+				body: JSON.stringify(body || {}),
+			}).then(function (res) {
+				return res.json().then(function (b) {
+					return b && b.message !== undefined ? b.message : b
+				})
+			})
+		}
+
+		/* ---------- password ---------- */
+
+		var form = document.getElementById('tl-form')
+		var pwdBtn = document.getElementById('tl-submit')
+		var pwdErr = document.getElementById('tl-pwd-error')
+
+		form.addEventListener('submit', function (event) {
+			event.preventDefault()
+			pwdErr.hidden = true
+			pwdBtn.disabled = true
+			pwdBtn.textContent = 'Signing in…'
+
+			// Frappe's own login endpoint. Authentication is not reimplemented here
+			// — rate limiting and password policy stay where they are.
+			post('login', { usr: form.username.value.trim(), pwd: form.password.value })
+				.then(function (out) {
+					if (out === 'Logged In' || (out && out.message === 'Logged In')) {
+						window.location.href = REDIRECT
+						return
+					}
+					// A rejected login comes back as a bare string ("Invalid login
+					// credentials"), not an object — reading `.message` off it yields
+					// undefined and throws away the one sentence worth showing.
+					throw new Error(
+						typeof out === 'string' ? out : (out && out.message) || 'Could not sign in',
+					)
+				})
+				.catch(function (e) {
+					pwdErr.textContent = e.message || 'Invalid login credentials'
+					pwdErr.hidden = false
+					pwdBtn.disabled = false
+					pwdBtn.textContent = 'Sign in'
+				})
+		})
+
+		/* ---------- pin ---------- */
+
+		var chosen = null
+		var digits = ''
+		var busy = false
+		var dots = document.querySelectorAll('#tl-dots .tl-dot')
+		var pinErr = document.getElementById('tl-pin-error')
+
+		function paint() {
+			for (var i = 0; i < dots.length; i++) {
+				dots[i].classList.toggle('on', i < digits.length)
+			}
+		}
+
+		function reset() {
+			digits = ''
+			paint()
+		}
+
+		function choose(btn) {
+			chosen = { key: btn.dataset.key, label: btn.dataset.label }
+			document.getElementById('tl-who-name').textContent = btn.dataset.label
+			document.getElementById('tl-who-initials').textContent = btn.dataset.initials
+			pinErr.hidden = true
+			reset()
+			show('pin')
+		}
+
+		var cards = Array.prototype.slice.call(document.querySelectorAll('.tl-person'))
+		cards.forEach(function (btn) {
+			btn.addEventListener('click', function () {
+				choose(btn)
+			})
+		})
+
+		// Twenty faces is a list, not a glance. Filtering keeps the grid usable
+		// without making a four-person shop scroll past a search box it never needs
+		// — the input is only rendered past eight people.
+		var filter = document.getElementById('tl-filter')
+		var noMatch = document.getElementById('tl-no-match')
+		if (filter) {
+			filter.addEventListener('input', function () {
+				var q = filter.value.trim().toLowerCase()
+				var shown = 0
+				cards.forEach(function (c) {
+					var hit = !q || c.dataset.search.indexOf(q) !== -1
+					c.hidden = !hit
+					if (hit) shown++
+				})
+				noMatch.hidden = shown > 0
+			})
+		}
+
+		function push(d) {
+			if (busy || digits.length >= 4) return
+			pinErr.hidden = true
+			digits += d
+			paint()
+			// Four digits is the whole secret; waiting for a confirm button is a tap
+			// nobody needs at a counter.
+			if (digits.length === 4) submitPin()
+		}
+
+		Array.prototype.forEach.call(document.querySelectorAll('.tl-key[data-d]'), function (k) {
+			k.addEventListener('click', function () {
+				push(k.dataset.d)
+			})
+		})
+
+		document.getElementById('tl-clear').addEventListener('click', reset)
+		document.getElementById('tl-back').addEventListener('click', function () {
+			digits = digits.slice(0, -1)
+			paint()
+		})
+		document.getElementById('tl-back-to-people').addEventListener('click', function () {
+			chosen = null
+			reset()
+			show('people')
+		})
+
+		// A till with a hardware keyboard, or a scanner in keyboard mode.
+		document.addEventListener('keydown', function (e) {
+			if (pinView.hidden) return
+			if (e.key >= '0' && e.key <= '9') push(e.key)
+			else if (e.key === 'Backspace') {
+				digits = digits.slice(0, -1)
+				paint()
+			} else if (e.key === 'Escape') {
+				chosen = null
+				reset()
+				show('people')
+			}
+		})
+
+		function submitPin() {
+			if (!chosen || digits.length !== 4) return
+			busy = true
+			post('cosmestics.api.pin.pin_login', { key: chosen.key, pin: digits })
+				.then(function (out) {
+					if (out && out.ok) {
+						window.location.href = REDIRECT
+						return
+					}
+					pinErr.textContent = (out && out.message) || 'That PIN was not recognised'
+					pinErr.hidden = false
+					busy = false
+					reset()
+					// A locked account cannot be unlocked by trying again, so send them
+					// back rather than leave them at a pad that will keep refusing.
+					if (out && out.locked) {
+						chosen = null
+						show('people')
+					}
+				})
+				.catch(function () {
+					pinErr.textContent = 'Could not reach the server.'
+					pinErr.hidden = false
+					busy = false
+					reset()
+				})
+		}
+
+		/* ---------- switching ---------- */
+
+		var toPwd = document.getElementById('tl-show-password')
+		if (toPwd) toPwd.addEventListener('click', function () { show('password') })
+
+		var toPin = document.getElementById('tl-show-pin')
+		if (toPin) toPin.addEventListener('click', function () {
+			chosen = null
+			reset()
+			show('people')
+		})
+	})()
+</script>
+</body>
+</html>

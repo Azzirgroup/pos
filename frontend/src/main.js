@@ -11,7 +11,22 @@ const app = createApp(App)
 
 setConfig('resourceFetcher', frappeRequest)
 
-app.use(FrappeUI)
+/**
+ * No socket.
+ *
+ * `FrappeUI` opens one by default, on port 9000 — its own default, not this
+ * bench's, which runs socketio on 9002. So every load fired a polling request
+ * at a port with nothing on it, failed, and retried: three red errors in the
+ * console before the till had drawn, and a reconnect loop running behind a
+ * screen that is left open all day.
+ *
+ * Passing the right port would silence it, but nothing in this app subscribes
+ * to anything — the till re-reads what it needs after each action, deliberately,
+ * because a stale figure at a counter is worse than a slow one. An unused
+ * websocket is a connection to keep alive and a failure mode to explain, so it
+ * is off rather than merely corrected.
+ */
+app.use(FrappeUI, { socketio: false })
 app.use(createPinia())
 app.use(router)
 

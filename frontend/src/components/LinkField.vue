@@ -44,11 +44,11 @@ const open = ref(false)
 const input = ref(null)
 
 let seq = 0
-async function run() {
+async function run(term = query.value) {
 	const mine = ++seq
 	loading.value = true
 	try {
-		const rows = await props.fetcher(query.value)
+		const rows = await props.fetcher(term)
 		// Drop stale responses: typing outruns the round trip.
 		if (mine === seq) results.value = rows || []
 	} catch {
@@ -100,7 +100,20 @@ async function createNew() {
 
 async function onFocus() {
 	open.value = true
-	if (!results.value.length) run()
+	/**
+	 * Opening a field that already holds a value must offer the alternatives,
+	 * not just the value itself.
+	 *
+	 * The search used to run on whatever text was in the box, which was fine
+	 * while these fields started empty. Now that several carry a default, that
+	 * meant focusing "Into" searched for `Shop Floor - CS` and came back with
+	 * one result — a picker that appeared to know of exactly one warehouse.
+	 *
+	 * The text is selected on focus anyway, so anything typed replaces it; a
+	 * blank search is what "show me what I could pick instead" means.
+	 */
+	if (query.value && query.value === (props.modelValue || '')) run('')
+	else if (!results.value.length) run()
 	await nextTick()
 	input.value?.select()
 }

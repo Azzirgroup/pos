@@ -145,6 +145,40 @@ export const listQuotations = ({ days, status, search, limit } = {}) =>
 
 export const getQuotation = ({ name }) => call('cosmestics.api.quotations.get', { name })
 
+/**
+ * Change a quote that already exists, keeping its number. Used instead of
+ * `createQuotation` whenever the cart was loaded from one — see `cart.sourceQuotation`.
+ */
+export const updateQuotation = ({ name, items, validDays, notes }) =>
+	call('cosmestics.api.quotations.update', {
+		name,
+		items: items.map((l) => ({
+			item_code: l.item_code,
+			qty: l.qty,
+			rate: l.rate,
+			discount_pct: l.discountPct,
+		})),
+		valid_days: validDays || null,
+		notes: notes || null,
+	})
+
+/**
+ * Combine several quotes into one. The originals are closed, and the new quote
+ * says which they were — see `quotations.merge`.
+ */
+export const mergeQuotations = ({ names, customer, validDays, notes }) =>
+	call('cosmestics.api.quotations.merge', {
+		names,
+		// Required only when the selection spans more than one customer.
+		customer: customer || null,
+		valid_days: validDays || null,
+		notes: notes || null,
+	})
+
+/** Stop chasing a quote. Recorded as Lost — ERPNext's word for closed. */
+export const closeQuotation = ({ name, reason }) =>
+	call('cosmestics.api.quotations.close', { name, reason: reason || null })
+
 export const getQuotationPrintUrl = ({ name, printFormat } = {}) =>
 	call('cosmestics.api.quotations.print_url', { name, print_format: printFormat || null })
 
@@ -539,3 +573,16 @@ export const getMe = () => call('cosmestics.api.session.me')
 
 /** Which till, shop and warehouse this session is selling from. */
 export const getTillContext = () => call('cosmestics.api.session.context')
+
+/**
+ * End the session.
+ *
+ * Frappe's own `logout`, and it must go through `call` rather than a bare
+ * `fetch`: the endpoint is declared `methods=["POST"]` and validates a CSRF
+ * token, so a GET is refused with a permission error the browser never shows —
+ * which looks exactly like a sign-out button that does nothing.
+ *
+ * Being outside `CACHEABLE` also empties the read cache on the way out, so the
+ * next person to sign in cannot be served the previous cashier's screens.
+ */
+export const logout = () => call('logout')

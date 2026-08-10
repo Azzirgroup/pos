@@ -8,6 +8,8 @@ shop manager can answer the day's questions without learning the desk.
 import frappe
 from frappe.utils import add_days, flt, nowdate
 
+from cosmestics.api.search import rank
+
 # A shop manager thinks in weeks, not accounting periods.
 DEFAULT_DAYS = 30
 
@@ -65,8 +67,6 @@ def inventory(warehouse: str | None = None, search: str | None = None, limit: in
 	rows = []
 	for b in bins:
 		title = titles.get(b.item_code, b.item_code)
-		if search and search.lower() not in f"{b.item_code} {title}".lower():
-			continue
 		value = flt(b.actual_qty) * flt(b.valuation_rate)
 		rows.append(
 			{
@@ -81,6 +81,11 @@ def inventory(warehouse: str | None = None, search: str | None = None, limit: in
 				"uom": b.stock_uom,
 			}
 		)
+
+	# Filtered after the rows are built, not while building them, so the match
+	# runs against the same item name the screen shows. Tolerant of word order
+	# and a missing letter, like every other list — see `api/search`.
+	rows = rank(rows, search, ["item_code", "item_name"])
 
 	return {
 		"rows": rows,

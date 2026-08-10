@@ -206,9 +206,33 @@ function addSupplierGroup() {
 	lines.value.push(blankLine())
 }
 
+/**
+ * Carry the header's "Default supplier" onto the lines that have none.
+ *
+ * The server already falls back to it when a line names nobody, so a receipt
+ * saved this way was always correct — but the group above the items stayed
+ * blank, which reads as the field having done nothing. Filling it in makes the
+ * form show what is actually going to happen.
+ *
+ * Only empty groups are touched: a line that names its own supplier is a
+ * deliberate exception in a bulk entry, and overwriting it would silently
+ * re-bill somebody else's goods.
+ */
+watch(
+	() => values.value?.supplier,
+	(supplier) => {
+		if (!supplier || !supplierField.value) return
+		for (const line of lines.value) {
+			if (!line.supplier) line.supplier = supplier
+		}
+	},
+)
+
 function addItemToGroup(group) {
 	const line = blankLine()
-	line.supplier = group.supplier
+	// The group's own supplier, falling back to the header default so a new row
+	// under an unnamed group is not the one line that ends up blank.
+	line.supplier = group.supplier || values.value?.supplier || ''
 	lines.value.push(line)
 }
 

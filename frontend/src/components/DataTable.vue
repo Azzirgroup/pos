@@ -29,11 +29,23 @@ const props = defineProps({
 	actions: { type: [Array, Function], default: null },
 	/** Row currently mid-action — shows a spinner in its menu button. */
 	busyRow: { type: String, default: '' },
+	/**
+	 * Make the first column open the row.
+	 *
+	 * Opt-in rather than automatic: a list only gets this where there is
+	 * somewhere to go, and a link that opens nothing is worse than plain text.
+	 * The whole row is deliberately *not* clickable — these tables carry row
+	 * menus and inline controls, and a row-wide click target swallows them.
+	 */
+	rowLink: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['row-click'])
 
 /** The declared columns plus the menu, which is ours rather than the caller's. */
+/** The column that becomes the link — the first one the caller declared. */
+const firstKey = computed(() => props.columns[0]?.key)
+
 const allColumns = computed(() =>
 	props.actions && props.columns.length
 		? [...props.columns, { label: '', key: '_actions', type: 'text' }]
@@ -139,11 +151,23 @@ const isVoid = (row) => row.docstatus === 2
 						]"
 					>
 						<slot :name="`cell-${c.key}`" :row="row" :value="row[c.key]">
+							<!-- The first column opens the record. Underlined on hover
+							     rather than always, so a dense table does not read as a
+							     page of links. -->
+							<button
+								v-if="rowLink && c.key === firstKey"
+								type="button"
+								class="max-w-full truncate text-left font-medium text-ink-blue-3 hover:text-ink-blue-4 hover:underline"
+								:title="`Open ${row[c.key]}`"
+								@click.stop="emit('row-click', row)"
+							>
+								{{ cell(row, c) }}
+							</button>
 							<!-- The menu column is ours, so it is drawn here rather than
 							     left to every list to reimplement. Right-aligned: it is
 							     the last column, and a left-aligned popover would run off
 							     the table. -->
-							<div v-if="c.key === '_actions'" class="flex justify-end">
+							<div v-else-if="c.key === '_actions'" class="flex justify-end">
 								<Dropdown :options="actionsFor(row)" placement="right">
 									<Button
 										variant="ghost"

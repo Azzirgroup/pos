@@ -1,6 +1,6 @@
 {
-	"name": "Cosmetics POS",
-	"short_name": "POS",
+	"name": "TradeFlow",
+	"short_name": "TradeFlow",
 	"description": "Till, stock and shift management for a cosmetics shop.",
 	"id": "/pos",
 	"start_url": "/pos",

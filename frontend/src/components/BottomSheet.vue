@@ -1,5 +1,6 @@
 <script setup>
 import { watch, onUnmounted } from 'vue'
+import LucideX from '~icons/lucide/x'
 
 const props = defineProps({
 	modelValue: { type: Boolean, default: false },
@@ -62,6 +63,22 @@ onUnmounted(() => {
 				<div class="grid shrink-0 place-items-center pt-2 sm:hidden">
 					<div class="h-1 w-9 rounded-full bg-surface-gray-4" />
 				</div>
+
+				<!-- A way out, on every sheet.
+				     There was none: closing meant tapping the backdrop or pressing
+				     Escape, which is discoverable on a desktop and invisible on a
+				     counter tablet — a cashier who opened the wrong sheet mid-sale
+				     had no obvious way back to the cart. Floated over the content
+				     rather than placed in the header, because most sheets here draw
+				     their own heading instead of passing `title`. -->
+				<button
+					type="button"
+					class="absolute right-3 top-3 z-20 grid h-9 w-9 place-items-center rounded-full bg-surface-gray-7 text-ink-white shadow-md transition-all hover:bg-surface-gray-6 active:scale-95"
+					aria-label="Close"
+					@click="close"
+				>
+					<LucideX class="h-[18px] w-[18px]" stroke-width="2.5" />
+				</button>
 
 				<div
 					v-if="title"

@@ -314,6 +314,41 @@ def _profile_users(pos_profile: str) -> list:
 	)
 
 
+def _users_on_open_shifts() -> dict:
+	"""user -> the till they are already working, for every open shift.
+
+	Both halves of a shift's roster count: whoever opened it, and everyone listed
+	on it. ERPNext's own `check_user_already_assigned` only knows about the first,
+	which is why the roster override widens it — this is the same question asked
+	ahead of time so the till can grey them out instead of failing on save.
+	"""
+	from cosmestics.overrides.shift_roster import ROSTER_FIELD
+
+	openings = frappe.get_all(
+		"POS Opening Entry",
+		filters={"docstatus": 1, "status": "Open"},
+		fields=["name", "user", "pos_profile"],
+	)
+	if not openings:
+		return {}
+
+	busy = {o.user: o.pos_profile for o in openings if o.user}
+
+	by_shift = {o.name: o.pos_profile for o in openings}
+	for row in frappe.get_all(
+		"Cosmestics Shift Cashier",
+		filters={
+			"parent": ("in", list(by_shift)),
+			"parenttype": "POS Opening Entry",
+			"parentfield": ROSTER_FIELD,
+		},
+		fields=["parent", "user"],
+	):
+		busy.setdefault(row.user, by_shift[row.parent])
+
+	return busy
+
+
 def _cashier_problem(user) -> str | None:
 	"""Why this account cannot work a till, or None if it can.
 
@@ -364,6 +399,12 @@ def list_cashiers(pos_profile: str) -> list:
 		limit_page_length=0,
 	)
 
+	# Anyone already standing at another counter. Reported here because the till
+	# pre-selects everyone eligible: silently ticking somebody who is mid-shift
+	# elsewhere would fail on save with ERPNext's "Cashier is currently assigned
+	# to another POS", which names neither the person nor the other till.
+	busy = _users_on_open_shifts()
+
 	# Administrator is deliberately *not* filtered out: on a small shop it is
 	# often the owner's own login, and removing it would make the person who set
 	# the site up unaddable to their own counter.
@@ -372,6 +413,8 @@ def list_cashiers(pos_profile: str) -> list:
 		if r.name in (frappe.session.user, "Guest"):
 			continue
 		problem = _cashier_problem(r)
+		if not problem and r.name in busy:
+			problem = _("Already on an open shift at {0}").format(busy[r.name])
 		out.append(
 			{
 				"user": r.name,

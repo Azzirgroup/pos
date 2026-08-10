@@ -109,16 +109,36 @@ const cashiersBusy = ref(false)
 async function loadCashiers(posProfile) {
 	if (!posProfile) {
 		cashierOptions.value = []
+		pickedCashiers.value = new Set()
 		return
 	}
 	cashiersBusy.value = true
 	try {
 		cashierOptions.value = await listCashiers({ posProfile })
+		/**
+		 * Everyone the till permits starts ticked.
+		 *
+		 * The profile's Applicable for Users *is* the shop saying who works this
+		 * counter, so requiring that to be re-stated every morning asks a question
+		 * whose answer is already recorded. Starting empty also failed in the one
+		 * direction that costs money: a cashier left off cannot have their sales
+		 * settled, and nobody discovers it until the drawer will not close.
+		 *
+		 * Unticking is the exception — somebody off today — and an exception is
+		 * the right thing to make people do work for.
+		 *
+		 * Only eligible ones: a Website User cannot sell, and somebody already on
+		 * another open shift would be refused on save.
+		 */
+		pickedCashiers.value = new Set(
+			cashierOptions.value.filter((c) => c.eligible).map((c) => c.user),
+		)
 	} catch (e) {
 		// Not being offered co-cashiers is a smaller problem than a red toast in
 		// front of somebody trying to start their day. The shift still opens.
 		console.warn('[shift] cashier list failed', e)
 		cashierOptions.value = []
+		pickedCashiers.value = new Set()
 	} finally {
 		cashiersBusy.value = false
 	}

@@ -1,15 +1,42 @@
 <script setup>
+import { ref, computed, watch } from 'vue'
 import { fmtMoney } from '@/utils/format'
 import BottomSheet from './BottomSheet.vue'
 import LucidePause from '~icons/lucide/pause'
 import LucideTrash2 from '~icons/lucide/trash-2'
+import LucideMerge from '~icons/lucide/git-merge'
 
-defineProps({
+const props = defineProps({
 	modelValue: { type: Boolean, default: false },
 	tickets: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['update:modelValue', 'resume', 'drop'])
+const emit = defineEmits(['update:modelValue', 'resume', 'drop', 'merge'])
+
+/**
+ * Tickets ticked for merging.
+ *
+ * The same request as merging two quotes, one screen earlier: a customer served
+ * twice — a bag put aside, then more added — has two tickets and one bill.
+ */
+const picked = ref(new Set())
+
+function togglePick(id) {
+	const next = new Set(picked.value)
+	next.has(id) ? next.delete(id) : next.add(id)
+	picked.value = next
+}
+
+// A selection carried over from last time is a selection nobody made.
+watch(() => props.modelValue, (open) => { if (!open) picked.value = new Set() })
+
+const canMerge = computed(() => picked.value.size >= 2)
+
+function mergePicked() {
+	if (!canMerge.value) return
+	emit('merge', [...picked.value])
+	picked.value = new Set()
+}
 
 function since(ts) {
 	const mins = Math.floor((Date.now() - ts) / 60000)
@@ -26,11 +53,42 @@ function since(ts) {
 		@update:model-value="emit('update:modelValue', $event)"
 	>
 		<div v-if="tickets.length" class="flex flex-col gap-2 px-4 pb-5">
+			<!-- Only once merging is possible. -->
+			<div
+				v-if="picked.size"
+				class="flex items-center gap-2 rounded-lg bg-surface-gray-2 px-3 py-2"
+			>
+				<span class="text-p-sm font-medium text-ink-gray-8">{{ picked.size }} selected</span>
+				<div class="ml-auto flex items-center gap-2">
+					<button
+						class="rounded-md px-2 py-1 text-p-xs text-ink-gray-6 hover:bg-surface-gray-3"
+						@click="picked = new Set()"
+					>
+						Clear
+					</button>
+					<button
+						class="flex items-center gap-1.5 rounded-md bg-surface-gray-7 px-2.5 py-1.5 text-p-xs font-semibold text-ink-white transition-colors hover:bg-surface-gray-6 disabled:opacity-40"
+						:disabled="!canMerge"
+						@click="mergePicked"
+					>
+						<LucideMerge class="h-3.5 w-3.5" />
+						Merge {{ picked.size }}
+					</button>
+				</div>
+			</div>
+
 			<div
 				v-for="t in tickets"
 				:key="t.id"
 				class="flex items-center gap-3 rounded-xl border border-outline-gray-2 bg-surface-white p-3"
 			>
+				<input
+					:checked="picked.has(t.id)"
+					type="checkbox"
+					class="h-4 w-4 shrink-0 accent-gray-800"
+					:aria-label="`Select ${t.id} to merge`"
+					@change="togglePick(t.id)"
+				/>
 				<button class="min-w-0 flex-1 text-left" @click="emit('resume', t.id)">
 					<div class="flex items-baseline gap-2">
 						<span class="text-p-base font-semibold text-ink-gray-9">{{ t.id }}</span>

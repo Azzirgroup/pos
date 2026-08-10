@@ -19,6 +19,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint, flt, get_url
 
+from cosmestics.api.search import search_rows
+
 MASTERS = [
 	{
 		"key": "customer",
@@ -189,21 +191,30 @@ def list_records(key: str, search: str | None = None, limit: int = 100) -> dict:
 	if meta.has_field("company") and frappe.defaults.get_global_default("company"):
 		filters["company"] = frappe.defaults.get_global_default("company")
 
-	or_filters = None
-	if search:
-		or_filters = {"name": ("like", f"%{search}%")}
-		title = entry["title_field"]
-		if meta.has_field(title):
-			or_filters[title] = ("like", f"%{search}%")
+	# Searchable columns: the id, the record's own title, and anything the screen
+	# already shows — a supplier looked up by phone number is the same request as
+	# one looked up by name.
+	search_fields = ["name"]
+	title = entry["title_field"]
+	if meta.has_field(title):
+		search_fields.append(title)
+	for f in shown:
+		if f["type"] != "currency" and f["fieldname"] not in search_fields:
+			search_fields.append(f["fieldname"])
 
-	rows = frappe.get_all(
-		doctype,
-		filters=filters,
-		or_filters=or_filters,
-		fields=fields,
-		order_by="modified desc",
-		limit_page_length=min(max(cint(limit) or 100, 1), 500),
-	)
+	cap = min(max(cint(limit) or 100, 1), 500)
+
+	def _fetch(or_filters, page_length):
+		return frappe.get_all(
+			doctype,
+			filters=filters,
+			or_filters=or_filters,
+			fields=fields,
+			order_by="modified desc",
+			limit_page_length=page_length,
+		)
+
+	rows = search_rows(_fetch, search, search_fields, cap)
 
 	columns = [{"label": _("ID"), "key": "name", "type": "text"}] + [
 		{

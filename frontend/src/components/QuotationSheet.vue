@@ -7,12 +7,16 @@ import {
 	getQuotation,
 	getQuotationPrintUrl,
 	sendQuotationWhatsapp,
+	closeQuotation,
+	mergeQuotations,
 } from '@/data/api'
 import BottomSheet from './BottomSheet.vue'
 import LucideFileText from '~icons/lucide/file-text'
 import LucideSearch from '~icons/lucide/search'
 import LucidePrinter from '~icons/lucide/printer'
 import LucideSend from '~icons/lucide/send'
+import LucideCircleSlash from '~icons/lucide/circle-slash'
+import LucideMerge from '~icons/lucide/git-merge'
 
 /**
  * Quotations, from the till.
@@ -32,6 +36,8 @@ const props = defineProps({
 	total: { type: Number, default: 0 },
 	customer: { type: Object, default: null },
 	busy: { type: Boolean, default: false },
+	/** Set when the cart came off a saved quote — saving updates that one. */
+	editingQuotation: { type: String, default: '' },
 })
 
 const emit = defineEmits(['update:modelValue', 'save', 'load', 'sent'])
@@ -89,11 +95,14 @@ async function load() {
 
 const canSave = computed(() => props.lines.length > 0 && !props.busy)
 
-function save() {
+function save(asNew = false) {
 	if (!canSave.value) return
 	emit('save', {
 		validDays: Number(validDays.value) || 14,
 		notes: notes.value || null,
+		// Editing a loaded quote updates it in place unless this is set — see
+		// `quotations.update` for why raising a second document is the bug.
+		asNew,
 	})
 }
 
@@ -125,6 +134,103 @@ async function printQuote(row) {
 		console.error('[quotations] print failed', e)
 	} finally {
 		busyOne.value = ''
+	}
+}
+
+/**
+ * Stop chasing a quote the customer is not coming back for.
+ *
+ * Recorded as Lost, which is ERPNext's word for it — see `quotations.close`.
+ * Confirmed first: this is the one row action that changes the document rather
+ * than just producing a copy of it, and it sits next to two that do not.
+ */
+const closingOne = ref('')
+
+/**
+ * Quotes ticked for merging.
+ *
+ * A Set on the sheet rather than a flag on each row: the rows are replaced
+ * wholesale every time the list reloads, and a selection living on them would
+ * quietly reset itself mid-task.
+ */
+const picked = ref(new Set())
+const merging = ref(false)
+
+function togglePick(name) {
+	const next = new Set(picked.value)
+	next.has(name) ? next.delete(name) : next.add(name)
+	picked.value = next
+}
+
+const pickedRows = computed(() => rows.value.filter((r) => picked.value.has(r.name)))
+
+/**
+ * The customers involved in the selection.
+ *
+ * Quotes for different people can be merged — a household or a business often
+ * collects several under different names — but the merged document carries
+ * exactly one. Which is a decision only the shop can make, so it is asked for:
+ * picking the first would put a stranger's name on somebody's bill.
+ */
+const mergeCustomers = computed(() => {
+	const seen = new Map()
+	for (const r of pickedRows.value) {
+		const id = r.customer_id || r.customer
+		if (id && !seen.has(id)) seen.set(id, r.customer || id)
+	}
+	return [...seen].map(([id, label]) => ({ id, label }))
+})
+const mixedCustomers = computed(() => mergeCustomers.value.length > 1)
+
+/** Which name the merged quote carries. Only asked when there is a choice. */
+const mergeCustomer = ref('')
+watch(mergeCustomers, (list) => {
+	// Reset whenever the selection changes the candidates, so a name chosen for
+	// a previous selection cannot be carried onto this one.
+	if (!list.some((c) => c.id === mergeCustomer.value)) {
+		mergeCustomer.value = list.length === 1 ? list[0].id : ''
+	}
+})
+
+const canMerge = computed(
+	() => picked.value.size >= 2 && (!mixedCustomers.value || !!mergeCustomer.value),
+)
+
+async function mergePicked() {
+	if (!canMerge.value) return
+	const names = pickedRows.value.map((r) => r.name)
+	if (!window.confirm(`Merge ${names.length} quotes into one? The originals will be closed.`)) return
+	merging.value = true
+	try {
+		const res = await mergeQuotations({
+			names,
+			customer: mixedCustomers.value ? mergeCustomer.value : null,
+		})
+		emit('sent', `Merged into ${res.name}`)
+		picked.value = new Set()
+		await load()
+	} catch (e) {
+		emit('sent', e.message || 'Could not merge the quotations')
+	} finally {
+		merging.value = false
+	}
+}
+
+/** Statuses ERPNext will still accept a close on — see `quotations.CLOSEABLE`. */
+const CLOSEABLE = ['Draft', 'Open', 'Replied', 'Expired']
+const canClose = (row) => CLOSEABLE.includes(row.status)
+
+async function closeQuote(row) {
+	if (!window.confirm(`Close ${row.name}? It will be recorded as Lost.`)) return
+	closingOne.value = row.name
+	try {
+		const res = await closeQuotation({ name: row.name })
+		emit('sent', res.message)
+		await load()
+	} catch (e) {
+		emit('sent', e.message || 'Could not close the quotation')
+	} finally {
+		closingOne.value = ''
 	}
 }
 
@@ -257,12 +363,37 @@ async function loadQuote(row) {
 						/>
 					</div>
 
+					<!-- Says which document this will land on. A cart loaded from a
+					     quote updates that quote; without saying so, the only way to
+					     find out was to save and count how many you had. -->
+					<p
+						v-if="editingQuotation"
+						class="rounded-lg bg-surface-amber-1 px-3 py-2 text-p-sm text-ink-amber-3"
+					>
+						Editing <b>{{ editingQuotation }}</b> — saving updates it, keeping the same number.
+					</p>
+
 					<button
 						class="min-h-touch w-full rounded-xl bg-surface-gray-7 py-3.5 text-p-lg font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
 						:disabled="!canSave"
-						@click="save"
+						@click="save(false)"
 					>
-						{{ busy ? 'Saving…' : `Quote ${fmtMoney(total)}` }}
+						<template v-if="busy">Saving…</template>
+						<template v-else-if="editingQuotation">
+							Update {{ editingQuotation }} · {{ fmtMoney(total) }}
+						</template>
+						<template v-else>Quote {{ fmtMoney(total) }}</template>
+					</button>
+
+					<!-- The other intention: the customer wants a second quote rather
+					     than a changed one. Rare, so it is the quieter control. -->
+					<button
+						v-if="editingQuotation"
+						class="min-h-touch w-full rounded-xl border border-outline-gray-2 py-2.5 text-p-base font-medium text-ink-gray-7 transition-colors hover:bg-surface-gray-2 disabled:opacity-50"
+						:disabled="!canSave"
+						@click="save(true)"
+					>
+						Save as a separate quote instead
 					</button>
 				</template>
 			</template>
@@ -292,20 +423,88 @@ async function loadQuote(row) {
 					No quotations match. Quote a cart from the other tab and it will show up here.
 				</p>
 
-				<div v-else class="flex flex-col gap-2">
+				<div v-if="!loading && rows.length" class="flex flex-col gap-2">
+				<!-- Appears only once merging is possible. A bar that is always there
+				     with nothing to do is a bar people stop reading. -->
+				<div
+					v-if="picked.size"
+					class="sticky top-0 z-10 -mx-1 mb-1 flex flex-wrap items-center gap-x-2 gap-y-2 rounded-lg bg-surface-gray-2 px-3 py-2"
+				>
+					<span class="text-p-sm font-medium text-ink-gray-8">
+						{{ picked.size }} selected
+					</span>
+					<!-- Only when there is genuinely a choice to make. Given a whole
+					     row of its own once it appears: squeezed between the count and
+					     the buttons it clipped the very name it is asking you to read,
+					     which is the one thing this control exists to show. -->
+					<label
+						v-if="mixedCustomers"
+						class="order-last flex w-full min-w-0 items-center gap-1.5"
+					>
+						<span class="shrink-0 text-p-xs text-ink-gray-6">Merge as</span>
+						<select
+							v-model="mergeCustomer"
+							class="h-8 min-w-0 flex-1 rounded-md border border-outline-gray-2 bg-surface-white px-2 text-p-sm text-ink-gray-9 focus:border-outline-gray-4 focus:outline-none"
+						>
+							<option value="">Choose customer…</option>
+							<option v-for="c in mergeCustomers" :key="c.id" :value="c.id">
+								{{ c.label }}
+							</option>
+						</select>
+					</label>
+					<div class="ml-auto flex items-center gap-2">
+						<button
+							class="rounded-md px-2 py-1 text-p-xs text-ink-gray-6 hover:bg-surface-gray-3"
+							@click="picked = new Set()"
+						>
+							Clear
+						</button>
+						<button
+							class="flex items-center gap-1.5 rounded-md bg-surface-gray-7 px-2.5 py-1.5 text-p-xs font-semibold text-ink-white transition-colors hover:bg-surface-gray-6 disabled:opacity-40"
+							:disabled="!canMerge || merging"
+							@click="mergePicked"
+						>
+							<LucideMerge class="h-3.5 w-3.5" />
+							{{ merging ? 'Merging…' : `Merge ${picked.size}` }}
+						</button>
+					</div>
+				</div>
+
 					<!-- One element per quote, wrapping both the row and its actions.
 					     The `v-for` used to sit on the row button alone, which left the
 					     Print/WhatsApp strip below it outside the loop referring to a
 					     `q` that does not exist there — the tab threw on render as soon
 					     as there was a single saved quote to list. -->
-					<div v-for="q in rows" :key="q.name" class="flex flex-col">
-					<button
-						class="flex items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-colors"
+					<!-- The whole quote is one card: the row and the three things you
+					     can do to it. They used to be a bordered row with a loose strip
+					     of buttons floating underneath, so the buttons read as belonging
+					     to the gap rather than to the quote above them. -->
+					<div
+						v-for="q in rows"
+						:key="q.name"
+						class="flex flex-col rounded-xl border px-3 py-2.5 transition-colors"
 						:class="
-							q.expired
-								? 'border-outline-gray-2 bg-surface-gray-1 hover:bg-surface-gray-2'
-								: 'border-outline-gray-2 bg-surface-white hover:bg-surface-gray-2'
+							picked.has(q.name)
+								? 'border-outline-gray-4 bg-surface-gray-2'
+								: q.expired
+									? 'border-outline-gray-2 bg-surface-gray-1'
+									: 'border-outline-gray-2 bg-surface-white'
 						"
+					>
+					<div class="flex items-center gap-2">
+					<!-- Outside the row button, not inside it: a checkbox nested in a
+					     button is invalid markup and the click lands on whichever the
+					     browser feels like. -->
+					<input
+						v-if="canClose(q)"
+						:checked="picked.has(q.name)"
+						type="checkbox"
+						class="h-4 w-4 shrink-0 accent-gray-800"
+						:aria-label="`Select ${q.name} to merge`"
+						@change="togglePick(q.name)"
+					/>
+					<button
+						class="flex flex-1 items-center gap-3 rounded-lg px-1 py-0.5 text-left transition-colors hover:bg-surface-gray-2"
 						:disabled="loadingOne === q.name"
 						@click="loadQuote(q)"
 					>
@@ -332,13 +531,19 @@ async function loadQuote(row) {
 							</div>
 						</div>
 					</button>
+					</div>
 
 					<!-- Beside the row, not inside it: loading a quote into the cart
 					     and sending it to a customer are different intentions, and a
 					     mis-tap between them replaces the cart. -->
-					<div class="-mt-1 mb-1 flex items-center gap-2 pl-1">
+					<div class="mt-2 flex flex-wrap items-center gap-2 border-t border-outline-gray-1 pt-2">
+						<!-- Filled rather than ghost buttons. These were two grey words
+						     under a row that is itself tappable, so the eye read them as
+						     labels and the actual action — Load — was the only thing that
+						     looked pressable. Colour also tells them apart at a glance:
+						     paper is black, WhatsApp is its own green. -->
 						<button
-							class="flex items-center gap-1 rounded-md px-2 py-1 text-p-xs font-medium text-ink-gray-6 hover:bg-surface-gray-2 hover:text-ink-gray-8"
+							class="flex items-center gap-1.5 rounded-md bg-surface-gray-7 px-2.5 py-1.5 text-p-xs font-semibold text-ink-white transition-colors hover:bg-surface-gray-6 disabled:opacity-50"
 							:disabled="busyOne === q.name"
 							@click="printQuote(q)"
 						>
@@ -346,12 +551,24 @@ async function loadQuote(row) {
 							Print
 						</button>
 						<button
-							class="flex items-center gap-1 rounded-md px-2 py-1 text-p-xs font-medium text-ink-gray-6 hover:bg-surface-gray-2 hover:text-ink-gray-8"
+							class="flex items-center gap-1.5 rounded-md bg-[#25D366] px-2.5 py-1.5 text-p-xs font-semibold text-white transition-colors hover:bg-[#1eb457] disabled:opacity-50"
 							:disabled="busyOne === q.name"
 							@click="sendQuote(q)"
 						>
 							<LucideSend class="h-3.5 w-3.5" />
 							{{ busyOne === q.name ? 'Sending…' : 'WhatsApp' }}
+						</button>
+						<!-- Only while it is still a live quote. ERPNext refuses to lose
+						     one that has become an order, so offering the button there
+						     would promise something that cannot happen. -->
+						<button
+							v-if="canClose(q)"
+							class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-6 transition-colors hover:border-outline-red-1 hover:bg-surface-red-1 hover:text-ink-red-3 disabled:opacity-50"
+							:disabled="closingOne === q.name"
+							@click="closeQuote(q)"
+						>
+							<LucideCircleSlash class="h-3.5 w-3.5" />
+							{{ closingOne === q.name ? 'Closing…' : 'Close' }}
 						</button>
 						<input
 							v-if="sendingFor === q.name"

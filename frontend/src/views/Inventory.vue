@@ -6,6 +6,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
+import MasterSheet from '@/components/MasterSheet.vue'
 import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideSend from '~icons/lucide/send'
@@ -84,6 +85,21 @@ async function load() {
 		loading.value = false
 	}
 }
+/**
+ * Open the item behind a stock line.
+ *
+ * The same record sheet the Records screen edits, rather than a read-only
+ * panel: somebody who clicks an item from a stock list is usually about to
+ * correct something about it — a name, a group, a reorder level.
+ */
+const itemOpen = ref(false)
+const itemName = ref(null)
+
+function openItem(row) {
+	if (!row?.item_code) return
+	itemName.value = row.item_code
+	itemOpen.value = true
+}
 </script>
 
 <template>
@@ -109,6 +125,8 @@ async function load() {
 
 		<StatTiles :stats="stats" />
 		<DataTable
+			row-link
+			@row-click="openItem"
 			:columns="COLUMNS"
 			:rows="rows"
 			:loading="loading"
@@ -117,5 +135,11 @@ async function load() {
 		/>
 
 		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
+		<MasterSheet
+			v-model:open="itemOpen"
+			initial-key="item"
+			:edit-name="itemName"
+			@created="load"
+		/>
 	</div>
 </template>

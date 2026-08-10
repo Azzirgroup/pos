@@ -25,6 +25,8 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, flt, nowdate
 
+from cosmestics.api.search import search_rows
+
 #: How long a till quote stands unless the cashier says otherwise. Short on
 #: purpose: a cosmetics shop reprices often, and a quote that outlives its price
 #: list is a promise the shop cannot keep.
@@ -169,31 +171,28 @@ def list_quotations(
 	elif status == "ordered":
 		filters["status"] = "Ordered"
 
-	or_filters = None
-	if search:
-		or_filters = {
-			"name": ("like", f"%{search}%"),
-			"party_name": ("like", f"%{search}%"),
-			"customer_name": ("like", f"%{search}%"),
-		}
+	SEARCH_FIELDS = ["name", "party_name", "customer_name"]
 
-	rows = frappe.get_all(
-		"Quotation",
-		filters=filters,
-		or_filters=or_filters,
-		fields=[
-			"name",
-			"party_name",
-			"customer_name",
-			"transaction_date",
-			"valid_till",
-			"grand_total",
-			"status",
-			"total_qty",
-		],
-		order_by="transaction_date desc, creation desc",
-		limit=min(int(limit or 50), 200),
-	)
+	def _fetch(or_filters, page_length):
+		return frappe.get_all(
+			"Quotation",
+			filters=filters,
+			or_filters=or_filters,
+			fields=[
+				"name",
+				"party_name",
+				"customer_name",
+				"transaction_date",
+				"valid_till",
+				"grand_total",
+				"status",
+				"total_qty",
+			],
+			order_by="transaction_date desc, creation desc",
+			limit=page_length,
+		)
+
+	rows = search_rows(_fetch, search, SEARCH_FIELDS, min(int(limit or 50), 200))
 
 	today = nowdate()
 	out = []
@@ -222,6 +221,275 @@ def list_quotations(
 			"value": flt(sum(r["grand_total"] for r in out)),
 			"open": len([r for r in out if not r["expired"] and r["status"] != "Ordered"]),
 		},
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def merge(
+	names: list | str,
+	customer: str | None = None,
+	valid_days: int | None = None,
+	notes: str | None = None,
+) -> dict:
+	"""Combine several quotes into one, and close the originals.
+
+	A customer who was quoted three times over a fortnight wants one number to
+	agree to, not three to reconcile. This raises a new quotation holding every
+	line, then closes the sources as Lost with a reason naming the replacement —
+	so the history stays readable rather than three quotes silently going quiet.
+
+	## The rules, and why
+
+	* **One name on the result.** Quotes for different people can be merged — a
+	  household or a business often collects several under different names — but
+	  the merged document carries exactly one, so `customer` says which. Asked
+	  for rather than guessed: picking the first would put a stranger's name on
+	  somebody's bill. It must be one of the names already on these quotes.
+	* **Same item at the same price is one line.** Two quotes for three lipsticks
+	  each become one line of six, which is what a merged bill is for.
+	* **Same item at *different* prices stays two lines.** The shop quoted both,
+	  and silently picking one would change a price somebody was given. Which to
+	  honour is a decision for a person, and they can edit the merged quote.
+	* A new document rather than growing the oldest, because every source keeps
+	  its own number and a customer holding any of them can be told what replaced
+	  it.
+	"""
+	if isinstance(names, str):
+		names = frappe.parse_json(names)
+
+	names = list(dict.fromkeys(names or []))
+	if len(names) < 2:
+		frappe.throw(_("Pick at least two quotations to merge"))
+
+	docs = []
+	for n in names:
+		doc = frappe.get_doc("Quotation", n)
+		doc.check_permission("write")
+		if doc.docstatus != 1:
+			frappe.throw(_("{0} is not a submitted quotation").format(n))
+		if doc.status not in CLOSEABLE:
+			frappe.throw(_("{0} is {1} and cannot be merged").format(n, doc.status))
+		docs.append(doc)
+
+	# Who the merged quote is for. Quotes raised for different people *can* be
+	# merged — a household or a business often collects several under different
+	# names — but which name the single document carries is a decision only the
+	# shop can make, so it is asked for rather than guessed.
+	parties = list(dict.fromkeys((d.quotation_to, d.party_name) for d in docs))
+
+	if len(parties) > 1:
+		if not customer:
+			frappe.throw(
+				_("These quotations are for {0}. Choose which one the merged quote is for.").format(
+					", ".join(p for _t, p in parties)
+				),
+				title=_("Which customer?"),
+			)
+		chosen = next((p for p in parties if p[1] == customer), None)
+		if not chosen:
+			# Restricted to the parties actually involved: merging three quotes onto
+			# a fourth, unrelated name would produce a document nobody was quoted.
+			frappe.throw(
+				_("{0} is not one of the customers on these quotations").format(customer)
+			)
+	else:
+		chosen = parties[0]
+
+	companies = {d.company for d in docs}
+	if len(companies) > 1:
+		frappe.throw(_("These quotations belong to different companies"))
+
+	# (item, rate) -> qty. Keyed on the pair so a price the customer was actually
+	# given is never quietly replaced by another one.
+	combined: dict = {}
+	for d in docs:
+		for row in d.items:
+			key = (row.item_code, flt(row.rate))
+			combined[key] = combined.get(key, 0) + flt(row.qty)
+
+	party_type, party = chosen
+
+	merged = frappe.new_doc("Quotation")
+	merged.company = docs[0].company
+	merged.transaction_date = nowdate()
+	merged.valid_till = add_days(nowdate(), int(valid_days or DEFAULT_VALID_DAYS))
+	merged.order_type = "Sales"
+	merged.quotation_to = party_type
+	merged.party_name = party
+	if docs[0].selling_price_list:
+		merged.selling_price_list = docs[0].selling_price_list
+
+	for (item_code, rate), qty in combined.items():
+		merged.append("items", {"item_code": item_code, "qty": qty, "rate": rate})
+
+	trail = _("Merged from {0}").format(", ".join(names))
+	others = [p for _t, p in parties if p != party]
+	if others:
+		# Named on the document, because a quote closed under somebody else's name
+		# is the one thing here that is not obvious from the numbers alone.
+		trail += "\n" + _("Also covers quotations raised for {0}").format(", ".join(others))
+	merged.terms = f"{notes}\n\n{trail}" if notes else trail
+
+	merged.insert()
+	merged.submit()
+
+	for d in docs:
+		# Closed the same way a single quote is, so nothing downstream has to know
+		# these were merged rather than lost normally.
+		d.declare_enquiry_lost([], [], detailed_reason=_("Merged into {0}").format(merged.name))
+
+	return {
+		"name": merged.name,
+		"customer": merged.party_name,
+		"grand_total": flt(merged.grand_total),
+		"valid_till": str(merged.valid_till),
+		"items": len(merged.items),
+		"merged_from": names,
+		"customers": [p for _t, p in parties],
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def update(name: str, items: list | str, valid_days: int | None = None, notes: str | None = None) -> dict:
+	"""Change a quote that already exists, keeping its number.
+
+	Loading a quote into the cart, editing it and saving used to raise a *second*
+	quotation — so a customer who asked for one more item ended up holding two
+	documents with different numbers and different totals, and the shop had to
+	work out which one it was honouring. That is the bug this fixes.
+
+	## Why not simply re-save it
+
+	`create` submits, because a quote that cannot be printed is not a quote. A
+	submitted document's rows cannot be edited by assignment; ERPNext's own path
+	for this is `update_child_qty_rate` — the "Update Items" button on the desk —
+	which revalidates pricing and refuses changes that contradict what has
+	already been ordered against the quote. Using it means a quote edited at the
+	till and one edited at the desk end up in the same state, and the number the
+	customer is holding stays the number.
+
+	Amending (cancel, then `-1`) would be the other option and is exactly what
+	was complained about: it produces a second document.
+
+	Rows are matched to the existing ones **by item code**, so an unchanged line
+	keeps its child row rather than being deleted and re-added — which would
+	churn the row names a Sales Order later points at.
+	"""
+	if isinstance(items, str):
+		items = frappe.parse_json(items)
+
+	doc = frappe.get_doc("Quotation", name)
+	doc.check_permission("write")
+
+	if doc.docstatus != 1:
+		frappe.throw(_("{0} is not a submitted quotation").format(name))
+	if doc.status not in CLOSEABLE:
+		frappe.throw(
+			_("{0} is {1} and can no longer be edited.").format(name, doc.status)
+		)
+
+	lines = [row for row in (items or []) if flt(row.get("qty")) > 0]
+	if not lines:
+		frappe.throw(_("Nothing to quote — every line had no quantity"))
+
+	# Existing rows by item, so an untouched line keeps its identity. Only the
+	# first row per item is reused: the cart merges by item, so it cannot produce
+	# two lines of the same code at the same unit anyway.
+	existing = {}
+	for row in doc.items:
+		existing.setdefault(row.item_code, row.name)
+
+	trans_items = []
+	for idx, row in enumerate(lines, start=1):
+		code = row.get("item_code")
+		rate = flt(row.get("rate")) * (1 - flt(row.get("discount_pct")) / 100)
+		entry = {
+			"item_code": code,
+			"qty": flt(row.get("qty")),
+			"rate": rate,
+			"idx": idx,
+			# Blank for a line that was not on the quote before — ERPNext reads a
+			# missing docname as "this is new".
+			"docname": existing.get(code, ""),
+		}
+		trans_items.append(entry)
+
+	from erpnext.controllers.accounts_controller import update_child_qty_rate
+
+	update_child_qty_rate("Quotation", frappe.as_json(trans_items), name)
+
+	doc.reload()
+
+	# `valid_till` and `terms` are not `allow_on_submit`, so the document refuses
+	# them through the normal path. Written directly because extending a quote's
+	# life is the commonest reason to edit one, and refusing it would send the
+	# cashier back to raising a second quotation — the very thing this avoids.
+	changes = {}
+	if valid_days:
+		changes["valid_till"] = add_days(nowdate(), int(valid_days))
+	if notes is not None:
+		changes["terms"] = notes
+	if changes:
+		doc.db_set(changes, update_modified=True)
+		doc.reload()
+
+	return {
+		"name": doc.name,
+		"customer": doc.party_name,
+		"grand_total": flt(doc.grand_total),
+		"valid_till": str(doc.valid_till) if doc.valid_till else None,
+		"items": len(doc.items),
+		"updated": True,
+	}
+
+
+#: Statuses a quotation can still be closed from. `Ordered` and
+#: `Partially Ordered` are excluded because ERPNext refuses them outright — a
+#: quote that became a sale is not a quote anybody is still waiting on.
+CLOSEABLE = ("Draft", "Open", "Replied", "Expired")
+
+
+@frappe.whitelist(methods=["POST"])
+def close(name: str, reason: str | None = None) -> dict:
+	"""Stop chasing a quotation the customer is not coming back for.
+
+	Recorded as **Lost**, which is ERPNext's word for it — there is no separate
+	"Closed" status on a Quotation, and inventing one with a Custom Field would
+	put a state in the app that none of ERPNext's own reporting understands.
+	`declare_enquiry_lost` is what the desk calls too, so a quote closed here and
+	one closed there end up identical.
+
+	The reason is free text and optional. ERPNext's structured
+	`Quotation Lost Reason` list is left empty deliberately: it throws on any
+	value not already in that master, and a cashier told "invalid lost reason"
+	while clearing a stale quote has no way to fix it.
+	"""
+	doc = frappe.get_doc("Quotation", name)
+	doc.check_permission("write")
+
+	if doc.docstatus == 2:
+		frappe.throw(_("{0} is cancelled").format(name))
+	if doc.status == "Lost":
+		return {"name": name, "status": doc.status, "message": _("{0} is already closed").format(name)}
+	if doc.status not in CLOSEABLE:
+		frappe.throw(
+			_("{0} is {1} and cannot be closed — it has already become an order.").format(
+				name, doc.status
+			)
+		)
+
+	# A draft was never given to anybody, so there is nothing to lose; cancelling
+	# it is the honest record. ERPNext also refuses `Lost` on a docstatus 0 doc.
+	if doc.docstatus == 0:
+		doc.delete()
+		return {"name": name, "status": "Deleted", "message": _("Draft {0} discarded").format(name)}
+
+	doc.declare_enquiry_lost([], [], detailed_reason=reason or None)
+
+	return {
+		"name": name,
+		"status": "Lost",
+		"message": _("{0} closed").format(name),
 	}
 
 

@@ -22,6 +22,8 @@ import frappe
 from frappe import _
 from frappe.utils import add_days, cint, flt, get_url, nowdate, quoted
 
+from cosmestics.api.search import like_or_filters, search_rows
+
 DEFAULT_DAYS = 30
 MAX_LIMIT = 500
 
@@ -68,7 +70,18 @@ def _lines(rate: bool = True, warehouse: str | None = "Warehouse", extra: list |
 	if rate:
 		out.append({"fieldname": "rate", "label": "Rate", "type": "currency"})
 	if warehouse:
-		out.append({"fieldname": "warehouse", "label": warehouse, "type": "link", "options": "Warehouse"})
+		# Defaulted, because the answer is the same on nearly every line of
+		# nearly every document a one-shop site raises — and a field that has to
+		# be retyped per row is the field that gets left blank.
+		out.append(
+			{
+				"fieldname": "warehouse",
+				"label": warehouse,
+				"type": "link",
+				"options": "Warehouse",
+				"default": "stock_warehouse",
+			}
+		)
 	return out + (extra or [])
 
 
@@ -178,7 +191,13 @@ DOCUMENTS = [
 				{"fieldname": "item_code", "label": "Item", "type": "item", "required": True},
 				{"fieldname": "qty", "label": "Qty", "type": "number", "required": True, "default": 1},
 				{"fieldname": "rate", "label": "Rate", "type": "currency"},
-				{"fieldname": "warehouse", "label": "From", "type": "link", "options": "Warehouse"},
+				{
+					"fieldname": "warehouse",
+					"label": "From",
+					"type": "link",
+					"options": "Warehouse",
+					"default": "stock_warehouse",
+				},
 			],
 		},
 	},
@@ -230,6 +249,16 @@ DOCUMENTS = [
 					("posting_date", "Date", "today", True),
 					("due_date", "Due", "week", False),
 				),
+				# Asked once at the top rather than on every line, the way the
+				# receipt form asks it. Naming a warehouse here also turns the
+				# invoice into a stock receipt — see `_apply_stock_receipt`.
+				{
+					"fieldname": "set_warehouse",
+					"label": "Into",
+					"type": "link",
+					"options": "Warehouse",
+					"default": "stock_warehouse",
+				},
 			],
 			# A Purchase Invoice is one supplier's document — this per-line
 			# override exists so a bulk entry spanning several suppliers can
@@ -237,8 +266,10 @@ DOCUMENTS = [
 			# into one invoice per supplier actually used rather than
 			# pretending a single invoice could hold all of them.
 			"items": _lines(
-				extra=[{"fieldname": "supplier", "label": "Supplier", "type": "link", "options": "Supplier"}]
+				warehouse=None,
+				extra=[{"fieldname": "supplier", "label": "Supplier", "type": "link", "options": "Supplier"}],
 			),
+			"line_from_header": {"warehouse": "set_warehouse"},
 		},
 	},
 	{
@@ -266,7 +297,13 @@ DOCUMENTS = [
 				{"fieldname": "item_code", "label": "Item", "type": "item", "required": True},
 				{"fieldname": "qty", "label": "Qty", "type": "number", "required": True, "default": 1},
 				{"fieldname": "rate", "label": "Rate", "type": "currency"},
-				{"fieldname": "warehouse", "label": "Into", "type": "link", "options": "Warehouse"},
+				{
+					"fieldname": "warehouse",
+					"label": "Into",
+					"type": "link",
+					"options": "Warehouse",
+					"default": "stock_warehouse",
+				},
 			],
 		},
 	},
@@ -290,7 +327,14 @@ DOCUMENTS = [
 				# Not required — see the matching note on Purchase Invoice.
 				{"fieldname": "supplier", "label": "Default supplier", "type": "link", "options": "Supplier"},
 				*_dated(("posting_date", "Date", "today", True)),
-				{"fieldname": "set_warehouse", "label": "Into", "type": "link", "options": "Warehouse", "required": True},
+				{
+					"fieldname": "set_warehouse",
+					"label": "Into",
+					"type": "link",
+					"options": "Warehouse",
+					"required": True,
+					"default": "stock_warehouse",
+				},
 			],
 			"items": _lines(
 				warehouse=None,
@@ -346,6 +390,7 @@ DOCUMENTS = [
 					"type": "link",
 					"options": "Warehouse",
 					"required": True,
+					"default": "stock_warehouse",
 				},
 			],
 			"items": [
@@ -421,7 +466,14 @@ DOCUMENTS = [
 					"required": True,
 				},
 				*_dated(("posting_date", "Date", "today", True)),
-				{"fieldname": "set_warehouse", "label": "Warehouse", "type": "link", "options": "Warehouse", "required": True},
+				{
+					"fieldname": "set_warehouse",
+					"label": "Warehouse",
+					"type": "link",
+					"options": "Warehouse",
+					"required": True,
+					"default": "stock_warehouse",
+				},
 			],
 			"items": _lines(rate=False, warehouse=None, extra=[
 				{"fieldname": "valuation_rate", "label": "Cost each", "type": "currency"},
@@ -449,7 +501,14 @@ DOCUMENTS = [
 			"fields": [
 				{"fieldname": "customer", "label": "Customer", "type": "link", "options": "Customer", "required": True},
 				*_dated(("posting_date", "Date", "today", True)),
-				{"fieldname": "set_warehouse", "label": "Out of", "type": "link", "options": "Warehouse", "required": True},
+				{
+					"fieldname": "set_warehouse",
+					"label": "Out of",
+					"type": "link",
+					"options": "Warehouse",
+					"required": True,
+					"default": "stock_warehouse",
+				},
 			],
 			"items": _lines(warehouse=None),
 			"line_from_header": {"warehouse": "set_warehouse"},
@@ -702,11 +761,9 @@ def list_documents(
 	if party and entry.get("party_field"):
 		filters[entry["party_field"]] = ("like", f"%{party}%")
 
-	or_filters = {}
-	if search:
-		or_filters["name"] = ("like", f"%{search}%")
-		if entry.get("party_field"):
-			or_filters[entry["party_field"]] = ("like", f"%{search}%")
+	search_fields = ["name"]
+	if entry.get("party_field"):
+		search_fields.append(entry["party_field"])
 
 	fields = ["name", "docstatus", "owner", "modified", entry["date_field"]]
 	if _has(doctype, "status"):
@@ -715,15 +772,22 @@ def list_documents(
 		if f == "name" or _has(doctype, f):
 			fields.append(f)
 
-	rows = frappe.get_all(
-		doctype,
-		filters=filters,
-		or_filters=or_filters or None,
-		fields=list(dict.fromkeys(fields)),
-		order_by=f"{entry['date_field']} desc, creation desc",
-		limit_page_length=limit,
-		limit_start=cint(start),
-	)
+	def _fetch(or_filters, page_length):
+		return frappe.get_all(
+			doctype,
+			filters=filters,
+			or_filters=or_filters,
+			fields=list(dict.fromkeys(fields)),
+			order_by=f"{entry['date_field']} desc, creation desc",
+			limit_page_length=page_length,
+			limit_start=cint(start),
+		)
+
+	rows = search_rows(_fetch, search, search_fields, limit)
+
+	# The count has to be counted the same way the rows were found, or "showing
+	# 100 of 412" describes a different list from the one on screen.
+	or_filters = like_or_filters(search, search_fields)
 
 	# Documents with no status field still need a word in the Status column, or
 	# the reader cannot tell a draft from a posted one at a glance.
@@ -1053,12 +1117,49 @@ def _create_spec(entry: dict) -> dict:
 
 
 def _default_value(default):
-	"""Dates a shop actually wants: today, or the end of the week for a promise."""
+	"""Dates a shop actually wants, and the warehouse it actually uses.
+
+	`stock_warehouse` resolves at request time rather than being written into the
+	registry, because the answer is per-site and can change — a registry entry
+	naming one would be wrong on the second shop that installs this.
+	"""
 	if default == "today":
 		return nowdate()
 	if default == "week":
 		return add_days(nowdate(), 7)
+	if default == "stock_warehouse":
+		return _default_stock_warehouse()
 	return default
+
+
+def _default_stock_warehouse() -> str | None:
+	"""Where stock goes unless somebody says otherwise.
+
+	The till's own warehouse first — on a one-shop site that is the only place
+	stock ever lives, and typing it into every receipt is a keystroke for a fact
+	nobody is choosing. Falls back to the company's default, then to the only
+	non-group warehouse if there happens to be exactly one; several with no
+	default configured is a genuine question, so it stays blank and asks.
+	"""
+	from cosmestics.api.pos import selling_warehouse
+
+	warehouse = selling_warehouse()
+	if warehouse:
+		return warehouse
+
+	company = _company()
+	if company:
+		default = frappe.db.get_value("Company", company, "default_warehouse_for_sales_return")
+		if default:
+			return default
+
+	candidates = frappe.get_all(
+		"Warehouse",
+		filters={"is_group": 0, "disabled": 0, **({"company": company} if company else {})},
+		pluck="name",
+		limit_page_length=2,
+	)
+	return candidates[0] if len(candidates) == 1 else None
 
 
 @frappe.whitelist()
@@ -1259,6 +1360,29 @@ def create_document(key: str, values: dict | str, items: list | str, submit: int
 	}
 
 
+def _apply_stock_receipt(doc, values):
+	"""A warehouse on a Purchase Invoice only counts if it also receives.
+
+	ERPNext ignores `set_warehouse` on a Purchase Invoice unless `update_stock`
+	is on — the field is even hidden behind it on the desk form. Asking a shop
+	for a warehouse and then quietly not moving any stock into it is the worst
+	of both: the invoice looks right and the shelf never changes.
+
+	So naming one here means what it appears to mean. This matches how the app
+	already buys from a neighbour (`sourcing._make_purchase_invoice` sets the
+	same flag): one document that both bills and receives, because that is what
+	happens when goods and a bill arrive together.
+
+	Not applied when the invoice bills an existing Purchase Receipt — the stock
+	arrived with the receipt, and ERPNext refuses `update_stock` on those rows.
+	"""
+	if doc.doctype != "Purchase Invoice" or not values.get("set_warehouse"):
+		return
+	if any(row.get("pr_detail") for row in doc.get("items", [])):
+		return
+	doc.update_stock = 1
+
+
 def _insert_one(doctype, spec, values, line_fields, lines, supplier_override, submit):
 	"""One document, one supplier. `supplier_override` is set only mid-split;
 	the ordinary single-document path leaves the header's own value alone."""
@@ -1299,6 +1423,9 @@ def _insert_one(doctype, spec, values, line_fields, lines, supplier_override, su
 			if values.get(header_field):
 				line.setdefault(line_field, values[header_field])
 		doc.append("items", line)
+
+	# After the rows exist: the guard inside reads them.
+	_apply_stock_receipt(doc, values)
 
 	# Pulls prices, UOMs and the rest of what the desk would fill in for you.
 	if hasattr(doc, "set_missing_values"):

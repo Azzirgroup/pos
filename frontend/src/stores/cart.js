@@ -19,6 +19,25 @@ export const useCartStore = defineStore('cart', () => {
 	const discount = ref(0)
 	/** Line id most recently touched — drives the flash/scroll-into-view affordance. */
 	const lastTouched = ref(null)
+
+	/**
+	 * The quotation this cart was loaded from, if any.
+	 *
+	 * Without it, editing a loaded quote and saving raised a *second* quotation:
+	 * the customer ended up holding two documents with different numbers and
+	 * different totals, and the shop had to work out which one it was honouring.
+	 * Held here rather than in the view because it belongs to the cart's
+	 * contents — clearing the cart has to forget it, and only the store knows
+	 * every way a cart gets cleared.
+	 */
+	const sourceQuotation = ref(null)
+
+	/**
+	 * The held ticket this cart was resumed from, for the same reason. Resuming
+	 * H002, adding a line and holding again used to file it as H004 — the same
+	 * parked sale, now under a number the customer was never told.
+	 */
+	const sourceTicket = ref(null)
 	const held = ref([])
 	/**
 	 * Ticket numbering, counted rather than derived from `held.length`.
@@ -145,6 +164,9 @@ export const useCartStore = defineStore('cart', () => {
 		customer.value = null
 		discount.value = 0
 		lastTouched.value = null
+		// An emptied cart is no longer that quote or that ticket.
+		sourceQuotation.value = null
+		sourceTicket.value = null
 	}
 
 	function lineTotal(line) {
@@ -193,16 +215,25 @@ export const useCartStore = defineStore('cart', () => {
 	/** Park the current sale so the next customer can be served immediately. */
 	function hold() {
 		if (isEmpty.value) return null
+		// Back under its own number when this cart came off the held list, so a
+		// parked sale keeps the reference the customer was given.
+		const reusing = sourceTicket.value
 		const ticket = {
-			id: `H${String((ticketSeq += 1)).padStart(3, '0')}`,
+			id: reusing || `H${String((ticketSeq += 1)).padStart(3, '0')}`,
 			at: Date.now(),
 			customer: customer.value,
 			lines: JSON.parse(JSON.stringify(lines.value)),
 			discount: discount.value,
 			total: total.value,
 			count: count.value,
+			// A cart parked mid-edit is still that quote when it comes back.
+			sourceQuotation: sourceQuotation.value,
 		}
-		held.value.push(ticket)
+		// Put it back where it was rather than at the end: a list that reorders
+		// itself every time somebody looks at a ticket is a list nobody can scan.
+		const at = reusing ? held.value.findIndex((t) => t.id === reusing) : -1
+		if (at >= 0) held.value.splice(at, 1, ticket)
+		else held.value.push(ticket)
 		clear()
 		return ticket
 	}
@@ -215,6 +246,59 @@ export const useCartStore = defineStore('cart', () => {
 		customer.value = ticket.customer
 		discount.value = ticket.discount || 0
 		lastTouched.value = null
+		// Remembered so re-holding files it under the same number.
+		sourceTicket.value = ticket.id
+		sourceQuotation.value = ticket.sourceQuotation || null
+	}
+
+	/**
+	 * Fold several parked sales into one ticket.
+	 *
+	 * A customer who was served twice — a bag put aside, then more added later —
+	 * ends up with two tickets and one bill to pay. Merging them is the same
+	 * request as merging two quotes, one screen earlier.
+	 *
+	 * Lines are combined by item *and* rate, matching `quotations.merge`: two
+	 * tickets holding the same item at the same price become one line, and the
+	 * same item at two prices stays two, because somebody was told both.
+	 *
+	 * The earliest ticket's number survives — it is the one the customer was
+	 * given first, and the one they are most likely to quote back.
+	 */
+	function mergeHeld(ticketIds) {
+		const ids = new Set(ticketIds || [])
+		const chosen = held.value.filter((t) => ids.has(t.id))
+		if (chosen.length < 2) return null
+
+		const merged = []
+		for (const ticket of chosen) {
+			for (const line of ticket.lines) {
+				const same = merged.find(
+					(l) => l.item_code === line.item_code && l.rate === line.rate && l.uom === line.uom,
+				)
+				if (same) same.qty = round2(same.qty + line.qty)
+				else merged.push(JSON.parse(JSON.stringify(line)))
+			}
+		}
+
+		const keep = chosen[0]
+		const ticket = {
+			...keep,
+			lines: merged,
+			at: Date.now(),
+			// A customer named on any of them is the customer for all of them; the
+			// first name found wins rather than being dropped.
+			customer: chosen.find((t) => t.customer)?.customer || null,
+			discount: chosen.reduce((sum, t) => sum + (t.discount || 0), 0),
+			count: merged.reduce((n, l) => n + l.qty, 0),
+			total: round2(merged.reduce((sum, l) => sum + lineTotal(l), 0)),
+			sourceQuotation: chosen.find((t) => t.sourceQuotation)?.sourceQuotation || null,
+		}
+
+		const at = held.value.findIndex((t) => t.id === keep.id)
+		held.value = held.value.filter((t) => !ids.has(t.id))
+		held.value.splice(Math.max(at, 0), 0, ticket)
+		return ticket
 	}
 
 	function dropHeld(ticketId) {
@@ -226,6 +310,8 @@ export const useCartStore = defineStore('cart', () => {
 		customer,
 		discount,
 		lastTouched,
+		sourceQuotation,
+		sourceTicket,
 		held,
 		vatRate: VAT_RATE,
 		taxInclusive: TAX_INCLUSIVE,
@@ -242,6 +328,7 @@ export const useCartStore = defineStore('cart', () => {
 		lineTotal,
 		hold,
 		resume,
+		mergeHeld,
 		dropHeld,
 		count,
 		isEmpty,

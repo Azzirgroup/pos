@@ -4,6 +4,7 @@ import AppRail from '@/components/AppRail.vue'
 import AppTopBar from '@/components/AppTopBar.vue'
 import ModuleTabs from '@/components/ModuleTabs.vue'
 import { MODULE_TABS, moduleFor } from '@/data/navigation'
+import { useBuildCheck } from '@/composables/useBuildCheck'
 import { useRoute } from 'vue-router'
 import { computed, watch } from 'vue'
 
@@ -56,6 +57,15 @@ watch(
 
 // Sub-tabs only where a module has more than one activity.
 const moduleTabs = computed(() => MODULE_TABS[currentModule.value] || null)
+
+// Notices when a deploy has happened under this tab. See the composable for
+// why it offers a reload rather than performing one.
+const { buildStale } = useBuildCheck()
+
+// `window` is not in scope inside a template, so the reload is a handler.
+function reloadApp() {
+	window.location.reload()
+}
 </script>
 
 <template>
@@ -63,6 +73,22 @@ const moduleTabs = computed(() => MODULE_TABS[currentModule.value] || null)
 	     what keeps the pay button reachable on every screen. -->
 	<div class="relative flex h-full flex-col overflow-hidden bg-surface-gray-1">
 		<AppTopBar @toggle-rail="cycleRail" />
+
+		<!-- A deploy happened while this tab was open, so it is running older code
+		     than the server. Offered rather than forced: the cart lives in memory
+		     and a surprise reload would take it with it. -->
+		<div
+			v-if="buildStale"
+			class="flex shrink-0 items-center justify-center gap-3 bg-surface-amber-2 px-3 py-1.5 text-p-sm text-ink-amber-3"
+		>
+			<span>A newer version of the till is available.</span>
+			<button
+				class="rounded-md bg-surface-gray-7 px-2.5 py-1 text-p-xs font-semibold text-ink-white hover:bg-surface-gray-6"
+				@click="reloadApp"
+			>
+				Reload
+			</button>
+		</div>
 
 		<div class="flex min-h-0 flex-1 overflow-hidden">
 			<AppRail v-if="railMode !== 'hidden'" :mode="railMode" class="hidden md:flex" />

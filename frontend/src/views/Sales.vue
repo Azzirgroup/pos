@@ -6,6 +6,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
+import DocumentModal from '@/components/DocumentModal.vue'
 import { useRowActions } from '@/composables/useRowActions'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideSend from '~icons/lucide/send'
@@ -73,6 +74,23 @@ async function load() {
 		loading.value = false
 	}
 }
+/**
+ * Open the document behind a row.
+ *
+ * The first column is a link now, and it goes to the same modal the documents
+ * hub uses — one detail view for a Sales Invoice wherever it is listed, rather
+ * than a second one per screen that drifts from it.
+ */
+const docKey = ref(null)
+const docName = ref(null)
+const docOpen = ref(false)
+
+function openDoc(key, name) {
+	if (!name) return
+	docKey.value = key
+	docName.value = name
+	docOpen.value = true
+}
 </script>
 
 <template>
@@ -100,6 +118,8 @@ async function load() {
 
 		<StatTiles :stats="stats" />
 		<DataTable
+			row-link
+			@row-click="(r) => openDoc('sales-invoice', r.name)"
 			:columns="COLUMNS"
 			:rows="rows"
 			row-key="name"
@@ -125,5 +145,6 @@ async function load() {
 		</DataTable>
 
 		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
+		<DocumentModal v-model:open="docOpen" :doc-key="docKey" :name="docName" />
 	</div>
 </template>

@@ -130,7 +130,8 @@ function createNew() {
 			     where it is read, not by hunting it down in the desk. -->
 			<template #cell-name="{ row }">
 				<button
-					class="text-left font-medium text-ink-gray-8 underline decoration-outline-gray-3 underline-offset-2 hover:decoration-ink-gray-8"
+					class="max-w-full truncate text-left font-medium text-ink-blue-3 hover:text-ink-blue-4 hover:underline"
+					:title="`Open ${row.name}`"
 					@click="edit(row.name)"
 				>
 					{{ row.name }}

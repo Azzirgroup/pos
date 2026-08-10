@@ -15,6 +15,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
+from cosmestics.api.search import search_rows
+
 
 @frappe.whitelist()
 def get_warehouse_tree():
@@ -316,15 +318,27 @@ def get_reorder_items(search: str | None = None, only_unconfigured: int = 0, lim
 	grid of every item/warehouse pair.
 	"""
 	filters = {"disabled": 0, "is_stock_item": 1}
-	if search:
-		filters["item_name"] = ("like", f"%{search}%")
+	# Item code as well as name, and tolerantly — an item is as often half
+	# remembered ("cocoa 400") as typed correctly. See `api/search`.
+	SEARCH_FIELDS = ["name", "item_name"]
 
-	items = frappe.get_all(
-		"Item",
-		filters=filters,
-		fields=["name as item_code", "item_name", "item_group", "stock_uom"],
-		order_by="item_name asc",
-		limit_page_length=int(limit),
+	def _fetch(or_filters, page_length):
+		return frappe.get_all(
+			"Item",
+			filters=filters,
+			or_filters=or_filters,
+			fields=["name as item_code", "item_name", "item_group", "stock_uom"],
+			order_by="item_name asc",
+			limit_page_length=page_length,
+		)
+
+	items = search_rows(
+		_fetch,
+		search,
+		SEARCH_FIELDS,
+		int(limit),
+		rank_fields=["item_code", "item_name"],
+		key="item_code",
 	)
 	if not items:
 		return []

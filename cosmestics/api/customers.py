@@ -8,6 +8,8 @@ import frappe
 from frappe import _
 from frappe.utils import flt
 
+from cosmestics.api.search import search_rows
+
 
 @frappe.whitelist()
 def search(query: str | None = None, limit: int = 20):
@@ -19,22 +21,19 @@ def search(query: str | None = None, limit: int = 20):
 	query = (query or "").strip()
 
 	filters = {"disabled": 0}
-	or_filters = None
-	if query:
-		or_filters = {
-			"name": ("like", f"%{query}%"),
-			"customer_name": ("like", f"%{query}%"),
-			"mobile_no": ("like", f"%{query}%"),
-		}
+	SEARCH_FIELDS = ["name", "customer_name", "mobile_no"]
 
-	rows = frappe.get_all(
-		"Customer",
-		filters=filters,
-		or_filters=or_filters,
-		fields=["name", "customer_name", "mobile_no"],
-		limit_page_length=int(limit),
-		order_by="modified desc",
-	)
+	def _fetch(or_filters, page_length):
+		return frappe.get_all(
+			"Customer",
+			filters=filters,
+			or_filters=or_filters,
+			fields=SEARCH_FIELDS,
+			limit_page_length=page_length,
+			order_by="modified desc",
+		)
+
+	rows = search_rows(_fetch, query, SEARCH_FIELDS, int(limit))
 
 	# One query for every balance on screen. This used to run one per customer,
 	# and the search behind it fires as the cashier types — twenty round trips

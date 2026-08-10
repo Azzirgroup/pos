@@ -21,6 +21,8 @@ import frappe
 from frappe import _
 from frappe.utils import cint
 
+from cosmestics.api.search import search_rows
+
 # GS1 reserves prefix 2 for in-store items. Never issued to a real product, so a
 # code minted here cannot collide with one printed on a supplier's carton.
 INTERNAL_PREFIX = "2"
@@ -99,15 +101,28 @@ def list_items(search: str | None = None, only_missing: int = 1, limit: int = 20
 	before printing another label for it.
 	"""
 	filters = {"disabled": 0, "is_stock_item": 1}
-	if search:
-		filters["item_name"] = ("like", f"%{search}%")
+	# Item code as well as name, and tolerantly — an item is as often half
+	# remembered ("cocoa 400") as typed correctly. See `api/search`.
+	SEARCH_FIELDS = ["name", "item_name"]
 
-	items = frappe.get_all(
-		"Item",
-		filters=filters,
-		fields=["name as item_code", "item_name", "item_group", "brand", "stock_uom"],
-		order_by="item_name asc",
-		limit_page_length=min(max(cint(limit) or 200, 1), 500),
+	def _fetch(or_filters, page_length):
+		return frappe.get_all(
+			"Item",
+			filters=filters,
+			or_filters=or_filters,
+			fields=["name as item_code", "item_name", "item_group", "brand", "stock_uom"],
+			order_by="item_name asc",
+			limit_page_length=page_length,
+		)
+
+	items = search_rows(
+		_fetch,
+		search,
+		SEARCH_FIELDS,
+		min(max(cint(limit) or 200, 1), 500),
+		# `name` comes back aliased as `item_code`.
+		rank_fields=["item_code", "item_name"],
+		key="item_code",
 	)
 	if not items:
 		return {"rows": [], "missing": 0, "barcode_type": _barcode_type()}

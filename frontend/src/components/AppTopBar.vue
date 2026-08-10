@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { useTillStore } from '@/stores/till'
-import { getMe } from '@/data/api'
+import { getMe, logout as apiLogout } from '@/data/api'
 import LucidePanelLeft from '~icons/lucide/panel-left'
 import LucidePlus from '~icons/lucide/plus'
 import LucideLogOut from '~icons/lucide/log-out'
@@ -40,36 +40,37 @@ const me = ref(null)
 const userMenu = ref(false)
 
 /**
- * Frappe's own endpoints, not an app one.
+ * End the session, then land on the till's own sign-in page.
  *
- * `/api/method/logout` clears the session cookie server-side; a client-side
- * "forget the user" that leaves the cookie alive is a logout button that does
- * not log anybody out. The full page load afterwards is deliberate — it drops
- * every cached catalog, cart and shift in memory, none of which belongs to
- * whoever signs in next.
+ * Goes through `api.logout` rather than a bare `fetch`. Frappe declares that
+ * endpoint `methods=["POST"]` and checks a CSRF token, so the GET this used to
+ * send was refused with a permission error nothing surfaced — the button
+ * appeared to do nothing, because it did nothing.
+ *
+ * The full page load afterwards is deliberate: it drops every cached catalog,
+ * cart and shift held in memory, none of which belongs to whoever signs in
+ * next. `/till-login`, not ERPNext's `/login`, so a cashier is never handed the
+ * desk.
  */
-async function logout() {
+async function endSession(redirectTo) {
 	try {
-		await fetch('/api/method/logout', { method: 'GET', credentials: 'same-origin' })
+		await apiLogout()
 	} catch (e) {
+		// Already signed out, or the session expired underneath us. Either way the
+		// right next screen is the login page, so this is not worth blocking on.
 		console.warn('[pos] logout failed', e)
 	}
-	window.location.href = '/login'
+	window.location.href = redirectTo
 }
 
+const logout = () => endSession('/till-login')
+
 /**
- * Sign in as somebody else. Same as logging out, but comes back here rather
- * than to the desk — a cashier handing the counter over is mid-shift, not
- * leaving.
+ * Sign in as somebody else — same as signing out, but comes back to the till
+ * rather than sitting on the login page. A cashier handing the counter over is
+ * mid-shift, not leaving.
  */
-async function switchUser() {
-	try {
-		await fetch('/api/method/logout', { method: 'GET', credentials: 'same-origin' })
-	} catch (e) {
-		console.warn('[pos] logout failed', e)
-	}
-	window.location.href = `/login?redirect-to=${encodeURIComponent('/pos/pos')}`
-}
+const switchUser = () => endSession(`/till-login?redirect-to=${encodeURIComponent('/pos/pos')}`)
 
 function onUserBlur(event) {
 	if (!event.currentTarget.contains(event.relatedTarget)) userMenu.value = false
@@ -126,7 +127,12 @@ onMounted(async () => {
 			class="h-[22px] w-[22px] shrink-0 rounded"
 		/>
 
-		<span class="text-p-sm font-medium text-ink-gray-8">{{ title }}</span>
+		<!-- The product name, then where you are in it. One label used to carry
+		     both, so the app had no name of its own on screen — every page simply
+		     announced itself and the header read like a breadcrumb with no root. -->
+		<span class="text-p-sm font-semibold text-ink-gray-9">TradeFlow</span>
+		<span class="hidden text-p-sm text-ink-gray-5 sm:inline">·</span>
+		<span class="hidden text-p-sm text-ink-gray-6 sm:inline">{{ title }}</span>
 
 		<div class="ml-auto flex items-center gap-2">
 			<!-- Creating a customer or a supplier is something a shop does mid-task,
