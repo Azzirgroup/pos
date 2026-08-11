@@ -274,6 +274,14 @@ def list_groups() -> dict:
 		resp = requests.get(
 			f"{WACLIENT_HOST}/api/get_groups",
 			params={"instance_id": creds["instance_id"], "access_token": creds["access_token"]},
+			# waclient sits behind Cloudflare, which refuses a request with no
+			# User-Agent — `403, error code 1010`, answered as an HTML block page.
+			# That page then fails to parse as JSON and surfaced here as "the
+			# bridge did not answer", which is a different problem entirely.
+			headers={
+				"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
+				"Accept": "application/json",
+			},
 			timeout=20,
 		)
 		payload = resp.json()
@@ -281,7 +289,19 @@ def list_groups() -> dict:
 		frappe.log_error(f"Could not list WhatsApp groups: {e}", "Cosmetics POS")
 		return {"groups": [], "reason": _("The WhatsApp bridge did not answer.")}
 
-	return {"groups": _parse_groups(payload), "reason": None}
+	# The bridge answers 200 with `{"status": "error", ...}` for the cases a shop
+	# most needs to read — "This instance ID is inactive. Please relogin" being
+	# the common one. That sentence used to be dropped on the floor, leaving an
+	# empty picker and no way to tell a logged-out phone from a shop with no
+	# groups. It is passed through verbatim instead.
+	if isinstance(payload, dict) and str(payload.get("status", "")).lower() == "error":
+		return {"groups": [], "reason": payload.get("message") or _("The bridge refused the request.")}
+
+	groups = _parse_groups(payload)
+	return {
+		"groups": groups,
+		"reason": None if groups else _("This WhatsApp account is not in any groups."),
+	}
 
 
 def _parse_groups(payload) -> list:
