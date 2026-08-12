@@ -23,7 +23,7 @@ them at the counter — and the margin is still visible because the cost is not.
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, nowdate
+from frappe.utils import add_days, cint, flt, nowdate
 
 from cosmestics.api.search import search_rows
 
@@ -151,18 +151,36 @@ def _walk_in_customer(settings) -> str | None:
 
 @frappe.whitelist()
 def list_quotations(
-	days: int = 30, status: str | None = None, search: str | None = None, limit: int = 50
+	days: int = 30,
+	status: str | None = None,
+	search: str | None = None,
+	limit: int = 50,
+	today_only: int = 0,
+	include_sold: int = 0,
 ) -> dict:
 	"""Quotations raised recently, newest first.
 
 	`status` is 'open', 'expired' or 'ordered'. Open is the default because a
 	quote that has already been converted or lapsed is history — the one being
 	looked for is almost always the one the customer is standing there holding.
+
+	`today_only` narrows to quotes raised today, which is what a cashier at a
+	till actually wants: a quote from last week is a back-office concern, and
+	the one they are being asked about was given this morning.
 	"""
 	filters = {
 		"docstatus": 1,
 		"transaction_date": (">=", add_days(nowdate(), -int(days or 30))),
 	}
+
+	if cint(today_only):
+		filters["transaction_date"] = nowdate()
+
+	# A quote that has become a sale is finished business. It stays readable in
+	# the desk — and via `include_sold` — but the counter list is about promises
+	# still outstanding, and leaving sold ones in it was the complaint.
+	if not cint(include_sold):
+		filters["cosmestics_converted_invoice"] = ("is", "not set")
 
 	if status == "open":
 		filters["status"] = ("in", ["Draft", "Open", "Replied"])
@@ -187,6 +205,9 @@ def list_quotations(
 				"grand_total",
 				"status",
 				"total_qty",
+				# Who gave the price. A customer ringing back asks for the person,
+				# not the number, and the shop needs to know whose sale it becomes.
+				"owner",
 			],
 			order_by="transaction_date desc, creation desc",
 			limit=page_length,
@@ -195,6 +216,14 @@ def list_quotations(
 	rows = search_rows(_fetch, search, SEARCH_FIELDS, min(int(limit or 50), 200))
 
 	today = nowdate()
+	# One lookup for every salesperson on the page rather than one per row.
+	owners = {r.owner for r in rows if r.owner}
+	names = dict(
+		frappe.get_all(
+			"User", filters={"name": ("in", list(owners))}, fields=["name", "full_name"], as_list=True
+		)
+	) if owners else {}
+
 	out = []
 	for r in rows:
 		out.append(
@@ -211,6 +240,7 @@ def list_quotations(
 				# Expired when its scheduler runs, so a quote that lapsed this
 				# morning still reads Open until then.
 				"expired": bool(r.valid_till and str(r.valid_till) < today),
+				"salesperson": names.get(r.owner) or r.owner,
 			}
 		)
 
@@ -443,6 +473,106 @@ def update(name: str, items: list | str, valid_days: int | None = None, notes: s
 	}
 
 
+@frappe.whitelist(methods=["POST"])
+def mark_converted(name: str, invoice: str) -> dict:
+	"""Record that a quote became a sale, and take it out of the open list.
+
+	## Why this is not one `db_set`
+
+	Setting `status = "Ordered"` directly does not stick. ERPNext derives that
+	status from `Quotation Item.ordered_qty` (`is_fully_ordered`), and recomputes
+	it on any later save — so a forced value survives until the next time
+	anything touches the document, then silently reverts to Open.
+
+	So the quantities are filled in and ERPNext's own rule is allowed to reach
+	the conclusion. That also keeps the desk's reports honest: Quotation Trends
+	and opportunity conversion read the same field.
+
+	The invoice is recorded separately, because `ordered_qty` says *that* a quote
+	was taken up and never *by what* — and at a till the answer is a Sales
+	Invoice, which is not a document ERPNext ever expects a quotation to point
+	at.
+	"""
+	doc = frappe.get_doc("Quotation", name)
+	doc.check_permission("write")
+
+	if not frappe.db.exists("Sales Invoice", invoice):
+		frappe.throw(_("{0} not found").format(invoice))
+	if doc.docstatus != 1:
+		frappe.throw(_("{0} is not a submitted quotation").format(name))
+	if doc.get("cosmestics_converted_invoice"):
+		return {
+			"name": name,
+			"status": doc.status,
+			"invoice": doc.get("cosmestics_converted_invoice"),
+			"message": _("{0} was already sold as {1}").format(
+				name, doc.get("cosmestics_converted_invoice")
+			),
+		}
+
+	# Whole lines, not the part that happened to be sold. A cashier who drops a
+	# line before taking payment is not leaving the rest of the quote live —
+	# nobody comes back for the remainder of a counter quote, and a half-open
+	# quotation sitting in the list for ever is the thing being fixed.
+	for row in doc.items:
+		frappe.db.set_value("Quotation Item", row.name, "ordered_qty", flt(row.qty), update_modified=False)
+
+	doc.db_set(
+		{
+			"cosmestics_converted_invoice": invoice,
+			"cosmestics_converted_on": frappe.utils.now_datetime(),
+		},
+		update_modified=False,
+	)
+
+	doc.reload()
+	doc.set_status(update=True)
+
+	return {
+		"name": name,
+		"status": doc.status,
+		"invoice": invoice,
+		"message": _("{0} sold as {1}").format(name, invoice),
+	}
+
+
+def unmark_converted(invoice: str) -> list:
+	"""Put a quote back in the list when its sale is undone.
+
+	A cancelled invoice means the sale did not happen, so the promise stands
+	again — leaving the quote marked Ordered would hide a live commitment from
+	the counter. Reverses exactly what `mark_converted` wrote.
+	"""
+	names = frappe.get_all(
+		"Quotation", filters={"cosmestics_converted_invoice": invoice}, pluck="name"
+	)
+	for name in names:
+		doc = frappe.get_doc("Quotation", name)
+		for row in doc.items:
+			frappe.db.set_value("Quotation Item", row.name, "ordered_qty", 0, update_modified=False)
+		doc.db_set(
+			{"cosmestics_converted_invoice": None, "cosmestics_converted_on": None},
+			update_modified=False,
+		)
+		doc.reload()
+		doc.set_status(update=True)
+	return names
+
+
+def on_sales_invoice_cancel(doc, method=None):
+	"""Hooked on Sales Invoice `on_cancel` — see `unmark_converted`.
+
+	Best-effort: a quotation that cannot be reopened must never block the
+	cancellation of an invoice, which is an accounting act.
+	"""
+	try:
+		unmark_converted(doc.name)
+	except Exception:
+		frappe.log_error(
+			f"Could not reopen the quotation behind {doc.name}", "Cosmetics POS"
+		)
+
+
 #: Statuses a quotation can still be closed from. `Ordered` and
 #: `Partially Ordered` are excluded because ERPNext refuses them outright — a
 #: quote that became a sale is not a quote anybody is still waiting on.
@@ -551,7 +681,7 @@ def format_quotation(doc) -> str:
 	Mirrors the stock request: the customer is reading this on a phone and wants
 	the prices, not the document metadata.
 	"""
-	from cosmestics.api.notifications import _table, app_url
+	from cosmestics.api.notifications import _table
 
 	rows = []
 	for item in doc.items:
@@ -574,9 +704,11 @@ def format_quotation(doc) -> str:
 	]
 	if doc.valid_till:
 		lines.append(f"Valid until {doc.valid_till}")
-	lines.append("")
-	lines.append(app_url("/documents/quotation"))
 
+	# No link. This message goes to a customer, and the link pointed at the
+	# shop's own documents screen — useless to them, and an invitation to a
+	# login page that says which system the shop runs. Internal posts that do
+	# want a link build their own; see `notifications.format_material_request`.
 	return "\n".join(lines)
 
 

@@ -5,6 +5,7 @@ import { storeToRefs } from 'pinia'
 
 import { useCatalogStore } from '@/stores/catalog'
 import { useCartStore } from '@/stores/cart'
+import { isUnloading } from '@/stores/cartStorage'
 import { useTillStore } from '@/stores/till'
 import { useBreakpoint } from '@/composables/useBreakpoint'
 import { useScanner } from '@/composables/useScanner'
@@ -26,6 +27,8 @@ import {
 	recordMovement as apiRecordMovement,
 	voidMovement as apiVoidMovement,
 	createQuotation,
+	addDeliveryStop,
+	markQuotationConverted,
 	updateQuotation,
 	listCreditSales,
 	payCreditSale,
@@ -48,7 +51,7 @@ import TillContext from '@/components/TillContext.vue'
 import ReturnSheet from '@/components/ReturnSheet.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import { saleMessage } from '@/utils/salesMessage'
-import { openPrintWindow } from '@/utils/printWindow'
+import { printUrl } from '@/utils/silentPrint'
 import { cameraScanSupported } from '@/composables/useCameraScanner'
 import LucideTriangleAlert from '~icons/lucide/triangle-alert'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
@@ -182,6 +185,7 @@ const paymentMethods = ref([])
 
 onMounted(async () => {
 	catalog.load()
+	recoverInterruptedSale()
 
 	// All three at once. They were two awaits in sequence, which cost the till an
 	// extra round trip on every open for no reason — none of them depends on
@@ -211,7 +215,39 @@ onMounted(async () => {
 	} else {
 		console.warn('[pos] payment methods lookup failed', methodsResult.reason)
 	}
+
+	// Again once the session is known. Until `till.refresh` returns, the cart is
+	// stored under an anonymous key, so a basket stashed under the real one is
+	// not visible on the first pass. Clearing the stash makes this idempotent.
+	recoverInterruptedSale()
 })
+
+/**
+ * A sale the till was posting when it stopped — a reload, a crash, a tablet
+ * that reclaimed the tab. The basket comes back as a held ticket, never as a
+ * live cart: nobody knows whether that invoice reached the server, so settling
+ * it has to be a deliberate act. See `cart.recoverPending`.
+ *
+ * Announced from a watcher rather than at the call site, because the stash can
+ * be found either here or later by `adoptSession`, and the cashier has to be
+ * told either way.
+ */
+function recoverInterruptedSale() {
+	cart.recoverPending()
+}
+
+watch(
+	() => cart.recovered,
+	(found) => {
+		if (!found) return
+		notify(
+			`A sale was interrupted — basket kept as ${found.ticket.id}. Check Recent sales before charging it again.`,
+			'warn',
+		)
+		cart.recovered = null
+	},
+	{ immediate: true },
+)
 
 /**
  * The receipt prompt after a sale.
@@ -310,9 +346,13 @@ function shareSale(row) {
 async function printReceipt(invoice) {
 	const target = invoice || lastSale.value?.invoice
 	if (!target) return
-	await openPrintWindow(async () => (await getReceiptUrl({ invoice: target })).url, {
-		onError: (e) => notify(e.message || 'Could not open the receipt', 'warn'),
-	})
+	// Straight to the till printer — no tab, no preview. See `utils/silentPrint`.
+	try {
+		const { url } = await getReceiptUrl({ invoice: target })
+		printUrl(url, () => notify('Could not reach the printer', 'warn'))
+	} catch (e) {
+		notify(e.message || 'Could not open the receipt', 'warn')
+	}
 }
 
 /* ---------- recent sales ---------- */
@@ -363,7 +403,14 @@ async function loadRecent() {
  * the control below says so instead of leaving the cashier to work out why an
  * old date returned nothing.
  */
-const recentDate = ref('')
+/**
+ * Today's sales, unless a date is picked.
+ *
+ * Pre-filled rather than blank: "did that go through?" is asked about something
+ * rung up minutes ago, and a list starting at last month buries it. A cashier
+ * who wants an older day still picks one.
+ */
+const recentDate = ref(new Date().toISOString().slice(0, 10))
 
 watch([recentMine, recentThisShift, recentDate], () => {
 	if (recentSheet.value) loadRecent()
@@ -1064,12 +1111,26 @@ async function completeSale(payment) {
 		// `discountAmount` is what actually applies and what was charged.
 		discountAmount: cart.discountAmount,
 	}
+	// The same basket in the shape the cart takes back, kept separately because
+	// the payload above is the server's shape and drops what a re-ring needs.
+	const basket = {
+		lines: lines.value.map((l) => ({ ...l })),
+		customer: customer.value,
+		discount: cart.discount,
+		sourceQuotation: cart.sourceQuotation,
+		sourceTicket: cart.sourceTicket,
+	}
+	// Durable from here until the server answers: the cart is about to be
+	// emptied and this becomes the only copy. See `cartStorage.savePending`.
+	cart.submitStarted(basket)
 	const paid = total.value
 	const wasCredit = payment.method === 'credit'
 	const customerName = customer.value?.customer_name || customer.value?.name
 	// Captured before the cart clears: by the time the receipt prompt opens there
 	// is no customer on screen to read a number off.
 	const customerPhone = customer.value?.mobile_no || customer.value?.phone || ''
+	// The quote this cart came from, captured before `cart.clear()` forgets it.
+	const fromQuotation = cart.sourceQuotation
 
 	cart.clear()
 	customer.value = null
@@ -1100,6 +1161,8 @@ async function completeSale(payment) {
 				reference: payment.reference,
 			},
 		})
+		// Posted. The basket is now the invoice's problem, not ours.
+		cart.submitSettled()
 		lastSale.value = {
 			invoice: res.invoice,
 			customer: customerName,
@@ -1109,6 +1172,35 @@ async function completeSale(payment) {
 			outstanding: res.outstanding || 0,
 			at: Date.now(),
 		}
+		// The quote has become a sale, so it stops being an outstanding promise.
+		// After the invoice exists — that is what it is being marked as — and
+		// separately, so a bookkeeping update can never cost the shop the sale.
+		if (fromQuotation) {
+			try {
+				const q = await markQuotationConverted({ name: fromQuotation, invoice: res.invoice })
+				notify(q.message, 'ok')
+			} catch (e) {
+				console.error('[pos] could not mark the quote sold', e)
+				notify(`Sale posted, but ${fromQuotation} is still showing as open`, 'warn')
+			}
+		}
+
+		// On a van. Done after the invoice exists, because a trip stop points at
+		// one — and separately from the sale, so a delivery that cannot be
+		// recorded never costs the shop the sale itself.
+		if (payment.delivery?.driverName) {
+			try {
+				const trip = await addDeliveryStop({ invoice: res.invoice, ...payment.delivery })
+				notify(trip.message, 'ok')
+			} catch (e) {
+				console.error('[pos] delivery stop failed', e)
+				notify(
+					`Sale posted, but the delivery was not recorded: ${e.message || 'server error'}`,
+					'warn',
+				)
+			}
+		}
+
 		if (askToPrint.value) printPrompt.value = true
 		notify(
 			res.outstanding > 0
@@ -1123,7 +1215,31 @@ async function completeSale(payment) {
 		// The customer has already walked away, so this cannot be a silent
 		// failure — it needs to be loud enough that the cashier tells someone.
 		console.error('[pos] sale submit failed', e)
-		notify(`Sale NOT posted: ${e.message || 'server error'} — tell the manager`, 'warn')
+
+		// The tab is closing and took the request with it. Nobody knows whether
+		// the invoice posted, so the stash is deliberately left in place: the
+		// next load parks it as a held ticket, which someone has to look at
+		// before it can be charged again. See `cartStorage.isUnloading`.
+		if (isUnloading()) return
+
+		cart.submitSettled()
+
+		// Give the basket back. Without this the commonest failure — the wifi
+		// dropping between the tap and the invoice — left the cashier re-scanning
+		// a full trolley with the customer watching, which is precisely what the
+		// cart persistence work exists to prevent.
+		const back = cart.restoreFailedSale(basket)
+		const reason = e.message || 'server error'
+		notify(
+			back?.where === 'held'
+				? `Sale NOT posted: ${reason} — basket parked as ${back.ticket.id}, tell the manager`
+				: back
+					? `Sale NOT posted: ${reason} — basket is back, try again`
+					: `Sale NOT posted: ${reason} — tell the manager`,
+			'warn',
+		)
+		// The cart came back with it, so the customer it belonged to should too.
+		if (back?.where === 'cart') customer.value = basket.customer
 	}
 }
 
@@ -1578,8 +1694,33 @@ useShortcuts({
 				>
 					<button class="flex min-w-0 flex-1 items-center gap-3 text-left" @click="printReceipt(row.name)">
 					<div class="min-w-0 flex-1">
-						<div class="truncate text-p-base font-medium text-ink-gray-9">
-							{{ row.customer }}
+						<div class="flex min-w-0 items-center gap-2">
+							<span class="truncate text-p-base font-medium text-ink-gray-9">
+								{{ row.customer }}
+							</span>
+							<!-- Who rang it up. On a shared till "whose sale was that" is
+							     asked constantly, and the invoice owner is the only record
+							     of it. -->
+							<span
+								v-if="row.salesperson"
+								class="flex shrink-0 items-center gap-1 rounded-full bg-[#EDE9FE] px-2 py-0.5 text-p-xs font-medium text-[#6D28D9]"
+							>
+								<LucideUserRound class="h-3 w-3" />
+								{{ row.salesperson }}
+							</span>
+							<!-- Paid, part-paid or on account, in a word. The amount alone
+							     cannot tell a settled sale from an unpaid one. -->
+							<span
+								v-if="row.status"
+								class="shrink-0 rounded-full px-2 py-0.5 text-p-xs font-medium"
+								:class="
+									row.outstanding_amount > 0
+										? 'bg-surface-amber-2 text-ink-amber-3'
+										: 'bg-surface-green-2 text-ink-green-3'
+								"
+							>
+								{{ row.status }}
+							</span>
 						</div>
 						<div class="truncate text-p-xs text-ink-gray-5">
 							{{ row.name }} · {{ row.posting_date }}

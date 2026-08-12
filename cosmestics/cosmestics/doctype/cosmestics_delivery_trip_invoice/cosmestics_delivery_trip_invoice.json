@@ -7,6 +7,8 @@
  "field_order": [
   "sales_invoice",
   "customer",
+  "destination",
+  "contact_phone",
   "column_break_customer",
   "amount",
   "delivered"
@@ -28,6 +30,19 @@
    "in_list_view": 1,
    "label": "Customer",
    "read_only": 1
+  },
+  {
+   "fieldname": "destination",
+   "fieldtype": "Small Text",
+   "label": "Destination",
+   "in_list_view": 1,
+   "description": "Where this one drops. Per stop, not per trip \u2014 one run serves several addresses."
+  },
+  {
+   "fieldname": "contact_phone",
+   "fieldtype": "Data",
+   "options": "Phone",
+   "label": "Contact"
   },
   {
    "fieldname": "column_break_customer",

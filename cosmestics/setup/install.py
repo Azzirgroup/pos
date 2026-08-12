@@ -59,6 +59,7 @@ def setup_prerequisites():
 	ensure_short_account_field()
 	ensure_shift_cashier_field()
 	ensure_pin_login_fields()
+	ensure_quote_conversion_fields()
 	ensure_app_icon()
 	# Must run after the field exists, and after `group` is known so a site
 	# upgrading from the group-only scheme keeps its existing neighbours.
@@ -147,6 +148,49 @@ def ensure_shift_cashier_field():
 			)
 
 		hide_single_cashier_field(doctype)
+
+
+def ensure_quote_conversion_fields():
+	"""Record which sale a quotation became.
+
+	ERPNext has nowhere to put this. A quotation is marked Ordered from
+	`Quotation Item.ordered_qty`, which only a Sales Order fills in — and this
+	till posts Sales Invoices directly, with no order in between. `Sales Invoice
+	Item` carries a `sales_order` link and nothing for a quotation, so a quote
+	sold at the counter left no trace on itself and stayed Open for ever.
+
+	So the link is stored here. `quotations.mark_converted` writes it and also
+	fills `ordered_qty`, so ERPNext's own status rule reaches "Ordered" by
+	itself rather than being overwritten with it.
+	"""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	fields = [
+		{
+			"fieldname": "cosmestics_converted_invoice",
+			"label": "Sold As",
+			"fieldtype": "Link",
+			"options": "Sales Invoice",
+			"insert_after": "status",
+			"read_only": 1,
+			"no_copy": 1,
+			"allow_on_submit": 1,
+			"description": "The till sale this quotation became.",
+		},
+		{
+			"fieldname": "cosmestics_converted_on",
+			"label": "Sold On",
+			"fieldtype": "Datetime",
+			"insert_after": "cosmestics_converted_invoice",
+			"read_only": 1,
+			"no_copy": 1,
+			"allow_on_submit": 1,
+		},
+	]
+	for field in fields:
+		if frappe.db.exists("Custom Field", {"dt": "Quotation", "fieldname": field["fieldname"]}):
+			continue
+		create_custom_field("Quotation", field)
 
 
 def ensure_app_icon():

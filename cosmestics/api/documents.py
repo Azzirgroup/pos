@@ -1747,7 +1747,9 @@ def send_whatsapp(key: str, name: str, to: str | None = None, sender: str | None
 	if not number:
 		frappe.throw(_("No phone number on this document. Enter one to send."))
 
-	summary = format_document(entry, doc)
+	# A send with no PDF is the staff-group shape; one with the document attached
+	# is what goes to a customer. See `format_document`.
+	summary = format_document(entry, doc, internal=not cint(as_pdf))
 	if cint(as_pdf):
 		sent = notifications.send_document(doc.doctype, doc.name, number, message=summary, sender=sender)
 	else:
@@ -1768,8 +1770,14 @@ def whatsapp_senders() -> list:
 	return notifications.list_senders()
 
 
-def format_document(entry: dict, doc) -> str:
-	"""Readable on a phone: what it is, who it is for, what it comes to."""
+def format_document(entry: dict, doc, internal: bool = False) -> str:
+	"""Readable on a phone: what it is, who it is for, what it comes to.
+
+	`internal` is the difference between the shop's own group and a customer.
+	A staff post wants the link — somebody is going to open the document. A
+	customer gets neither the link nor anything about how the shop is run: the
+	URL exposes the site and its login, and it is noise to the person reading.
+	"""
 	from frappe.utils import fmt_money, get_url_to_form
 
 	lines = [f"*{_(doc.doctype)}*", doc.name]
@@ -1795,8 +1803,9 @@ def format_document(entry: dict, doc) -> str:
 	if entry.get("outstanding_field") and flt(doc.get(entry["outstanding_field"])):
 		lines.append(f"Outstanding: {fmt_money(flt(doc.get(entry['outstanding_field'])), currency=currency)}")
 
-	lines.append("")
-	lines.append(get_url_to_form(doc.doctype, doc.name))
+	if internal:
+		lines.append("")
+		lines.append(get_url_to_form(doc.doctype, doc.name))
 	return "\n".join(lines)
 
 

@@ -135,12 +135,13 @@ export const createQuotation = ({ items, customer, validDays, notes }) =>
 		notes: notes || null,
 	})
 
-export const listQuotations = ({ days, status, search, limit } = {}) =>
+export const listQuotations = ({ days, status, search, limit, todayOnly } = {}) =>
 	call('cosmestics.api.quotations.list_quotations', {
 		days: days || 30,
 		status: status || null,
 		search: search || null,
 		limit: limit || 50,
+		today_only: todayOnly ? 1 : 0,
 	})
 
 export const getQuotation = ({ name }) => call('cosmestics.api.quotations.get', { name })
@@ -175,6 +176,14 @@ export const mergeQuotations = ({ names, customer, validDays, notes }) =>
 		notes: notes || null,
 	})
 
+/**
+ * Record that a quote became a sale, so it leaves the open list. Fills
+ * `ordered_qty` so ERPNext reaches "Ordered" by its own rule — see
+ * `quotations.mark_converted`.
+ */
+export const markQuotationConverted = ({ name, invoice }) =>
+	call('cosmestics.api.quotations.mark_converted', { name, invoice })
+
 /** Stop chasing a quote. Recorded as Lost — ERPNext's word for closed. */
 export const closeQuotation = ({ name, reason }) =>
 	call('cosmestics.api.quotations.close', { name, reason: reason || null })
@@ -184,6 +193,28 @@ export const getQuotationPrintUrl = ({ name, printFormat } = {}) =>
 
 export const sendQuotationWhatsapp = ({ name, to, sender }) =>
 	call('cosmestics.api.quotations.send_whatsapp', { name, to, sender: sender || null })
+
+/* ---------- deliveries ---------- */
+
+/**
+ * Put a sale on a delivery run at the moment it is rung up. Joins the driver's
+ * open trip for today rather than raising a parallel one — see `add_stop`.
+ */
+export const addDeliveryStop = ({
+	invoice, driverName, destination, driverPhone, vehicle, contactPhone, trip,
+}) =>
+	call('cosmestics.api.deliveries.add_stop', {
+		sales_invoice: invoice,
+		driver_name: driverName,
+		destination: destination || null,
+		driver_phone: driverPhone || null,
+		vehicle: vehicle || null,
+		contact_phone: contactPhone || null,
+		trip: trip || null,
+	})
+
+/** Runs still being loaded, so a second sale can join one. */
+export const listOpenTrips = () => call('cosmestics.api.deliveries.open_trips')
 
 /** Stock bought from neighbouring shops, and what is still owed for it. */
 export const listNeighbourPurchases = ({ days, status, limit } = {}) =>

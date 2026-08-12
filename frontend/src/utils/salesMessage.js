@@ -34,7 +34,8 @@ export function saleMessage(sale, { shift = null, heading = null } = {}) {
 	}
 
 	add('Payment', sale.payment_summary || (sale.payment_modes || []).join(', '))
-	add('Till', sale.pos_profile)
+	// No till line. The shift already identifies which counter rang the sale, and
+	// a shop with one till repeated its own name on every message it sent.
 	add('Shift', shift)
 	add('Served by', sale.owner_name || sale.owner)
 

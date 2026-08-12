@@ -2381,6 +2381,7 @@ def _annotations(r):
 		catalog,
 		customers,
 		dashboard,
+		deliveries,
 		documents,
 		master,
 		notifications,
@@ -2428,6 +2429,18 @@ def _annotations(r):
 		),
 		(quotations.get, {"name": "x"}),
 		(quotations.close, {"name": "x", "reason": None}),
+		(quotations.mark_converted, {"name": "x", "invoice": "y"}),
+		(
+			quotations.list_quotations,
+			{"days": 30, "status": None, "search": None, "limit": 50,
+			 "today_only": 0, "include_sold": 0},
+		),
+		(
+			deliveries.add_stop,
+			{"sales_invoice": "x", "driver_name": "d", "destination": None,
+			 "driver_phone": None, "vehicle": None, "contact_phone": None, "trip": None},
+		),
+		(deliveries.open_trips, {"limit": 10}),
 		(quotations.merge, {"names": [], "customer": None, "valid_days": 14, "notes": None}),
 		(
 			quotations.update,

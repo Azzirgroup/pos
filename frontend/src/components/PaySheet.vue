@@ -7,6 +7,7 @@ import LucideUserPlus from '~icons/lucide/user-plus'
 import LucideAlertTriangle from '~icons/lucide/alert-triangle'
 import LucideX from '~icons/lucide/x'
 import LucideSplit from '~icons/lucide/split'
+import LucideTruck from '~icons/lucide/truck'
 import LucideChevronLeft from '~icons/lucide/chevron-left'
 import PaymentLogo from './PaymentLogo.vue'
 
@@ -145,14 +146,40 @@ const shortfall = computed(() => round2(Math.max(0, props.total - tenderedNum.va
 
 const isCredit = computed(() => method.value === 'credit')
 
+/* ---------- delivery ---------- */
+
+/**
+ * Whether this sale leaves the shop on a van, and the details of the drop.
+ *
+ * Captured here rather than assembled afterwards from the Deliveries screen:
+ * the cashier is standing with the customer who is telling them the address. An
+ * hour later it is remembered wrong or not at all — which is the whole reason
+ * trips were being reconstructed by hand.
+ *
+ * Only the driver and the destination are asked for at the counter. The vehicle
+ * and the driver's number belong to the run, not the drop, and the server keeps
+ * whatever the first stop supplied — see `deliveries.add_stop`.
+ */
+const isDelivery = ref(false)
+const delivery = ref({ driverName: '', destination: '', driverPhone: '', vehicle: '', contactPhone: '' })
+
 /* ---------- split tender & part payment ---------- */
 
 const splitMode = ref(false)
 /** Applied amounts per method; cash may exceed its share, giving change. */
 const parts = ref([])
 
+/** Everything the split accounts for, credit included — this is what must
+ *  add up to the bill before the sale can complete. */
 const partsTotal = computed(() =>
 	parts.value.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
+)
+
+/** Only the money actually collected. A credit row is a promise, not a tender. */
+const partsCollected = computed(() =>
+	parts.value
+		.filter((p) => p.method !== 'credit')
+		.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
 )
 /** Positive = still owed, negative = over-tendered (change). */
 const remaining = computed(() => props.total - partsTotal.value)
@@ -187,12 +214,32 @@ function startSplit() {
 	]
 }
 
-/** Split rows offer the same tenders as the main row, channels included. */
+/**
+ * Split rows offer the same tenders as the main row, channels included — plus
+ * credit.
+ *
+ * "Half now, half on account" is an ordinary thing to ask for at a counter, and
+ * until now it could only be expressed by *underpaying* the split and knowing
+ * that the remainder silently became a debt. Naming it as a row makes the
+ * intent explicit and the arithmetic visible.
+ *
+ * A credit row is not a payment: it is deliberately left out of the payload, so
+ * the server sees a part-paid invoice and leaves the balance on the customer's
+ * account. See `complete()`.
+ */
 const splitOptions = computed(() => [
 	{ key: 'cash', label: 'Cash' },
 	...props.mpesaChannels,
 	{ key: 'card', label: 'Card' },
+	{ key: 'credit', label: 'On account (credit)' },
 ])
+
+/** Amount parked on the customer's account rather than taken now. */
+const creditPart = computed(() =>
+	parts.value
+		.filter((p) => p.method === 'credit')
+		.reduce((sum, p) => sum + (Number(p.amount) || 0), 0),
+)
 
 function addPart() {
 	const used = new Set(parts.value.map((p) => p.method))
@@ -225,10 +272,15 @@ function fillRemaining(i) {
  */
 const canComplete = computed(() => {
 	if (props.total <= 0) return false
+	// A trip with no driver is a record nobody can act on.
+	if (isDelivery.value && !delivery.value.driverName.trim()) return false
 	if (isCredit.value) return Boolean(props.customer)
 
 	if (splitMode.value) {
 		if (partsTotal.value <= 0) return false
+		// Anything left on account needs somebody to owe it — a credit row and an
+		// underpaid split are the same debt, expressed two ways.
+		if (creditPart.value > 0) return Boolean(props.customer)
 		return isPartial.value ? Boolean(props.customer) : true
 	}
 
@@ -270,6 +322,8 @@ watch(
 		reference.value = ''
 		splitMode.value = false
 		parts.value = []
+		isDelivery.value = false
+		delivery.value = { driverName: '', destination: '', driverPhone: '', vehicle: '', contactPhone: '' }
 		await nextTick()
 		tenderedInput.value?.focus()
 	},
@@ -281,16 +335,21 @@ function complete() {
 	if (splitMode.value) {
 		emit('complete', {
 			method: 'split',
+			// Credit rows are omitted on purpose: the server treats anything the
+			// payment rows do not cover as owed, which is exactly what "on
+			// account" means. Sending it as a tender would book money that was
+			// never handed over.
 			parts: parts.value
-				.filter((p) => Number(p.amount) > 0)
+				.filter((p) => p.method !== 'credit' && Number(p.amount) > 0)
 				.map((p) => ({
 					method: p.method,
 					amount: Number(p.amount),
 					reference: p.reference || null,
 				})),
-			tendered: partsTotal.value,
+			delivery: isDelivery.value ? { ...delivery.value } : null,
+			tendered: partsCollected.value,
 			change: remaining.value < 0 ? -remaining.value : 0,
-			outstanding: isPartial.value ? remaining.value : 0,
+			outstanding: creditPart.value || (isPartial.value ? remaining.value : 0),
 		})
 		return
 	}
@@ -299,6 +358,7 @@ function complete() {
 		// The M-Pesa channel, not the bare method — that is what decides the
 		// Mode of Payment and therefore which account the money lands in.
 		method: tenderKey.value,
+		delivery: isDelivery.value ? { ...delivery.value } : null,
 		// A credit sale collects nothing now.
 		tendered: isCredit.value ? 0 : isCash.value ? tenderedNum.value : props.total,
 		change: isCash.value ? change.value : 0,
@@ -689,6 +749,49 @@ function goBack() {
 					class="h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-4 text-p-lg uppercase text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
 					@keyup.enter="complete"
 				/>
+			</div>
+
+			<!-- Going out on a van. Collapsed by default — most sales are carried
+			     out of the shop, and a form nobody needs is a form in the way. -->
+			<div class="mb-2 rounded-xl border border-outline-gray-2">
+				<label class="flex min-h-touch cursor-pointer items-center gap-3 px-3 py-2.5">
+					<input v-model="isDelivery" type="checkbox" class="h-4 w-4 accent-gray-800" />
+					<LucideTruck class="h-5 w-5 shrink-0 text-ink-gray-5" />
+					<span class="text-p-base font-medium text-ink-gray-9">Deliver this order</span>
+				</label>
+
+				<div v-if="isDelivery" class="flex flex-col gap-2 border-t border-outline-gray-1 p-3">
+					<input
+						v-model="delivery.driverName"
+						type="text"
+						placeholder="Driver name (required)"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+					<input
+						v-model="delivery.destination"
+						type="text"
+						placeholder="Destination — estate, street, landmark"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+					<div class="grid grid-cols-2 gap-2">
+						<input
+							v-model="delivery.vehicle"
+							type="text"
+							placeholder="Vehicle"
+							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						/>
+						<input
+							v-model="delivery.contactPhone"
+							type="tel"
+							inputmode="tel"
+							placeholder="Customer phone"
+							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						/>
+					</div>
+					<p class="text-p-xs text-ink-gray-5">
+						Joins this driver's run for today if they already have one.
+					</p>
+				</div>
 			</div>
 
 			<button

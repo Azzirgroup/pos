@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import { getTillContext, getOpenShift } from '@/data/api'
+import { getTillContext, getOpenShift, getMe } from '@/data/api'
+import { useCartStore } from './cart'
 
 /**
  * Which till, shop and warehouse this session is selling from.
@@ -36,6 +37,16 @@ export const useTillStore = defineStore('till', () => {
 		try {
 			context.value = await getTillContext()
 			loaded.value = true
+			// Now that we know who is signed in and which counter this is, point
+			// the saved cart at them — see `cart.adoptSession`. Until this runs a
+			// reload restores from an anonymous key, which is what makes the cart
+			// survive a refresh before this call has even returned.
+			try {
+				const me = await getMe()
+				useCartStore().adoptSession(me?.name || me?.user, context.value?.branch)
+			} catch (e) {
+				console.warn('[till] could not scope the saved cart', e)
+			}
 		} catch (e) {
 			console.warn('[till] context refresh failed', e)
 		}

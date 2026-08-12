@@ -106,6 +106,11 @@ doc_events = {
 		# by one of them is stored in the clear.
 		"validate": "cosmestics.api.pin.hash_user_pin",
 	},
+	"Sales Invoice": {
+		# A cancelled sale reopens the quotation it came from — see
+		# `quotations.unmark_converted`.
+		"on_cancel": "cosmestics.api.quotations.on_sales_invoice_cancel",
+	},
 	"Material Request": {
 		# Posts the request to the staff WhatsApp group. Enqueued, best-effort:
 		# a bridge outage must never block the request itself.

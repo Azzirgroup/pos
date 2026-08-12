@@ -537,6 +537,18 @@ def recent_sales(
 
 	_attach_payment_modes(rows)
 
+	# Who rang it up, by name. One lookup for the page rather than one per row —
+	# this list reloads on every filter change at a busy counter.
+	owners = {r.owner for r in rows if r.owner}
+	if owners:
+		names = dict(
+			frappe.get_all(
+				"User", filters={"name": ("in", list(owners))}, fields=["name", "full_name"], as_list=True
+			)
+		)
+		for r in rows:
+			r.salesperson = names.get(r.owner) or r.owner
+
 	return {
 		"rows": rows,
 		"totals": {

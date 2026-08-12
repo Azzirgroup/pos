@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, watch } from 'vue'
 import { fmtMoney, fmtMoneyShort } from '@/utils/format'
-import { openPrintWindow } from '@/utils/printWindow'
+import { printUrl } from '@/utils/silentPrint'
 import {
 	listQuotations,
 	getQuotation,
@@ -15,7 +15,8 @@ import LucideFileText from '~icons/lucide/file-text'
 import LucideSearch from '~icons/lucide/search'
 import LucidePrinter from '~icons/lucide/printer'
 import LucideSend from '~icons/lucide/send'
-import LucideCircleSlash from '~icons/lucide/circle-slash'
+import LucideCart from '~icons/lucide/shopping-cart'
+import LucideUserRound from '~icons/lucide/user-round'
 import LucideMerge from '~icons/lucide/git-merge'
 
 /**
@@ -43,7 +44,7 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'save', 'load', 'sent'])
 
 const TABS = [
-	{ label: 'Saved quotes', value: 'list' },
+	{ label: "Today's Quotes", value: 'list' },
 	{ label: 'Quote this cart', value: 'save' },
 ]
 const tab = ref('list')
@@ -52,7 +53,14 @@ const rows = ref([])
 const totals = ref({})
 const loading = ref(false)
 const search = ref('')
-const onlyOpen = ref(true)
+/**
+ * Today's quotes only, on by default.
+ *
+ * A cashier is being asked about a price given this morning; a quote from last
+ * week is a back-office question. Filtering server-side rather than in the
+ * browser so the count on the tab is the count of what is actually listed.
+ */
+const todayOnly = ref(true)
 
 const validDays = ref('14')
 const notes = ref('')
@@ -71,7 +79,7 @@ watch(
 )
 
 let timer = null
-watch([search, onlyOpen], () => {
+watch([search, todayOnly], () => {
 	clearTimeout(timer)
 	timer = setTimeout(load, 250)
 })
@@ -81,7 +89,8 @@ async function load() {
 	try {
 		const res = await listQuotations({
 			search: search.value || null,
-			status: onlyOpen.value ? 'open' : null,
+			status: null,
+			todayOnly: todayOnly.value ? 1 : 0,
 		})
 		rows.value = res.rows || []
 		totals.value = res.totals || {}
@@ -129,7 +138,9 @@ const sendingFor = ref('')
 async function printQuote(row) {
 	busyOne.value = row.name
 	try {
-		await openPrintWindow(async () => (await getQuotationPrintUrl({ name: row.name })).url)
+		// Straight to the printer — no tab, no preview. See `utils/silentPrint`.
+		const { url } = await getQuotationPrintUrl({ name: row.name })
+		printUrl(url, () => emit('sent', 'Could not reach the printer'))
 	} catch (e) {
 		console.error('[quotations] print failed', e)
 	} finally {
@@ -279,7 +290,7 @@ async function loadQuote(row) {
 					<LucideFileText class="h-5 w-5 text-ink-blue-3" />
 				</div>
 				<div class="min-w-0 flex-1">
-					<div class="text-p-lg font-semibold text-ink-gray-9">Quotations</div>
+					<div class="text-p-lg font-semibold text-ink-gray-9">Shift Quotes Only</div>
 					<div class="text-p-sm text-ink-gray-5">
 						A price given now, honoured when they come back
 					</div>
@@ -413,8 +424,8 @@ async function loadQuote(row) {
 				</div>
 
 				<label class="flex items-center gap-2 text-p-sm text-ink-gray-7">
-					<input v-model="onlyOpen" type="checkbox" class="h-4 w-4 rounded" />
-					Only quotes still open
+					<input v-model="todayOnly" type="checkbox" class="h-4 w-4 rounded" />
+					Only today's quotes
 				</label>
 
 				<p v-if="loading" class="px-1 text-p-sm text-ink-gray-5">Loading…</p>
@@ -509,8 +520,20 @@ async function loadQuote(row) {
 						@click="loadQuote(q)"
 					>
 						<div class="min-w-0 flex-1">
-							<div class="truncate text-p-base font-medium text-ink-gray-9">
-								{{ q.customer }}
+							<div class="flex min-w-0 items-center gap-2">
+								<span class="truncate text-p-base font-medium text-ink-gray-9">
+									{{ q.customer }}
+								</span>
+								<!-- Who gave the price. A customer ringing back asks for the
+								     person, not the number — and on a shared till the shop
+								     needs to see whose quote it is becoming a sale. -->
+								<span
+									v-if="q.salesperson"
+									class="flex shrink-0 items-center gap-1 rounded-full bg-[#EDE9FE] px-2 py-0.5 text-p-xs font-medium text-[#6D28D9]"
+								>
+									<LucideUserRound class="h-3 w-3" />
+									{{ q.salesperson }}
+								</span>
 							</div>
 							<div class="truncate text-p-xs text-ink-gray-5">
 								{{ q.name }} · {{ q.date }}
@@ -563,12 +586,12 @@ async function loadQuote(row) {
 						     would promise something that cannot happen. -->
 						<button
 							v-if="canClose(q)"
-							class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-6 transition-colors hover:border-outline-red-1 hover:bg-surface-red-1 hover:text-ink-red-3 disabled:opacity-50"
-							:disabled="closingOne === q.name"
-							@click="closeQuote(q)"
+							class="flex items-center gap-1.5 rounded-md bg-[#7C3AED] px-2.5 py-1.5 text-p-xs font-semibold text-white transition-colors hover:bg-[#6D28D9] disabled:opacity-50"
+							:disabled="loadingOne === q.name"
+							@click="loadQuote(q)"
 						>
-							<LucideCircleSlash class="h-3.5 w-3.5" />
-							{{ closingOne === q.name ? 'Closing…' : 'Close' }}
+							<LucideCart class="h-3.5 w-3.5" />
+							{{ loadingOne === q.name ? 'Loading…' : 'Convert to Sale' }}
 						</button>
 						<input
 							v-if="sendingFor === q.name"

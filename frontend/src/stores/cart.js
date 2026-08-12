@@ -1,6 +1,15 @@
 import { defineStore } from 'pinia'
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 import { round2 } from '@/utils/format'
+import {
+	clearPending,
+	clearStored,
+	loadCart,
+	loadPending,
+	savePending,
+	saveCart,
+	storageKey,
+} from './cartStorage'
 
 /**
  * Kenyan retail quotes shelf prices VAT-inclusive, so the cart total must equal
@@ -13,10 +22,19 @@ const TAX_INCLUSIVE = true
 let lineSeq = 0
 
 export const useCartStore = defineStore('cart', () => {
-	const lines = ref([])
-	const customer = ref(null)
+	/**
+	 * Restored before anything else, so a reload comes back to the same cart.
+	 *
+	 * The key is anonymous at this point — the session has not loaded yet — and
+	 * `adoptSession` re-keys it the moment it does. See `cartStorage`.
+	 */
+	let key = storageKey(null, null)
+	const restored = loadCart(key)
+
+	const lines = ref(restored?.lines || [])
+	const customer = ref(restored?.customer ?? null)
 	/** Whole-sale discount, in shillings, on top of any per-line discount. */
-	const discount = ref(0)
+	const discount = ref(restored?.discount || 0)
 	/** Line id most recently touched — drives the flash/scroll-into-view affordance. */
 	const lastTouched = ref(null)
 
@@ -30,15 +48,15 @@ export const useCartStore = defineStore('cart', () => {
 	 * contents — clearing the cart has to forget it, and only the store knows
 	 * every way a cart gets cleared.
 	 */
-	const sourceQuotation = ref(null)
+	const sourceQuotation = ref(restored?.sourceQuotation ?? null)
 
 	/**
 	 * The held ticket this cart was resumed from, for the same reason. Resuming
 	 * H002, adding a line and holding again used to file it as H004 — the same
 	 * parked sale, now under a number the customer was never told.
 	 */
-	const sourceTicket = ref(null)
-	const held = ref([])
+	const sourceTicket = ref(restored?.sourceTicket ?? null)
+	const held = ref(restored?.held || [])
 	/**
 	 * Ticket numbering, counted rather than derived from `held.length`.
 	 *
@@ -47,7 +65,7 @@ export const useCartStore = defineStore('cart', () => {
 	 * the wrong cart could come back. It matters more now that the hold button
 	 * undoes itself: holding, undoing and holding again is one tap each.
 	 */
-	let ticketSeq = 0
+	let ticketSeq = restored?.ticketSeq || 0
 
 	/**
 	 * `sourced` marks a line bought from a neighbouring shop for this sale:
@@ -305,7 +323,188 @@ export const useCartStore = defineStore('cart', () => {
 		held.value = held.value.filter((t) => t.id !== ticketId)
 	}
 
+	/**
+	 * A basket that has been paid for but not yet posted.
+	 *
+	 * Called immediately before the invoice goes to the server, and cleared by
+	 * `submitSettled` once it has answered either way. In between, this is the
+	 * only durable copy of the basket — the cart on screen has already been
+	 * emptied for the next customer. See `cartStorage.savePending`.
+	 */
+	/**
+	 * The ticket an interrupted sale came back as, for the view to announce.
+	 *
+	 * A ref rather than a return value because recovery cannot be pinned to one
+	 * moment: the cart is stored anonymously until the session loads, so the
+	 * stash may only become visible when `adoptSession` re-keys — which happens
+	 * on its own schedule, sometimes before the till has mounted and sometimes
+	 * after. Whoever finds it sets this; the view watches and says so.
+	 */
+	const recovered = ref(null)
+
+	function submitStarted(snapshot) {
+		savePending(key, snapshot)
+	}
+
+	function submitSettled() {
+		clearPending(key)
+	}
+
+	/**
+	 * Put back a basket whose sale did not post.
+	 *
+	 * The wifi drops between "Complete sale" and the invoice, and the cart has
+	 * already been cleared: the customer is standing there with goods that no
+	 * longer exist anywhere. Re-scanning a full basket from memory is exactly
+	 * what the persistence work was meant to stop, and it happens at the worst
+	 * possible moment.
+	 *
+	 * Where it goes depends on what the cashier has done since. Usually nothing —
+	 * the failure lands within a second or two — so it goes straight back into
+	 * the cart, and they can retry as if the tap had not happened. But if they
+	 * have already started ringing the next customer, dropping the old lines on
+	 * top would silently merge two people's shopping into one bill. In that case
+	 * it is parked as a held ticket, which is the till's existing answer to "keep
+	 * this basket for later" and costs one tap to bring back.
+	 *
+	 * Returns where it went, so the caller can say so.
+	 */
+	function restoreFailedSale(snapshot) {
+		const recovered = (snapshot?.lines || []).map((l) => ({ ...l }))
+		if (!recovered.length) return null
+
+		if (isEmpty.value) {
+			lines.value = recovered
+			customer.value = snapshot.customer ?? null
+			discount.value = snapshot.discount || 0
+			sourceQuotation.value = snapshot.sourceQuotation ?? null
+			sourceTicket.value = snapshot.sourceTicket ?? null
+			return { where: 'cart' }
+		}
+
+		const ticket = {
+			id: `H${String((ticketSeq += 1)).padStart(3, '0')}`,
+			at: Date.now(),
+			customer: snapshot.customer ?? null,
+			lines: recovered,
+			discount: snapshot.discount || 0,
+			total: round2(recovered.reduce((s, l) => s + lineTotal(l), 0) - (snapshot.discount || 0)),
+			count: recovered.reduce((n, l) => n + l.qty, 0),
+			sourceQuotation: snapshot.sourceQuotation ?? null,
+		}
+		held.value.push(ticket)
+		return { where: 'held', ticket }
+	}
+
+	/**
+	 * A basket left mid-post by a reload, a crash or a tab the tablet reclaimed.
+	 *
+	 * Deliberately *not* dropped back into the cart. Unlike a failed submit,
+	 * nobody knows whether this one reached the server: the tab died with the
+	 * request in the air, and it may well have posted. Re-ringing it
+	 * automatically would risk charging the customer twice, which is a worse
+	 * failure than the one being recovered.
+	 *
+	 * So it comes back as a held ticket — the basket is safe, and settling it
+	 * takes a deliberate act by someone who can check Recent sales first.
+	 */
+	function recoverPending() {
+		const pending = loadPending(key)
+		if (!pending) return null
+		clearPending(key)
+		const restored = restoreFailedSale(pending)
+		if (!restored) return null
+		// Always a ticket, never the live cart: see above.
+		const found =
+			restored.where === 'cart'
+				? (() => {
+						const ticket = hold()
+						return ticket ? { where: 'held', ticket } : null
+					})()
+				: restored
+		if (!found) return null
+		recovered.value = { ...found, unverified: true }
+		return recovered.value
+	}
+
+	/**
+	 * Write the whole cart on every change.
+	 *
+	 * Deep, because a quantity typed on an existing line is the commonest edit
+	 * and a shallow watch would miss it. Cheap enough: this is a handful of rows
+	 * serialised on human-speed interaction, not a hot loop.
+	 */
+	watch(
+		[lines, customer, discount, held, sourceQuotation, sourceTicket],
+		() => {
+			saveCart(key, {
+				lines: lines.value,
+				customer: customer.value,
+				discount: discount.value,
+				held: held.value,
+				sourceQuotation: sourceQuotation.value,
+				sourceTicket: sourceTicket.value,
+				ticketSeq,
+			})
+		},
+		{ deep: true },
+	)
+
+	/**
+	 * Point storage at this cashier and this till, once the session says who
+	 * they are.
+	 *
+	 * Until this runs the cart is stored anonymously, which is what makes a
+	 * reload work before the boot call returns. When the real key arrives, an
+	 * anonymous cart is carried over to it — that is this same person, one
+	 * moment later — but a cart already stored under the real key wins, because
+	 * it is the one they actually left behind.
+	 *
+	 * Signing in as somebody else therefore lands on *their* cart, not the
+	 * previous cashier's. See `cartStorage` for why that matters on a shared
+	 * machine.
+	 */
+	function adoptSession(user, till) {
+		const next = storageKey(user, till)
+		if (next === key) return
+
+		// A sale left in the air before we knew who was ringing it up still has to
+		// be recoverable afterwards, so the stash moves with the key.
+		const pending = loadPending(key)
+		if (pending && !loadPending(next)) savePending(next, pending)
+		clearPending(key)
+
+		const existing = loadCart(next)
+		if (existing) {
+			lines.value = existing.lines || []
+			customer.value = existing.customer ?? null
+			discount.value = existing.discount || 0
+			held.value = existing.held || []
+			sourceQuotation.value = existing.sourceQuotation ?? null
+			sourceTicket.value = existing.sourceTicket ?? null
+			ticketSeq = existing.ticketSeq || 0
+			clearStored(key)
+		} else if (lines.value.length || held.value.length) {
+			// Carry the anonymous cart across, then stop using the old key.
+			clearStored(key)
+		}
+		key = next
+		// The stash under the real key only becomes reachable now, and the till
+		// may already have mounted and looked for it. See `recovered`.
+		recoverPending()
+		saveCart(key, {
+			lines: lines.value,
+			customer: customer.value,
+			discount: discount.value,
+			held: held.value,
+			sourceQuotation: sourceQuotation.value,
+			sourceTicket: sourceTicket.value,
+			ticketSeq,
+		})
+	}
+
 	return {
+		adoptSession,
 		lines,
 		customer,
 		discount,
@@ -330,6 +529,11 @@ export const useCartStore = defineStore('cart', () => {
 		resume,
 		mergeHeld,
 		dropHeld,
+		submitStarted,
+		submitSettled,
+		restoreFailedSale,
+		recoverPending,
+		recovered,
 		count,
 		isEmpty,
 		grossTotal,
