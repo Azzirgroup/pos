@@ -77,6 +77,13 @@ def get() -> dict:
 		"can_edit_pos": _can_write("Cosmestics POS Settings"),
 		"user": {f: user.get(f) for f in USER_FIELDS},
 		"user_meta": _field_meta("User", USER_FIELDS),
+		"pin": {
+			# Never the hash, and never the digits — there are none stored. All the
+			# screen needs to know is whether a PIN exists, so it can offer
+			# "change" rather than "set" and say what unticking the box will do.
+			"has_pin": bool(user.get("cosmestics_pin_hash")),
+			"enabled": bool(user.get("cosmestics_pin_login")),
+		},
 		"profiles": _profiles(),
 		"can_edit_profile": _can_write("POS Profile"),
 		"company": frappe.defaults.get_user_default("Company")
@@ -388,10 +395,53 @@ def save_user(values: dict | str) -> dict:
 			doc.set(field, values[field])
 			changed.append(field)
 
+	changed += _apply_pin(doc, values)
+
 	if changed:
 		doc.save(ignore_permissions=True)
 
 	return {"saved": changed, "message": _("Your details were updated") if changed else _("Nothing changed")}
+
+
+def _apply_pin(doc, values: dict) -> list:
+	"""Let people set their own till PIN, rather than asking an administrator.
+
+	The PIN was previously reachable only from the desk User form, which meant a
+	shop had to have somebody with desk access set one for each cashier — and
+	that person necessarily learned the PIN they were typing in. A secret a
+	second person chose and knows is not much of a secret; one you set yourself,
+	on your own account, from the till you use, is the same trade every password
+	change makes.
+
+	It stays safe because nothing here widens who can be changed: `save_user`
+	only ever loads the session user, so this can no more set somebody else's
+	PIN than it can rename them. The digits are not written either — the
+	`validate` hook hashes them and blanks the field before the row is saved, and
+	that hook also enforces four digits and refuses the obvious ones. See
+	`cosmestics.api.pin`.
+	"""
+	changed = []
+
+	pin = (values.get("pin") or "").strip()
+	if pin:
+		# Assigned, not compared: there is nothing to compare against. The stored
+		# value is a hash, so "same PIN as before" is indistinguishable from a new
+		# one and re-hashing it is harmless.
+		doc.cosmestics_pin = pin
+		changed.append("pin")
+
+	if "pin_login" in values:
+		wanted = 1 if values.get("pin_login") else 0
+		if wanted and not pin and not doc.get("cosmestics_pin_hash"):
+			# Silently allowing this produces a till that offers PIN sign-in and
+			# then does not list you on it, which reads as a broken feature rather
+			# than an unfinished setup.
+			frappe.throw(_("Set a PIN first — there is nothing to sign in with yet."))
+		if int(doc.get("cosmestics_pin_login") or 0) != wanted:
+			doc.cosmestics_pin_login = wanted
+			changed.append("pin_login")
+
+	return changed
 
 
 @frappe.whitelist()

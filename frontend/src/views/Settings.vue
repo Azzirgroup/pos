@@ -48,6 +48,15 @@ const user = ref({})
 const profileValues = ref({})
 const profileName = ref(null)
 
+/**
+ * The till PIN, held apart from `user` because it is not a field of the account
+ * in the way the others are: it is write-only. Nothing comes back to fill it in,
+ * and it is blanked after every save so the digits do not sit in a tab that
+ * stays open on a shared counter all day.
+ */
+const pin = ref('')
+const pinLogin = ref(false)
+
 /** doctype → [{name}], filled on demand for the link fields on screen. */
 const options = ref({})
 
@@ -99,6 +108,8 @@ async function load() {
 		data.value = res
 		pos.value = { ...res.pos }
 		user.value = { ...res.user }
+		pin.value = ''
+		pinLogin.value = !!res.pin?.enabled
 		profileName.value = res.profiles[0]?.name || null
 		profileValues.value = { ...(res.profiles[0]?.values || {}) }
 		await loadOptions()
@@ -246,7 +257,8 @@ async function save() {
 	try {
 		let res
 		if (tab.value === 'pos') res = await savePosSettings(pos.value)
-		else if (tab.value === 'user') res = await saveUserSettings(user.value)
+		else if (tab.value === 'user')
+			res = await saveUserSettings({ ...user.value, pin: pin.value, pin_login: pinLogin.value })
 		else res = await saveProfileSettings({ name: profileName.value, values: profileValues.value })
 
 		notify(res.message, 'good')
@@ -607,6 +619,71 @@ function notify(message, tone = 'good') {
 									type="text"
 									class="h-10 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
 								/>
+							</div>
+						</div>
+					</div>
+				</section>
+
+				<!-- Your own till PIN. Set here rather than by an administrator in the
+				     desk, so nobody else has to know it. -->
+				<section class="rounded-lg border border-outline-gray-2 bg-surface-white">
+					<header class="border-b border-outline-gray-2 px-4 py-2.5">
+						<h2 class="text-p-sm font-semibold text-ink-gray-8">Till PIN</h2>
+						<p class="mt-0.5 text-p-xs text-ink-gray-5">
+							Four digits, for signing in at the counter without typing a password.
+							Only you set it — it is stored scrambled and cannot be read back, here
+							or by anyone administering the site.
+						</p>
+					</header>
+					<div class="flex flex-col gap-3 p-4">
+						<div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-4">
+							<label
+								for="till-pin"
+								class="text-p-sm font-medium text-ink-gray-7 sm:w-[200px] sm:shrink-0"
+							>
+								{{ data.pin?.has_pin ? 'New PIN' : 'PIN' }}
+							</label>
+							<div class="min-w-0 flex-1">
+								<input
+									id="till-pin"
+									v-model="pin"
+									type="password"
+									inputmode="numeric"
+									autocomplete="new-password"
+									maxlength="4"
+									placeholder="••••"
+									class="h-10 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base tracking-[0.4em] text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+									@input="pin = pin.replace(/\D/g, '').slice(0, 4)"
+								/>
+								<p class="mt-1 text-p-xs text-ink-gray-5">
+									{{
+										data.pin?.has_pin
+											? 'You already have a PIN. Type a new one to replace it, or leave this blank.'
+											: 'Avoid 1234 and four of the same digit — those are refused.'
+									}}
+								</p>
+							</div>
+						</div>
+
+						<div class="flex flex-col gap-1.5 sm:flex-row sm:items-start sm:gap-4">
+							<span class="text-p-sm font-medium text-ink-gray-7 sm:w-[200px] sm:shrink-0">
+								Sign in with it
+							</span>
+							<div class="min-w-0 flex-1">
+								<label class="flex cursor-pointer items-start gap-2">
+									<input
+										v-model="pinLogin"
+										type="checkbox"
+										class="mt-0.5 h-4 w-4 shrink-0 rounded border-outline-gray-3 text-ink-gray-9 focus:ring-0"
+									/>
+									<span class="text-p-sm text-ink-gray-7">
+										Show me on the PIN sign-in screen
+									</span>
+								</label>
+								<p class="mt-1 text-p-xs text-ink-gray-5">
+									Untick to stop the PIN being accepted without deleting it — useful if
+									you think someone watched you type it.
+								</p>
 							</div>
 						</div>
 					</div>

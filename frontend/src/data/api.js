@@ -11,12 +11,39 @@ import { withCache } from './cache'
  * to the server and clears what was remembered; see `cache.js` for why the list
  * is explicit and why nothing from the till is on it.
  */
+/**
+ * Say what the server said.
+ *
+ * frappe-ui builds its Error's `message` from the URL and the exception class —
+ * "/api/method/…settings.save_user ValidationError" — and puts the sentence the
+ * server actually wrote in `messages`. Every toast in this app shows
+ * `e.message`, so a refused PIN told the cashier the name of a Python class
+ * instead of "Pick a less obvious PIN", and a refused sale named the endpoint
+ * rather than the reason. The two are swapped here, once, rather than at each
+ * of the several dozen call sites that display an error.
+ *
+ * Markup is stripped because `frappe.throw` accepts HTML and a toast is text.
+ */
+function readable(error) {
+	const said = (error?.messages || []).filter(Boolean).join(' ')
+	if (said) error.message = said
+	if (error?.message) {
+		error.message = String(error.message)
+			.replace(/<[^>]*>/g, ' ')
+			.replace(/\s+/g, ' ')
+			.trim()
+	}
+	return error
+}
+
 function call(method, args) {
 	return withCache(method, args, () =>
 		frappeRequest({
 			url: `/api/method/${method}`,
 			method: 'POST',
 			params: args,
+		}).catch((e) => {
+			throw readable(e)
 		}),
 	)
 }
