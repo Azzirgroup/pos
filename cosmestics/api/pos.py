@@ -55,6 +55,7 @@ def submit_sale(
 		frappe.throw(_("No company configured"))
 
 	_require_shift(settings)
+	_refuse_outdated_shift()
 
 	# 1. Buy the neighbour-sourced lines first so the stock exists.
 	purchases = []
@@ -621,6 +622,35 @@ def _payment_account(mode, company) -> str | None:
 		"Mode of Payment Account", {"parent": mode, "company": company}, "default_account"
 	)
 	return account or frappe.db.get_value("Company", company, "default_cash_account")
+
+
+def _refuse_outdated_shift():
+	"""Stop a sale against yesterday's shift *before* the customer pays.
+
+	ERPNext refuses an `is_pos` invoice whose POS Opening Entry started on an
+	earlier day — `validate_pos_opening_entry` throws "is outdated. Please close
+	the POS and create a new POS Opening Entry". Correct, but it fires at submit:
+	the cart is rung up, the money is taken, and only then does the till refuse,
+	with a message that names a document rather than an action.
+
+	A shift left open overnight is not an edge case — it is what happens whenever
+	somebody goes home without closing, and it stops the whole shop selling the
+	next morning. So it is caught here, at the top, with a sentence that says
+	what to do; `shift.roll_over` is the one tap that does it.
+	"""
+	from cosmestics.api.shift import get_open_shift
+
+	shift = get_open_shift()
+	if not shift or not shift.get("outdated"):
+		return
+
+	frappe.throw(
+		_(
+			"The open shift ({0}) was started on {1} and cannot take today's sales. "
+			"Close it and start today's shift — the drawer count carries over."
+		).format(shift["name"], str(shift["period_start_date"])[:10]),
+		title=_("Yesterday's shift is still open"),
+	)
 
 
 def _require_shift(settings):

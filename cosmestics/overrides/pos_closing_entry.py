@@ -30,15 +30,33 @@ from cosmestics.overrides.shift_roster import ROSTER_FIELD, roster_for
 
 class SharedShiftClosingMixin:
 	def validate_sales_invoices(self):
-		"""ERPNext's own check, with `owner` measured against the roster.
+		"""ERPNext's own check, minus the owner restriction.
 
 		Reimplemented rather than wrapped: the owner comparison is inside the
 		per-row loop, so there is no seam to call `super()` through. Kept in the
 		same shape as the original, so a diff against a future ERPNext version
 		reads as a diff rather than as two unrelated functions.
-		"""
-		allowed = self._shift_cashiers()
 
+		## Why the owner check is gone entirely
+
+		It first became "is the owner on the shift's roster", which was a widening
+		of ERPNext's "is the owner the one person who opened it". That was still a
+		restriction, and it produced the worst failure this app can have: a shift
+		containing a sale by somebody not on the roster **could not be closed**.
+		An unclosable shift stays open overnight; ERPNext then refuses the next
+		day's `is_pos` invoices against it, and the entire shop cannot sell. One
+		cashier ringing up on the wrong counter took the till down the next
+		morning, and the message blamed the invoice.
+
+		A closing entry's job is to reconcile what happened, not to adjudicate who
+		was allowed to. Whether somebody should have been selling is a real
+		question, but the answer must never be "the money cannot be counted".
+
+		Nothing is loosened that matters: `_shift_invoices` gathers rows by POS
+		profile and time window, so an invoice reaching here belongs to this shift
+		by construction, and every other check ERPNext makes — submitted, is_pos,
+		created using POS, matching profile, not already consolidated — still runs.
+		"""
 		invalid_rows = []
 		for d in self.sales_invoices:
 			invalid_row = {"idx": d.idx}
@@ -70,17 +88,6 @@ class SharedShiftClosingMixin:
 				)
 			if sales_invoice.docstatus != 1:
 				invalid_row.setdefault("msg", []).append(_("Sales Invoice is not submitted"))
-			if sales_invoice.owner not in allowed:
-				# Names the fix rather than the rule. "Isn't created by user X" sends
-				# a manager looking for a mistake in the invoice, when what is
-				# actually missing is a row on the shift.
-				invalid_row.setdefault("msg", []).append(
-					_(
-						"Rung up by {0}, who was not on this shift. Add them to Cashiers "
-						"on {1} to settle their sales here."
-					).format(frappe.bold(sales_invoice.owner), frappe.bold(self.pos_opening_entry))
-				)
-
 			if invalid_row.get("msg"):
 				invalid_rows.append(invalid_row)
 

@@ -918,6 +918,52 @@ def _build_closing_entry(opening, data, end):
 
 
 @frappe.whitelist(methods=["POST"])
+def roll_over(counted: list | str | None = None) -> dict:
+	"""Close yesterday's shift and start today's, in one step.
+
+	A shift left open overnight stops the whole shop selling: ERPNext refuses
+	today's `is_pos` invoices against it. The recovery has always been possible —
+	close, then open — but it is two screens and a drawer count at the moment a
+	queue has formed, and the error the cashier saw named neither.
+
+	The float carries over: whatever the old shift expected to be holding becomes
+	the new shift's opening balance, because the money did not move overnight.
+	Counting it is still the right thing to do, and `counted` accepts that when
+	somebody has; without it the expectation is trusted, which is the same
+	assumption `close_shift` already makes for an untouched mode.
+
+	The roster carries over too — the same people are on the counter this morning
+	unless somebody says otherwise.
+	"""
+	shift = get_open_shift()
+	if not shift:
+		frappe.throw(_("No shift is open"))
+
+	profile = shift["pos_profile"]
+	# Read before closing: the roster lives on the entry being closed.
+	cashiers = [c for c in (shift.get("cashiers") or []) if c != frappe.session.user]
+
+	summary = get_closing_summary()
+	floats = [
+		{"mode_of_payment": r["mode_of_payment"], "opening_amount": flt(r["expected_amount"])}
+		for r in summary["rows"]
+	]
+
+	closed = close_shift(counted=counted)
+	opened = open_shift(pos_profile=profile, balances=floats, cashiers=cashiers or None)
+
+	return {
+		"closed": closed["name"],
+		"opened": opened["name"],
+		"carried_over": floats,
+		"cashiers": opened.get("cashiers"),
+		"message": _("{0} closed and {1} started — the drawer carried over.").format(
+			closed["name"], opened["name"]
+		),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
 def close_shift(counted: list | str | None = None, shorts: list | str | None = None):
 	"""Close the shift against what the cashier physically counted.
 
