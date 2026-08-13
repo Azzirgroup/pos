@@ -21,6 +21,29 @@ const TAX_INCLUSIVE = true
 
 let lineSeq = 0
 
+/**
+ * Keep line ids counting from where a restored cart left off.
+ *
+ * `lineSeq` is a module variable, so a reload resets it to zero while the
+ * restored lines still carry ids 1, 2, 3. The next item added was then handed an
+ * id that already belonged to something else — and every lookup is
+ * `find((l) => l.id === id)`, which takes the first match. So the grid's `+`,
+ * the quantity box and the bin all reached the *older* line: tapping `+` on one
+ * product silently raised the quantity of another, and the product actually
+ * being tapped never moved. It looked like the button was dead.
+ *
+ * Seeded from the highest id anywhere in the payload, held tickets included —
+ * a parked ticket's lines come back into the cart on resume and collide just
+ * the same.
+ */
+function seedLineSeq(payload) {
+	const ids = [
+		...(payload?.lines || []).map((l) => l.id),
+		...(payload?.held || []).flatMap((t) => (t.lines || []).map((l) => l.id)),
+	].filter((n) => Number.isFinite(n))
+	lineSeq = Math.max(lineSeq, 0, ...ids)
+}
+
 export const useCartStore = defineStore('cart', () => {
 	/**
 	 * Restored before anything else, so a reload comes back to the same cart.
@@ -30,6 +53,7 @@ export const useCartStore = defineStore('cart', () => {
 	 */
 	let key = storageKey(null, null)
 	const restored = loadCart(key)
+	seedLineSeq(restored)
 
 	const lines = ref(restored?.lines || [])
 	const customer = ref(restored?.customer ?? null)
@@ -295,7 +319,12 @@ export const useCartStore = defineStore('cart', () => {
 					(l) => l.item_code === line.item_code && l.rate === line.rate && l.uom === line.uom,
 				)
 				if (same) same.qty = round2(same.qty + line.qty)
-				else merged.push(JSON.parse(JSON.stringify(line)))
+				// Re-numbered, not copied across: two tickets number their lines
+				// independently, so both can hold a line 3. Merged as-is, the
+				// combined ticket carries two lines with one id and every lookup
+				// finds the wrong one — the same fault `seedLineSeq` fixes on
+				// reload, reached by a different route.
+				else merged.push({ ...JSON.parse(JSON.stringify(line)), id: ++lineSeq })
 			}
 		}
 
@@ -476,6 +505,7 @@ export const useCartStore = defineStore('cart', () => {
 
 		const existing = loadCart(next)
 		if (existing) {
+			seedLineSeq(existing)
 			lines.value = existing.lines || []
 			customer.value = existing.customer ?? null
 			discount.value = existing.discount || 0

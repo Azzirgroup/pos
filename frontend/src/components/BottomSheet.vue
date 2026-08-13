@@ -7,6 +7,16 @@ const props = defineProps({
 	title: { type: String, default: '' },
 	/** Cap the sheet height on mobile; desktop uses a centred dialog instead. */
 	tall: { type: Boolean, default: false },
+	/**
+	 * For sheets that list documents rather than ask a question.
+	 *
+	 * The default 28rem suits a form — one column of fields — but a list row
+	 * carries a customer, a reference, a total and three actions side by side.
+	 * At 28rem the actions and the amount take their width first and the
+	 * customer, the one field the row exists to identify, was squeezed down to
+	 * "Wanjiru Salon Sup…" on a 1180px screen with room to spare.
+	 */
+	wide: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue'])
@@ -56,8 +66,13 @@ onUnmounted(() => {
 				v-if="modelValue"
 				role="dialog"
 				aria-modal="true"
-				class="fixed inset-x-0 bottom-0 z-50 flex flex-col rounded-t-2xl bg-surface-modal shadow-2xl sm:inset-0 sm:m-auto sm:h-fit sm:max-h-[85vh] sm:w-[min(28rem,calc(100vw-2rem))] sm:rounded-2xl"
-				:class="tall ? 'max-h-[88dvh]' : 'max-h-[80dvh]'"
+				class="fixed inset-x-0 bottom-0 z-50 flex flex-col rounded-t-2xl bg-surface-modal shadow-2xl sm:inset-0 sm:m-auto sm:h-fit sm:max-h-[85vh] sm:rounded-2xl"
+				:class="[
+					tall ? 'max-h-[88dvh]' : 'max-h-[80dvh]',
+					wide
+						? 'sm:w-[min(46rem,calc(100vw-2rem))]'
+						: 'sm:w-[min(28rem,calc(100vw-2rem))]',
+				]"
 			>
 				<!-- Grab handle, mobile only -->
 				<div class="grid shrink-0 place-items-center pt-2 sm:hidden">

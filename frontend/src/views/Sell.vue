@@ -1642,7 +1642,7 @@ useShortcuts({
 			</template>
 		</Dialog>
 
-		<BottomSheet v-model="recentSheet" title="Recent sales" tall>
+		<BottomSheet v-model="recentSheet" title="Recent sales" tall wide>
 			<div class="flex flex-col gap-2 px-4 pb-5">
 				<div class="flex flex-wrap items-center justify-between gap-2">
 					<FormControl v-model="recentMine" type="checkbox" label="Only mine" />
@@ -1694,8 +1694,13 @@ useShortcuts({
 				>
 					<button class="flex min-w-0 flex-1 items-center gap-3 text-left" @click="printReceipt(row.name)">
 					<div class="min-w-0 flex-1">
-						<div class="flex min-w-0 items-center gap-2">
-							<span class="truncate text-p-base font-medium text-ink-gray-9">
+						<!-- Wraps rather than competing for one line. The chips beside the
+						     name never shrink, so on a narrow sheet they took their width
+						     first and left the customer as "kam…" or "W…" — the one field
+						     the row exists to identify. Now the name gets the line and the
+						     chips drop below it when there is no room for both. -->
+						<div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+							<span class="max-w-full truncate text-p-base font-medium text-ink-gray-9">
 								{{ row.customer }}
 							</span>
 							<!-- Who rang it up. On a shared till "whose sale was that" is

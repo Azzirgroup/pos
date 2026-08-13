@@ -97,7 +97,7 @@ const fallbackIcon = computed(() => {
 	     dense list shows three times as many items per screen, which is what a
 	     cashier scanning for a product actually needs. -->
 	<button
-		class="flex flex-col rounded-md border bg-surface-white text-left transition-colors"
+		class="flex flex-col overflow-hidden rounded-md border bg-surface-white text-left transition-colors"
 		:class="
 			inCart
 				? 'border-outline-gray-4 ring-1 ring-outline-gray-3'
@@ -151,29 +151,37 @@ const fallbackIcon = computed(() => {
 
 		<!-- Quantity controls only once the item is in the cart, mirroring the
 		     reference: an untouched cell stays completely quiet. -->
+		<!-- The three controls are what this row is *for*, so they never give up
+		     width: `shrink-0` on them and `min-w-0` on the running total means a
+		     long total truncates instead of shoving the buttons out of the cell.
+		     They used to overflow — the cell does not clip, so the `+` and the bin
+		     ended up drawn over the next cell along, which paints after this one
+		     and therefore swallowed the tap. That is why adding a quantity
+		     sometimes did nothing: the press was landing on the neighbouring
+		     product, not on the button under the finger. -->
 		<div
 			v-if="inCart"
 			class="flex items-center justify-between gap-1 border-t border-outline-gray-2 px-1.5 py-1"
 			@click.stop
 		>
-			<span class="tabular pl-1 text-p-xs font-medium text-ink-gray-7">
+			<span class="tabular min-w-0 truncate pl-1 text-p-xs font-medium text-ink-gray-7">
 				{{ inCart }}: {{ Math.round(inCart * item.price).toLocaleString() }}
 			</span>
-			<div class="flex items-center gap-0.5">
+			<div class="flex shrink-0 items-center gap-0.5">
 				<span
-					class="grid h-6 w-6 cursor-pointer place-items-center rounded text-ink-gray-6 hover:bg-surface-gray-3"
+					class="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded text-ink-gray-6 hover:bg-surface-gray-3"
 					@click="emit('setQty', { item, qty: inCart - 1 })"
 				>
 					<LucideMinus class="h-3 w-3" />
 				</span>
 				<span
-					class="grid h-6 w-6 cursor-pointer place-items-center rounded text-ink-gray-6 hover:bg-surface-gray-3"
+					class="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded text-ink-gray-6 hover:bg-surface-gray-3"
 					@click="emit('setQty', { item, qty: inCart + 1 })"
 				>
 					<LucidePlus class="h-3 w-3" />
 				</span>
 				<span
-					class="grid h-6 w-6 cursor-pointer place-items-center rounded text-ink-red-3 hover:bg-surface-red-2"
+					class="grid h-6 w-6 shrink-0 cursor-pointer place-items-center rounded text-ink-red-3 hover:bg-surface-red-2"
 					@click="emit('remove', item)"
 				>
 					<LucideTrash2 class="h-3 w-3" />

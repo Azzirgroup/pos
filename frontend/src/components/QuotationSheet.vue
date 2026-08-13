@@ -18,6 +18,7 @@ import LucideSend from '~icons/lucide/send'
 import LucideCart from '~icons/lucide/shopping-cart'
 import LucideUserRound from '~icons/lucide/user-round'
 import LucideMerge from '~icons/lucide/git-merge'
+import LucideX from '~icons/lucide/x'
 
 /**
  * Quotations, from the till.
@@ -282,6 +283,7 @@ async function loadQuote(row) {
 	<BottomSheet
 		:model-value="modelValue"
 		tall
+		wide
 		@update:model-value="emit('update:modelValue', $event)"
 	>
 		<div class="flex flex-col gap-3 px-4 pb-5 pt-1">
@@ -520,8 +522,12 @@ async function loadQuote(row) {
 						@click="loadQuote(q)"
 					>
 						<div class="min-w-0 flex-1">
-							<div class="flex min-w-0 items-center gap-2">
-								<span class="truncate text-p-base font-medium text-ink-gray-9">
+							<!-- Wraps for the same reason as the recent-sales row: the
+							     salesperson chip does not shrink, so on a narrow sheet it
+							     took its width first and truncated the customer to a
+							     couple of letters. -->
+							<div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
+								<span class="max-w-full truncate text-p-base font-medium text-ink-gray-9">
 									{{ q.customer }}
 								</span>
 								<!-- Who gave the price. A customer ringing back asks for the
@@ -592,6 +598,20 @@ async function loadQuote(row) {
 						>
 							<LucideCart class="h-3.5 w-3.5" />
 							{{ loadingOne === q.name ? 'Loading…' : 'Convert to Sale' }}
+						</button>
+						<!-- The other ending. A quote either becomes a sale or it does
+						     not, and a shop that can only record the first half watches
+						     its quote list fill with prices nobody is coming back for.
+						     Kept quiet beside the coloured actions — closing one is a
+						     deliberate act, not the obvious tap. -->
+						<button
+							v-if="canClose(q)"
+							class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 bg-surface-white px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-7 transition-colors hover:bg-surface-gray-2 disabled:opacity-50"
+							:disabled="closingOne === q.name"
+							@click="closeQuote(q)"
+						>
+							<LucideX class="h-3.5 w-3.5" />
+							{{ closingOne === q.name ? 'Closing…' : 'Close' }}
 						</button>
 						<input
 							v-if="sendingFor === q.name"

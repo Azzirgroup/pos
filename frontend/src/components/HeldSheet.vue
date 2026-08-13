@@ -50,6 +50,7 @@ function since(ts) {
 	<BottomSheet
 		:model-value="modelValue"
 		title="Held sales"
+		wide
 		@update:model-value="emit('update:modelValue', $event)"
 	>
 		<div v-if="tickets.length" class="flex flex-col gap-2 px-4 pb-5">
