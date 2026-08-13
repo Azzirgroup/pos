@@ -663,14 +663,22 @@ def send_whatsapp(name: str, to: str, sender: str | None = None) -> dict:
 		frappe.throw(_("Say where to send it"))
 
 	doc = frappe.get_doc("Quotation", name)
+	notifications._remember_failure(None)
 	sent = notifications.send_document(
 		"Quotation", name, to, message=format_quotation(doc), sender=sender
 	)
+	# The actual reason, the same way `notifications.share` reports one — an
+	# expired token and a number that is not on WhatsApp both used to arrive as
+	# "check the WhatsApp settings", and only one of them is about settings.
+	reason = None if sent else notifications._last_failure()
 
 	return {
 		"sent": bool(sent),
+		"reason": reason,
 		"message": _("Quotation sent to {0}").format(to)
 		if sent
+		else _("Could not send: {0}").format(reason)
+		if reason
 		else _("Could not send — check the WhatsApp settings"),
 	}
 

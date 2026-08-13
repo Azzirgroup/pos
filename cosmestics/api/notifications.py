@@ -66,6 +66,38 @@ def warm_up() -> bool:
 		return False
 
 
+def _remember_failure(reason):
+	"""Why the last send failed, for whoever has to explain it to a person.
+
+	The senders below return a plain `False` — right for the callers that are
+	best-effort and must not blow up a sale, wrong for the one screen where a
+	cashier is standing there having pressed Send. The reason was going only to
+	the Error Log, and "check the WhatsApp settings" was a guess printed in its
+	place: it happened to be right for an unticked default sender and actively
+	misleading for a number that is not on WhatsApp.
+
+	Kept on `frappe.local`, so it lives exactly as long as the request that
+	produced it and cannot leak into somebody else's.
+	"""
+	text = str(reason or "").strip()
+	frappe.local.cosmestics_whatsapp_error = text or None
+
+
+def _last_failure():
+	return getattr(frappe.local, "cosmestics_whatsapp_error", None)
+
+
+def _reason_from(result) -> str | None:
+	"""The bridge's own words for a refusal, if it gave any."""
+	if not isinstance(result, dict):
+		return None
+	for key in ("message", "error", "reason", "status"):
+		value = result.get(key)
+		if value and str(value).lower() not in ("false", "error", "failed"):
+			return str(value)[:200]
+	return None
+
+
 def _quiet(fn, *args, **kwargs):
 	"""Run a whatsapp_integration call without its `msgprint` reaching the UI.
 
@@ -145,6 +177,9 @@ def send_text(to: str, message: str, sender: str | None = None) -> bool:
 		f"WhatsApp send to {to} failed after {SEND_ATTEMPTS} attempts: {last_error}",
 		"Cosmetics POS",
 	)
+	_remember_failure(
+		_reason_from(last_error) if isinstance(last_error, dict) else last_error or _("no reply from the bridge")
+	)
 	return False
 
 
@@ -186,9 +221,13 @@ def send_document(doctype: str, name: str, to: str, message: str | None = None, 
 			message=message,
 			sender=sender,
 		)
-		return _succeeded(result)
+		if _succeeded(result):
+			return True
+		_remember_failure(_reason_from(result) or _("the WhatsApp bridge refused it"))
+		return False
 	except Exception as e:
 		frappe.log_error(f"WhatsApp document send of {doctype} {name} to {to} failed: {e}", "Cosmetics POS")
+		_remember_failure(e)
 		return False
 
 
@@ -772,6 +811,10 @@ def share(
 	if not message or not message.strip():
 		frappe.throw(_("There is nothing to send"))
 
+	# Anything left over from an earlier send in this request would be reported
+	# as the reason for this one.
+	_remember_failure(None)
+
 	sender = sender or _settings().whatsapp_sender or None
 
 	if isinstance(csv_columns, str):
@@ -798,12 +841,20 @@ def share(
 	else:
 		sent = send_text(to, message, sender)
 
+	reason = None if sent else _last_failure()
+
 	return {
 		"sent": bool(sent),
 		"to": to,
 		"attached": attached,
+		"reason": reason,
+		# The reason when there is one. "Check the WhatsApp settings" only when
+		# there genuinely is nothing more to say — as a standing answer it sent
+		# shops looking through a settings page that was already correct.
 		"message": _("Sent to {0}").format(to)
 		if sent
+		else _("Could not send to {0}: {1}").format(to, reason)
+		if reason
 		else _("Could not send to {0} — check the WhatsApp settings").format(to),
 	}
 
