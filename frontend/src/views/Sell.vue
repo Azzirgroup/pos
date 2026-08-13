@@ -50,6 +50,7 @@ import QuotationSheet from '@/components/QuotationSheet.vue'
 import TillContext from '@/components/TillContext.vue'
 import ReturnSheet from '@/components/ReturnSheet.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
+import DocumentFormSheet from '@/components/DocumentFormSheet.vue'
 import { saleMessage } from '@/utils/salesMessage'
 import { printUrl } from '@/utils/silentPrint'
 import { cameraScanSupported } from '@/composables/useCameraScanner'
@@ -65,6 +66,7 @@ import LucideReceiptText from '~icons/lucide/receipt-text'
 import LucideSend from '~icons/lucide/send'
 import LucideFileText from '~icons/lucide/file-text'
 import LucideUndo from '~icons/lucide/undo-2'
+import LucideClipboardList from '~icons/lucide/clipboard-list'
 
 const router = useRouter()
 const catalog = useCatalogStore()
@@ -1003,6 +1005,27 @@ function onReturned(res) {
 const quotationSheet = ref(false)
 const quotationBusy = ref(false)
 
+/**
+ * Asking head office for stock, from the counter.
+ *
+ * The same form the Documents screen raises one from — `DocumentFormSheet`
+ * driven by the `material-request` key — rather than a second form of this
+ * app's own. A request typed at the till and one typed in the back office have
+ * to be the same document with the same required fields, and two forms drift
+ * apart the first time either changes.
+ */
+const materialRequestOpen = ref(false)
+
+/**
+ * The sheet reports its own success, so this only adds what it cannot know:
+ * the shelf figures the cashier is looking at are about to change, and a
+ * transfer raised against a product still showing "Out" is the commonest reason
+ * to raise one at all.
+ */
+function onMaterialRequested() {
+	catalog.refresh()
+}
+
 /** Fold several parked sales into one ticket — see `cart.mergeHeld`. */
 function mergeHeldTickets(ids) {
 	const ticket = cart.mergeHeld(ids)
@@ -1417,6 +1440,19 @@ useShortcuts({
 				:label="customer ? (customer.customer_name || customer.name) : 'Walk-in'"
 				@click="pickCustomer(false)"
 			/>
+			<!-- Ask for stock without leaving the counter.
+			     A cashier finds out an item has run out while a customer is
+			     standing in front of them — that is the moment the request is worth
+			     raising, and until now it meant walking to the Documents screen and
+			     losing the cart's place. Teal because it is neither money nor a
+			     parked sale: it is a message to whoever restocks. -->
+			<Button
+				variant="subtle"
+				class="!bg-teal-100 !text-teal-700 hover:!bg-teal-200 active:!bg-teal-300"
+				:icon-left="LucideClipboardList"
+				label="Request material"
+				@click="materialRequestOpen = true"
+			/>
 
 			<!-- Scan lives inside the search field: searching and scanning are the
 			     same act to a cashier — find this product — so they share one control. -->
@@ -1822,6 +1858,18 @@ useShortcuts({
 		<!-- Sends the real PDF, and offers the shop's WhatsApp groups as well as a
 		     number — the same control the back-office lists share rows through. -->
 		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
+
+		<!-- Raised straight from the till. Submitted rather than left a draft:
+		     a request for stock that nobody submits is not a request, and the
+		     cashier who typed it is not coming back to the Documents screen to
+		     finish it. -->
+		<DocumentFormSheet
+			v-model:open="materialRequestOpen"
+			doc-key="material-request"
+			force-submit
+			@created="onMaterialRequested"
+			@notify="notify($event.message, $event.tone === 'bad' ? 'warn' : 'ok')"
+		/>
 
 		<QuotationSheet
 			v-model="quotationSheet"
