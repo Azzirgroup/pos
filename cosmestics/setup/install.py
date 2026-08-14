@@ -60,6 +60,7 @@ def setup_prerequisites():
 	ensure_shift_cashier_field()
 	ensure_pin_login_fields()
 	ensure_quote_conversion_fields()
+	ensure_material_request_customer_field()
 	ensure_app_icon()
 	# Must run after the field exists, and after `group` is known so a site
 	# upgrading from the group-only scheme keeps its existing neighbours.
@@ -191,6 +192,44 @@ def ensure_quote_conversion_fields():
 		if frappe.db.exists("Custom Field", {"dt": "Quotation", "fieldname": field["fieldname"]}):
 			continue
 		create_custom_field("Quotation", field)
+
+
+def ensure_material_request_customer_field():
+	"""Who a request is being brought in for.
+
+	Material Request already has a `customer` field, and it cannot be used for
+	this: ERPNext blanks it on validate unless the type is exactly "Customer
+	Provided" — see `validate_material_request_type`. A shop asking another
+	branch to send over a shade somebody has asked for is raising a *Material
+	Transfer*, so the name typed into that field would be silently discarded on
+	save, which is worse than not offering the field at all.
+
+	So the name is kept in a field of this app's own, which nothing else
+	rewrites. Optional everywhere: most requests are for the shelf, not a person.
+	"""
+	if not frappe.db.exists("DocType", "Material Request"):
+		return
+
+	if frappe.db.exists("Custom Field", {"dt": "Material Request", "fieldname": "cosmestics_for_customer"}):
+		return
+
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	create_custom_field(
+		"Material Request",
+		{
+			"fieldname": "cosmestics_for_customer",
+			"label": "For Customer",
+			"fieldtype": "Link",
+			"options": "Customer",
+			"insert_after": "customer",
+			"allow_on_submit": 1,
+			"description": (
+				"Who this is being brought in for, on any request type. ERPNext's own "
+				"Customer field only survives on a Customer Provided request."
+			),
+		},
+	)
 
 
 def ensure_app_icon():

@@ -87,6 +87,16 @@ def _last_failure():
 	return getattr(frappe.local, "cosmestics_whatsapp_error", None)
 
 
+def _remember_warning(reason):
+	"""Sent, but not the way it was meant to be."""
+	text = str(reason or "").strip()
+	frappe.local.cosmestics_whatsapp_warning = text or None
+
+
+def _last_warning():
+	return getattr(frappe.local, "cosmestics_whatsapp_warning", None)
+
+
 def _reason_from(result) -> str | None:
 	"""The bridge's own words for a refusal, if it gave any."""
 	if not isinstance(result, dict):
@@ -227,6 +237,26 @@ def send_document(doctype: str, name: str, to: str, message: str | None = None, 
 		return False
 	except Exception as e:
 		frappe.log_error(f"WhatsApp document send of {doctype} {name} to {to} failed: {e}", "Cosmetics POS")
+
+		# Rendering the PDF and sending the message are two different jobs, and
+		# whichever just failed, the text is still worth sending. A print format
+		# customised into an unprintable page size stopped every receipt on the
+		# site going out — a far worse outcome than a customer getting the
+		# figures without the letterhead.
+		#
+		# Attempted for any failure rather than only ones that look like the
+		# renderer: guessing which exceptions are "really" a PDF problem means a
+		# new wording from Chrome silently turns the fallback off. If the bridge
+		# itself is what is broken, this attempt fails too and costs nothing but
+		# the original error being reported, which is what would have happened.
+		if message and send_text(to, message, sender):
+			_remember_warning(
+				_("the PDF could not be produced ({0}), so the details went as text").format(
+					str(e)[:120]
+				)
+			)
+			return True
+
 		_remember_failure(e)
 		return False
 
@@ -814,6 +844,7 @@ def share(
 	# Anything left over from an earlier send in this request would be reported
 	# as the reason for this one.
 	_remember_failure(None)
+	_remember_warning(None)
 
 	sender = sender or _settings().whatsapp_sender or None
 
@@ -842,6 +873,16 @@ def share(
 		sent = send_text(to, message, sender)
 
 	reason = None if sent else _last_failure()
+	warning = _last_warning() if sent else None
+
+	if sent and warning:
+		return {
+			"sent": True,
+			"to": to,
+			"attached": attached,
+			"warning": warning,
+			"message": _("Sent to {0}, but {1}").format(to, warning),
+		}
 
 	return {
 		"sent": bool(sent),

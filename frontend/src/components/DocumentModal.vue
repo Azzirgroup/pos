@@ -1,7 +1,10 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
+import { useRouter } from 'vue-router'
 import { Badge, Button, Dialog, FormControl, Spinner } from 'frappe-ui'
 import DataTable from '@/components/DataTable.vue'
+import { useCartStore } from '@/stores/cart'
+import { useCatalogStore } from '@/stores/catalog'
 import {
 	getDocument,
 	getPrintUrl,
@@ -22,6 +25,7 @@ import LucidePackage from '~icons/lucide/package'
 import LucideUndo from '~icons/lucide/undo-2'
 import LucidePrinter from '~icons/lucide/printer'
 import LucideSend from '~icons/lucide/send'
+import LucideCart from '~icons/lucide/shopping-cart'
 
 /**
  * The whole document, without leaving the screen.
@@ -40,6 +44,8 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['update:open', 'changed', 'notify'])
+
+const router = useRouter()
 
 const doc = ref(null)
 const loading = ref(false)
@@ -108,6 +114,64 @@ const nextSteps = computed(() =>
 		.filter((action) => can(action))
 		.map((action) => ({ action, ...NEXT_LABELS[action] })),
 )
+
+/**
+ * Ring up what was asked for.
+ *
+ * A shop raises a material request for stock it wants, and when that stock
+ * turns up somebody has to sell it — or, more often, a customer asked for a
+ * list of things and the request *is* the list. Retyping it into the till is
+ * the same work twice, with a chance of getting a quantity wrong.
+ *
+ * Only for material requests: nothing else in the registry is a list of goods
+ * somebody intends to put through the counter.
+ */
+const canConvertToPos = computed(
+	() => props.docKey === 'material-request' && !!doc.value?.tables?.length,
+)
+
+function requestedLines() {
+	const table = doc.value?.tables?.find((t) => t.fieldname === 'items')
+	return (table?.rows || [])
+		.map((row) => ({ item_code: row.item_code, qty: Number(row.qty) || 0 }))
+		.filter((l) => l.item_code && l.qty > 0)
+}
+
+function convertToPos() {
+	const wanted = requestedLines()
+	if (!wanted.length) {
+		emit('notify', { message: 'There are no lines on this request', tone: 'bad' })
+		return
+	}
+
+	const cart = useCartStore()
+	const catalog = useCatalogStore()
+
+	// Replacing rather than adding to whatever is on screen: this is "sell this
+	// request", not "sell this request as well as whatever was here". Confirmed
+	// first, because a cart at a counter may belong to somebody standing there.
+	if (!cart.isEmpty && !window.confirm('This will replace what is in the cart. Continue?')) return
+	cart.clear()
+
+	const missing = []
+	for (const line of wanted) {
+		const item = catalog.byCode.get(line.item_code)
+		// Sold past the shelf count on purpose: the whole point of the request is
+		// that the shop does not have these yet, so the usual "you are short"
+		// prompt would fire on every single line.
+		if (item) cart.add(item, line.qty, { negativeStockOk: true })
+		else missing.push(line.item_code)
+	}
+
+	close()
+	router.push('/pos')
+	emit('notify', {
+		message: missing.length
+			? `Loaded ${wanted.length - missing.length} of ${wanted.length} lines — ${missing.join(', ')} not in the catalogue`
+			: `Loaded ${wanted.length} lines from ${props.name}`,
+		tone: missing.length ? 'bad' : 'good',
+	})
+}
 
 const DESTRUCTIVE = new Set(['cancel'])
 
@@ -283,6 +347,17 @@ const printFormatOptions = computed(() =>
 
 		<template #actions>
 			<div v-if="doc" class="flex flex-wrap items-center gap-2">
+				<!-- The list of goods this request is about, put straight into the
+				     cart. Teal, matching the till's own Request material button, so
+				     the two ends of the same journey look related. -->
+				<Button
+					v-if="canConvertToPos"
+					variant="subtle"
+					class="!bg-teal-100 !text-teal-700 hover:!bg-teal-200"
+					:icon-left="LucideCart"
+					label="Convert to POS"
+					@click="convertToPos"
+				/>
 				<Button
 					v-if="can('submit')"
 					theme="gray"

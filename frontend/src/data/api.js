@@ -24,7 +24,24 @@ import { withCache } from './cache'
  *
  * Markup is stripped because `frappe.throw` accepts HTML and a toast is text.
  */
+/**
+ * What the browser says when it never reached the server at all.
+ *
+ * "Failed to fetch" is Chrome's wording for a request that did not leave the
+ * building, and on a shop tablet that means the wifi has dropped — which the
+ * cashier can act on, unlike a phrase that reads as a bug in the till.
+ */
+const OFFLINE_PATTERNS = /failed to fetch|networkerror|network request failed|load failed/i
+
 function readable(error) {
+	if (error?.message && OFFLINE_PATTERNS.test(error.message) && !error.messages?.length) {
+		error.message = navigator.onLine
+			? 'Could not reach the server — it may be down, or this tablet is offline'
+			: 'No internet connection on this tablet'
+		error.offline = true
+		return error
+	}
+
 	const said = (error?.messages || []).filter(Boolean).join(' ')
 	if (said) error.message = said
 	if (error?.message) {

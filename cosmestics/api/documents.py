@@ -367,7 +367,7 @@ DOCUMENTS = [
 		"icon": "clipboard",
 		"date_field": "transaction_date",
 		"columns": ["name", "transaction_date", "material_request_type", "status", "per_ordered", "per_received"],
-		"detail": ["schedule_date", "set_warehouse", "company"],
+		"detail": ["schedule_date", "set_from_warehouse", "set_warehouse", "cosmestics_for_customer", "company"],
 		"tables": [
 			("items", ["item_code", "item_name", "schedule_date", "qty", "ordered_qty", "uom", "warehouse"]),
 		],
@@ -378,12 +378,26 @@ DOCUMENTS = [
 					"fieldname": "material_request_type",
 					"label": "Type",
 					"type": "select",
-					"options": ["Purchase", "Material Transfer", "Material Issue", "Manufacture"],
-					"default": "Purchase",
+					"options": ["Material Transfer", "Purchase", "Material Issue", "Manufacture"],
+					# A shop raising one of these from the counter is nearly always
+					# asking another branch to send stock over, not asking a supplier
+					# to sell it. Purchase was the default only because it is
+					# ERPNext's, and every request had to be changed by hand.
+					"default": "Material Transfer",
 					"required": True,
 				},
 				{"fieldname": "transaction_date", "label": "Date", "type": "date", "default": "today", "required": True},
 				{"fieldname": "schedule_date", "label": "Needed by", "type": "date", "default": "week", "required": True},
+				{
+					"fieldname": "set_from_warehouse",
+					"label": "Comes from",
+					"type": "link",
+					"options": "Warehouse",
+					# Not required: a Purchase request has no source warehouse — the
+					# supplier is the source — and demanding one would block the very
+					# request type that cannot have it.
+					"help": "Which store sends it. For a transfer or an issue.",
+				},
 				{
 					"fieldname": "set_warehouse",
 					"label": "Goes to",
@@ -391,6 +405,17 @@ DOCUMENTS = [
 					"options": "Warehouse",
 					"required": True,
 					"default": "stock_warehouse",
+				},
+				{
+					# ERPNext's own field. A shop orders in for a named customer often
+					# enough — a shade someone asked to have brought in — and without
+					# this the request arrives with nobody's name on it and the stock
+					# goes onto the shelf.
+					"fieldname": "cosmestics_for_customer",
+					"label": "For customer",
+					"type": "link",
+					"options": "Customer",
+					"help": "Only if this is being brought in for somebody in particular.",
 				},
 			],
 			"items": [

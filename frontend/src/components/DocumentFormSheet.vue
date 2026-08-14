@@ -367,7 +367,11 @@ function optionsFor(field) {
 				</p>
 
 				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-					<template v-for="field in form.fields" :key="field.fieldname">
+					<!-- Wrapped so a field can carry its own note. Some of them need
+					     one — an optional source warehouse means nothing to a cashier
+					     until it says which requests it is for — and a form-level hint
+					     cannot explain one field among eight. -->
+					<div v-for="field in form.fields" :key="field.fieldname" class="flex flex-col gap-1">
 						<LinkField
 							v-if="field.type === 'link' || field.type === 'item'"
 							v-model="values[field.fieldname]"
@@ -383,7 +387,10 @@ function optionsFor(field) {
 							:label="field.required ? `${field.label} *` : field.label"
 							:options="controlType(field) === 'select' ? optionsFor(field) : undefined"
 						/>
-					</template>
+						<p v-if="field.help" class="text-p-xs leading-snug text-ink-gray-5">
+							{{ field.help }}
+						</p>
+					</div>
 				</div>
 
 				<div class="flex flex-col gap-2">
