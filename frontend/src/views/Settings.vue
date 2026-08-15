@@ -11,6 +11,8 @@ import {
 	createPosProfile,
 	getWhatsappGroups,
 } from '@/data/api'
+import { useTillStore } from '@/stores/till'
+import { useCatalogStore } from '@/stores/catalog'
 import PageHeader from '@/components/PageHeader.vue'
 import PillTabs from '@/components/PillTabs.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
@@ -209,6 +211,10 @@ function selectProfile(name) {
 	profileValues.value = { ...(profiles.value.find((p) => p.name === name)?.values || {}) }
 }
 
+// Refreshed after a save so the till picks up the change without a reload.
+const till = useTillStore()
+const catalog = useCatalogStore()
+
 /** Which POS settings fields go in which group, so the page reads in sections. */
 const POS_GROUPS = [
 	{
@@ -269,6 +275,22 @@ async function save() {
 		// validation hook, and a screen still showing what was typed would
 		// disagree with what was saved.
 		await load()
+
+		// And re-read what the *till* holds.
+		//
+		// The POS keeps the shop's settings in a store loaded once when the app
+		// starts, so walking back to the counter after changing one showed the
+		// old value — the setting had saved, and the till went on behaving as
+		// though it had not, until somebody happened to reload the page. Whoever
+		// ticked the box has no reason to suspect a reload is needed, so the
+		// honest conclusion is that the box does not work.
+		//
+		// The catalogue goes with it: `selling_price_list` changes every price on
+		// the grid, and product photos uploaded in the same sitting are not in
+		// the copy the store loaded either.
+		if (tab.value === 'pos' || tab.value === 'profile') {
+			await Promise.allSettled([till.refresh(), catalog.refresh()])
+		}
 	} catch (e) {
 		notify(e.message || 'Could not save', 'bad')
 	} finally {

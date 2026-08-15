@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { Button, Dialog, FormControl, Spinner } from 'frappe-ui'
 import { createMaster, getMasterOptions, getMasterRecord, listMasterTypes, updateMaster } from '@/data/api'
 import { resolveIcon } from '@/utils/icons'
+import { useCatalogStore } from '@/stores/catalog'
 import LinkField from './LinkField.vue'
 import ImageField from './ImageField.vue'
 import LucidePlus from '~icons/lucide/plus'
@@ -92,6 +93,17 @@ async function loadRecord() {
 	)
 }
 
+/**
+ * The till holds its own copy of the catalogue, loaded once.
+ *
+ * So an item edited here — a renamed product, a new photo, a changed price —
+ * stayed as it was on the counter until somebody reloaded the page. Refreshed
+ * for items only: nothing else on this form is on the grid.
+ */
+function refreshTillCatalog() {
+	if (activeKey.value === 'item') useCatalogStore().refresh()
+}
+
 async function save() {
 	if (!canSave.value) return
 	saving.value = true
@@ -104,6 +116,7 @@ async function save() {
 			})
 			emit('created', res)
 			emit('notify', { message: res.message, tone: res.changed ? 'good' : 'bad' })
+			refreshTillCatalog()
 			emit('update:open', false)
 			return
 		}
@@ -113,6 +126,7 @@ async function save() {
 		values.value = {}
 		emit('created', res)
 		emit('notify', { message: res.message, tone: 'good' })
+		refreshTillCatalog()
 	} catch (e) {
 		emit('notify', { message: e.message || 'Could not save', tone: 'bad' })
 	} finally {

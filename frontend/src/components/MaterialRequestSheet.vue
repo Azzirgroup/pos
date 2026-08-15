@@ -12,6 +12,8 @@ import LucideSearch from '~icons/lucide/search'
 import LucideCart from '~icons/lucide/shopping-cart'
 import LucidePlus from '~icons/lucide/plus'
 import LucideCheck from '~icons/lucide/check'
+import LucideBan from '~icons/lucide/ban'
+import LucideUndo from '~icons/lucide/undo-2'
 
 /**
  * Stock the shop has asked for, from the till.
@@ -74,8 +76,15 @@ async function load() {
 	}
 }
 
-/** Still worth acting on: a cancelled request is history. */
-const visible = computed(() => rows.value.filter((r) => r.docstatus !== 2))
+/**
+ * Everything, cancelled ones included.
+ *
+ * They were filtered out as "history", which was wrong in one specific way: a
+ * cancelled request is the only kind that can be amended, so hiding it put the
+ * one action it still has out of reach. It is greyed instead, which says the
+ * same thing without removing the way back.
+ */
+const visible = computed(() => rows.value)
 
 function toneFor(row) {
 	if (row.status === 'Stopped' || row.status === 'Cancelled') return 'bg-surface-gray-2 text-ink-gray-6'
@@ -114,17 +123,33 @@ async function convert(row) {
  * Gated on the server's own `_actions`, the same list the Documents screen
  * reads, so this cannot offer a submit that would then be refused.
  */
-const canSubmit = (row) => (row._actions || []).includes('submit')
+const allows = (row, action) => (row._actions || []).includes(action)
 
-async function submitOne(row) {
-	if (!window.confirm(`Submit ${row.name}? It cannot be edited afterwards.`)) return
+/**
+ * The three state changes a request has, run from the list.
+ *
+ * Submit finishes a draft, cancel undoes a submitted one, and amend reopens a
+ * cancelled one as a fresh draft — ERPNext's own cycle, which is why each is
+ * offered only when the server says so rather than on a docstatus test here.
+ *
+ * All three confirm. They are one tap apart on a counter tablet, and two of
+ * them cannot be undone by tapping again.
+ */
+const CONFIRM = {
+	submit: (name) => `Submit ${name}? It cannot be edited afterwards.`,
+	cancel: (name) => `Cancel ${name}? This cannot be undone — you would have to amend it.`,
+	amend: (name) => `Amend ${name}? A new draft is created from it.`,
+}
+
+async function act(row, action) {
+	if (!window.confirm(CONFIRM[action](row.name))) return
 	busyOne.value = row.name
 	try {
-		const res = await runDocumentAction({ key: 'material-request', name: row.name, action: 'submit' })
-		emit('notify', { message: res.message || `${row.name} submitted`, tone: 'good' })
+		const res = await runDocumentAction({ key: 'material-request', name: row.name, action })
+		emit('notify', { message: res.message || `${row.name} ${action}ed`, tone: 'good' })
 		await load()
 	} catch (e) {
-		emit('notify', { message: e.message || 'Could not submit that request', tone: 'bad' })
+		emit('notify', { message: e.message || `Could not ${action} that request`, tone: 'bad' })
 	} finally {
 		busyOne.value = ''
 	}
@@ -187,7 +212,12 @@ function onCreated() {
 				<div
 					v-for="row in visible"
 					:key="row.name"
-					class="flex flex-col rounded-xl border border-outline-gray-2 bg-surface-white p-3"
+					class="flex flex-col rounded-xl border p-3"
+					:class="
+						row.docstatus === 2
+							? 'border-outline-gray-2 bg-surface-gray-1'
+							: 'border-outline-gray-2 bg-surface-white'
+					"
 				>
 					<div class="flex min-w-0 items-start gap-3">
 						<div class="min-w-0 flex-1">
@@ -199,7 +229,7 @@ function onCreated() {
 									class="shrink-0 rounded-full px-2 py-0.5 text-p-xs font-medium"
 									:class="toneFor(row)"
 								>
-									{{ row.docstatus === 0 ? 'Draft' : row.status }}
+									{{ row.docstatus === 0 ? 'Draft' : row.docstatus === 2 ? 'Cancelled' : row.status }}
 								</span>
 							</div>
 							<div class="truncate text-p-xs text-ink-gray-5">
@@ -218,17 +248,39 @@ function onCreated() {
 							<LucideCart class="h-3.5 w-3.5" />
 							{{ busyOne === row.name ? 'Loading…' : 'Convert to POS' }}
 						</button>
-						<!-- Only on a draft, and only when the server says so. Dark
-						     rather than coloured: submitting is the plain next step,
-						     not the one being encouraged over converting. -->
+						<!-- Only when the server says so. Dark rather than coloured:
+						     submitting is the plain next step, not the one being
+						     encouraged over converting. -->
 						<button
-							v-if="canSubmit(row)"
+							v-if="allows(row, 'submit')"
 							class="flex items-center gap-1.5 rounded-md bg-surface-gray-7 px-2.5 py-1.5 text-p-xs font-semibold text-ink-white transition-colors hover:bg-surface-gray-6 disabled:opacity-50"
 							:disabled="busyOne === row.name"
-							@click="submitOne(row)"
+							@click="act(row, 'submit')"
 						>
 							<LucideCheck class="h-3.5 w-3.5" />
 							{{ busyOne === row.name ? 'Working…' : 'Submit' }}
+						</button>
+						<!-- Outlined, not filled: undoing a request is a real action but
+						     never the one to reach for first. -->
+						<button
+							v-if="allows(row, 'cancel')"
+							class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 bg-surface-white px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-7 transition-colors hover:border-outline-red-2 hover:bg-surface-red-1 hover:text-ink-red-3 disabled:opacity-50"
+							:disabled="busyOne === row.name"
+							@click="act(row, 'cancel')"
+						>
+							<LucideBan class="h-3.5 w-3.5" />
+							{{ busyOne === row.name ? 'Working…' : 'Cancel' }}
+						</button>
+						<!-- The way back from a cancellation, and the only thing a
+						     cancelled request can still do. -->
+						<button
+							v-if="allows(row, 'amend')"
+							class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 bg-surface-white px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-7 transition-colors hover:bg-surface-gray-2 disabled:opacity-50"
+							:disabled="busyOne === row.name"
+							@click="act(row, 'amend')"
+						>
+							<LucideUndo class="h-3.5 w-3.5" />
+							{{ busyOne === row.name ? 'Working…' : 'Amend' }}
 						</button>
 					</div>
 				</div>
