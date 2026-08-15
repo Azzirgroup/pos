@@ -4,6 +4,7 @@ import { Button, Dialog, FormControl, Spinner } from 'frappe-ui'
 import { createMaster, getMasterOptions, getMasterRecord, listMasterTypes, updateMaster } from '@/data/api'
 import { resolveIcon } from '@/utils/icons'
 import LinkField from './LinkField.vue'
+import ImageField from './ImageField.vue'
 import LucidePlus from '~icons/lucide/plus'
 import LucideExternalLink from '~icons/lucide/external-link'
 
@@ -171,8 +172,21 @@ function optionsFor(field) {
 
 				<div v-if="active" class="grid gap-3 sm:grid-cols-2">
 					<template v-for="field in active.fields" :key="field.fieldname">
+						<!-- A photo needs its own control: the value is a URL the
+						     server hands back after an upload, not something anybody
+						     types. Spans both columns because the preview beside the
+						     buttons does not fit in half a row. -->
+						<ImageField
+							v-if="field.type === 'image'"
+							v-model="values[field.fieldname]"
+							:label="field.label"
+							:doctype="editing?.doctype || ''"
+							:docname="editing?.name || ''"
+							class="sm:col-span-2"
+							@error="emit('notify', { message: $event, tone: 'bad' })"
+						/>
 						<LinkField
-							v-if="field.type === 'link'"
+							v-else-if="field.type === 'link'"
 							v-model="values[field.fieldname]"
 							:fetcher="(search) => getMasterOptions({ key: activeKey, fieldname: field.fieldname, search })"
 							:label="field.label"

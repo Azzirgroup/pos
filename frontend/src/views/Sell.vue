@@ -1459,6 +1459,7 @@ useShortcuts({
 					:items="visibleItems"
 					:cart-qtys="cartQtys"
 					:query="query"
+					:show-images="!!till.context?.show_item_images"
 					@add="addItem"
 					@set-qty="setItemQty"
 					@remove="removeItem"

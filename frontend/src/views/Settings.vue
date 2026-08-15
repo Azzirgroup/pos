@@ -225,7 +225,10 @@ const POS_GROUPS = [
 	},
 	{
 		title: 'Selling',
-		fields: ['selling_price_list'],
+		// `show_item_images` sits here rather than under a display heading of its
+		// own: it changes what a cashier looks at while selling, which is what
+		// this section is about.
+		fields: ['selling_price_list', 'show_item_images'],
 	},
 	{
 		title: 'Neighbour sourcing',

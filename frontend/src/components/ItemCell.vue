@@ -15,6 +15,16 @@ import LucidePackage from '~icons/lucide/package'
 const props = defineProps({
 	item: { type: Object, required: true },
 	inCart: { type: Number, default: 0 },
+	/**
+	 * Draw the product's photo properly, rather than as the 32px corner square.
+	 *
+	 * Off by default, and a shop-wide setting rather than a per-cashier one: a
+	 * grid of photos is worth several times a grid of names to staff who know the
+	 * packaging and not the product code, and worth nothing at all to a shop that
+	 * has never uploaded any — where it would just make every cell taller and fit
+	 * fewer products on screen. See `show_item_images` in the till settings.
+	 */
+	showImage: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['add', 'setQty', 'remove'])
@@ -105,21 +115,27 @@ const fallbackIcon = computed(() => {
 		"
 		@click="emit('add', item)"
 	>
+		<!-- The photo, when the shop has asked for photos and this product has
+		     one. A band across the top rather than a bigger corner square: at a
+		     glance across sixty cells the eye is matching packaging, and a 32px
+		     crop of a bottle is not something anyone recognises. Fixed height so
+		     the grid stays on one baseline whatever shape the uploads are. -->
+		<div
+			v-if="showImage && thumbnail"
+			class="relative h-20 w-full shrink-0 overflow-hidden bg-surface-gray-2"
+		>
+			<img :src="thumbnail" alt="" class="h-full w-full object-cover" loading="lazy" @error="broken = true" />
+		</div>
+
 		<div class="flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 py-2">
 			<div class="flex items-start gap-1.5">
-				<!-- Thumbnail carries the availability dot in its corner, so the two
-				     share one column instead of each taking their own. -->
+				<!-- Always the category icon, never the photo: the photo has one home,
+				     the band above, and it appears only when the shop has asked for
+				     photos. A 32px crop shown regardless would make the setting a
+				     half-switch — off, but still pictures. This square exists to carry
+				     the availability dot, which every cell needs. -->
 				<span class="relative mt-0.5 shrink-0">
-					<img
-						v-if="thumbnail"
-						:src="thumbnail"
-						alt=""
-						class="h-8 w-8 rounded object-cover"
-						loading="lazy"
-						@error="broken = true"
-					/>
 					<span
-						v-else
 						class="grid h-8 w-8 place-items-center rounded bg-surface-gray-2 text-ink-gray-5"
 					>
 						<component :is="fallbackIcon" class="h-4 w-4" aria-hidden="true" />

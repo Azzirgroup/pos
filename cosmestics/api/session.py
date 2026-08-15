@@ -95,6 +95,11 @@ def context():
 		# cashier build a cart and be refused at checkout. The rule itself is
 		# enforced in `pos.submit_sale`; this is only what the screen reads.
 		"requires_shift": bool(settings.get("require_shift_to_sell")),
+		# Whether the grid draws product photos. Read here rather than fetched
+		# separately so the first paint already knows — a grid that starts without
+		# pictures and grows them a moment later reflows every cell under the
+		# cashier's finger.
+		"show_item_images": bool(settings.get("show_item_images")),
 		# Gate the checkout cart's rate/discount editing controls. `pos.submit_sale`
 		# does not enforce these — see the note there — so keeping the sale itself
 		# safe from a client that ignores this flag is out of scope here.

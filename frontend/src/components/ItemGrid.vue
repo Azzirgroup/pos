@@ -6,6 +6,8 @@ defineProps({
 	items: { type: Array, required: true },
 	cartQtys: { type: Object, default: () => ({}) },
 	query: { type: String, default: '' },
+	/** Draw product photos, per the shop's setting. See `ItemCell`. */
+	showImages: { type: Boolean, default: false },
 })
 
 defineEmits(['add', 'setQty', 'remove'])
@@ -26,6 +28,7 @@ defineEmits(['add', 'setQty', 'remove'])
 					:key="item.item_code"
 					:item="item"
 					:in-cart="cartQtys[item.item_code] || 0"
+					:show-image="showImages"
 					@add="$emit('add', $event)"
 					@set-qty="$emit('setQty', $event)"
 					@remove="$emit('remove', $event)"

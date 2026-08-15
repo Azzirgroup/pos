@@ -24,6 +24,7 @@ declare module 'vue' {
     DocumentModal: typeof import('./src/components/DocumentModal.vue')['default']
     DonutChart: typeof import('./src/components/charts/DonutChart.vue')['default']
     HeldSheet: typeof import('./src/components/HeldSheet.vue')['default']
+    ImageField: typeof import('./src/components/ImageField.vue')['default']
     ItemCell: typeof import('./src/components/ItemCell.vue')['default']
     ItemGrid: typeof import('./src/components/ItemGrid.vue')['default']
     LinkField: typeof import('./src/components/LinkField.vue')['default']

@@ -63,6 +63,10 @@ export function decorate(row) {
 		 */
 		uoms: Array.isArray(row.uoms) && row.uoms.length ? row.uoms : null,
 		batched: Boolean(row.batched),
+		// The product photo. `get_catalog` has always sent this and this function
+		// has always dropped it — exactly the failure the note above describes —
+		// so `ItemCell`'s thumbnail branch could never fire on a real catalogue.
+		image: row.image || null,
 		hue: hueFor(row.item_code),
 		// Pre-lowered haystack: built once at load, not per keystroke.
 		_search:

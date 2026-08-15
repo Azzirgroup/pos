@@ -73,6 +73,10 @@ MASTERS = [
 			# a product has exactly one number printed on it, and written to the
 			# `barcodes` table after the insert.
 			{"fieldname": "barcode", "label": "Barcode", "type": "text"},
+			# A real field on Item, so create and edit both carry it with no
+			# special handling — the form only has to know how to upload one and
+			# hand back the URL. See `ImageField` for why the file is public.
+			{"fieldname": "image", "label": "Photo", "type": "image"},
 		],
 		"defaults": {"is_stock_item": 1, "is_sales_item": 1, "is_purchase_item": 1},
 	},

@@ -26,7 +26,8 @@
   "default_expense_account",
   "company_short_account",
   "column_break_till",
-  "require_shift_to_sell"
+  "require_shift_to_sell",
+  "show_item_images"
  ],
  "fields": [
   {
@@ -167,6 +168,13 @@
    "fieldname": "require_shift_to_sell",
    "fieldtype": "Check",
    "label": "Require an Open Shift to Sell"
+  },
+  {
+   "default": "0",
+   "description": "Show each product's photo on the till's item grid. A shop whose staff recognise the packaging faster than the name wants this on; a shop with no photos loaded gains nothing but a slower grid.",
+   "fieldname": "show_item_images",
+   "fieldtype": "Check",
+   "label": "Show Item Photos on the Till"
   }
  ],
  "index_web_pages_for_search": 1,
