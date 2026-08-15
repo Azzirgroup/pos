@@ -18,6 +18,30 @@ function render(s) {
 	return s.value ?? '—'
 }
 
+/**
+ * Shrink the figure until it fits, rather than cutting it off.
+ *
+ * These tiles were fixed at one size with `truncate`, which is the right
+ * treatment for a label and the wrong one for a number: a shop with millions in
+ * revenue saw "KES 7,987,…", where the digits that were dropped are the ones
+ * that say how much. A truncated word can still be guessed at; a truncated
+ * number cannot be read at all.
+ *
+ * Stepping the size down keeps every tile on one line and the band of tiles on
+ * one baseline. The thresholds are in characters because that is what actually
+ * decides whether it fits — "KES 723,150.00" and "644" want different sizes and
+ * neither is knowable from the value alone.
+ */
+function valueSize(text) {
+	const length = String(text ?? '').length
+	// Two sizes per step: the roomy one from `lg` up, a smaller one below it,
+	// where four tiles share a narrow screen and there is genuinely less room.
+	if (length <= 11) return 'text-p-lg lg:text-p-xl'
+	if (length <= 15) return 'text-p-base lg:text-p-lg'
+	if (length <= 19) return 'text-p-sm lg:text-p-base'
+	return 'text-p-xs lg:text-p-sm'
+}
+
 const TONES = {
 	default: 'text-ink-gray-9',
 	good: 'text-ink-green-3',
@@ -98,9 +122,12 @@ function deltaLabel(s) {
 				<!-- Sized to the value, not to the label: the figure is what the tile
 				     is for, and a chip half its height read as a bullet point beside
 				     it rather than as part of it. -->
+				<!-- Hidden below `lg`. On a narrow screen the chip was taking a third
+				     of the tile from the figure it decorates, and it only ever repeats
+				     what the label already says — so the number gets the room. -->
 				<span
 					v-if="resolveIcon(s.icon)"
-					class="grid h-10 w-10 shrink-0 place-items-center rounded-xl"
+					class="hidden h-10 w-10 shrink-0 place-items-center rounded-xl lg:grid"
 					:class="ICON_CHIPS[s.tone || 'default']"
 					aria-hidden="true"
 				>
@@ -108,7 +135,16 @@ function deltaLabel(s) {
 				</span>
 				<div class="min-w-0 flex-1">
 					<div class="truncate text-p-xs text-ink-gray-6">{{ s.label }}</div>
-					<div class="tabular mt-1 truncate text-p-xl font-semibold" :class="valueTone(s)">
+					<!-- `truncate` stays, but only as a guard against a figure spilling
+					     out over the card next to it — `valueSize` is what makes it fit
+					     at any width a shop actually reads this on. `title` covers the
+					     rest: a phone in portrait can still be held to see the whole
+					     number. -->
+					<div
+						class="tabular mt-1 truncate font-semibold leading-tight"
+						:class="[valueTone(s), valueSize(render(s))]"
+						:title="render(s)"
+					>
 						{{ render(s) }}
 					</div>
 					<div v-if="s.delta || s.hint" class="mt-1 flex flex-wrap items-baseline gap-x-1.5">
