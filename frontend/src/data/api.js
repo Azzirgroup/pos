@@ -44,6 +44,21 @@ function readable(error) {
 
 	const said = (error?.messages || []).filter(Boolean).join(' ')
 	if (said) error.message = said
+	else if (error?.exc) {
+		// An unhandled exception carries no server message — Frappe sends a
+		// traceback instead, and the app was showing a bare "Internal Server
+		// Error", which tells whoever is standing at the till nothing and gives
+		// whoever they call nothing to go on either. The last line of a Python
+		// traceback is the exception and its text, which is the one line worth
+		// reading.
+		const lines = String(error.exc).trim().split('\n').filter((l) => l.trim())
+		const last = lines[lines.length - 1] || ''
+		// Drop the module path: "frappe.exceptions.ValidationError: x" → "x",
+		// keeping the type only when there is no message after it.
+		const match = last.match(/^[\w.]*?(\w*Error|\w*Exception):\s*(.+)$/)
+		if (match) error.message = match[2] || match[1]
+		else if (last) error.message = last
+	}
 	if (error?.message) {
 		error.message = String(error.message)
 			.replace(/<[^>]*>/g, ' ')

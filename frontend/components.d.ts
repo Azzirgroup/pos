@@ -29,6 +29,7 @@ declare module 'vue' {
     ItemGrid: typeof import('./src/components/ItemGrid.vue')['default']
     LinkField: typeof import('./src/components/LinkField.vue')['default']
     MasterSheet: typeof import('./src/components/MasterSheet.vue')['default']
+    MaterialRequestSheet: typeof import('./src/components/MaterialRequestSheet.vue')['default']
     MobileCartBar: typeof import('./src/components/MobileCartBar.vue')['default']
     ModuleTabs: typeof import('./src/components/ModuleTabs.vue')['default']
     PageHeader: typeof import('./src/components/PageHeader.vue')['default']

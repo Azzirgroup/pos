@@ -1352,10 +1352,28 @@ def create_document(key: str, values: dict | str, items: list | str, submit: int
 		if len(by_supplier) > 1:
 			groups = list(by_supplier.items())
 
-	created = [
-		_insert_one(doctype, spec, values, line_fields, group_lines, supplier, submit)
-		for supplier, group_lines in groups
-	]
+	try:
+		created = [
+			_insert_one(doctype, spec, values, line_fields, group_lines, supplier, submit)
+			for supplier, group_lines in groups
+		]
+	except (frappe.ValidationError, frappe.PermissionError):
+		# ERPNext refusing the document for a reason it has already worded. Those
+		# reach the browser as a server message and read perfectly well; wrapping
+		# them would only bury the sentence somebody needs.
+		raise
+	except Exception as e:
+		# Anything else is a crash, and a crash arrives at the till as "Internal
+		# Server Error" with the reason left in a log nobody at a counter can
+		# open. The document is not created either way — this only decides
+		# whether the person in front of the customer is told anything useful.
+		frappe.log_error(
+			f"create_document({key}) failed\nvalues={values}\nlines={len(lines)}\n{frappe.get_traceback()}",
+			"Cosmetics POS",
+		)
+		frappe.throw(
+			_("Could not create the {0}: {1}").format(_(doctype), str(e)[:200] or type(e).__name__)
+		)
 
 	first = created[0]
 	if len(created) == 1:

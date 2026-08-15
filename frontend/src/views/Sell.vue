@@ -50,6 +50,7 @@ import QuotationSheet from '@/components/QuotationSheet.vue'
 import TillContext from '@/components/TillContext.vue'
 import ReturnSheet from '@/components/ReturnSheet.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
+import MaterialRequestSheet from '@/components/MaterialRequestSheet.vue'
 import { saleMessage } from '@/utils/salesMessage'
 import { printUrl } from '@/utils/silentPrint'
 import { cameraScanSupported } from '@/composables/useCameraScanner'
@@ -1001,6 +1002,16 @@ function onReturned(res) {
  * customer walking out. A Quotation is ERPNext's document for it — it prints, it
  * carries a validity date, and the back office already knows what one is.
  */
+/**
+ * Requests, in a sheet rather than a screen.
+ *
+ * It used to route to the Documents list, which meant leaving the till — and a
+ * cashier mid-basket does not want the counter to disappear. Same treatment as
+ * Quotes: a sheet over the till, with the list, a way to raise one, and the
+ * button that turns one into a cart.
+ */
+const materialSheet = ref(false)
+
 const quotationSheet = ref(false)
 const quotationBusy = ref(false)
 
@@ -1429,7 +1440,7 @@ useShortcuts({
 				class="!bg-teal-100 !text-teal-700 hover:!bg-teal-200 active:!bg-teal-300"
 				:icon-left="LucideClipboardList"
 				label="Request material"
-				@click="router.push('/documents/material-request')"
+				@click="materialSheet = true"
 			/>
 
 			<!-- Scan lives inside the search field: searching and scanning are the
@@ -1837,6 +1848,12 @@ useShortcuts({
 		<!-- Sends the real PDF, and offers the shop's WhatsApp groups as well as a
 		     number — the same control the back-office lists share rows through. -->
 		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
+
+		<MaterialRequestSheet
+			v-model="materialSheet"
+			@converted="catalog.refresh()"
+			@notify="notify($event.message, $event.tone === 'bad' ? 'warn' : 'ok')"
+		/>
 
 		<QuotationSheet
 			v-model="quotationSheet"
