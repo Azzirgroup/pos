@@ -1,6 +1,6 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { Button } from 'frappe-ui'
+import { Button, Dialog } from 'frappe-ui'
 import { fmtMoney } from '@/utils/format'
 import {
 	listDeliveries,
@@ -182,11 +182,99 @@ function blank() {
 
 const riderFetcher = (term) => searchRiders(term)
 
-async function createRiderFor(typed) {
-	const row = await createRider({ riderName: typed, phone: draft.value.riderPhone || null })
-	onRiderPicked(row)
-	return row
+/**
+ * Creating a rider from inside the field, ERPNext's own two-step shape.
+ *
+ * A link field there offers "Create a new …" and opens a quick entry with the
+ * record's own fields, rather than inventing one from whatever was typed. Both
+ * halves matter and this screen only had the first:
+ *
+ * - Typing a name and taking the offer creates a rider with **only** a name.
+ *   That is the right amount of friction when the shop is busy — but a rider
+ *   with no number is a delivery nobody can chase, and the number is in the
+ *   cashier's hand at exactly that moment.
+ * - So the offer opens the form instead, pre-filled with what was typed. The
+ *   phone, the courier and the vehicle are asked for once, here, rather than
+ *   left to be filled in later from a Records screen nobody goes back to.
+ *
+ * `LinkField` awaits whatever `on-create` returns and selects it, so this
+ * hands back a promise that settles when the dialog does — resolved with the
+ * new rider, or with null if it was dismissed, which leaves the field as it
+ * was.
+ */
+const riderOpen = ref(false)
+const riderSaving = ref(false)
+const riderDraft = ref(blankRider())
+/** Resolver for the promise `createRiderFor` handed to `LinkField`. */
+let riderResolve = null
+
+function blankRider() {
+	return { riderName: '', phone: '', courier: '', vehicle: '' }
 }
+
+function createRiderFor(typed) {
+	riderDraft.value = {
+		...blankRider(),
+		riderName: typed || '',
+		// Carried across rather than asked for twice: a cashier who has already
+		// typed the number into the delivery meant that number.
+		phone: draft.value.riderPhone || '',
+		courier: draft.value.courier || '',
+	}
+	riderOpen.value = true
+	return new Promise((resolve) => {
+		riderResolve = resolve
+	})
+}
+
+/** Add the rider straight from the Records-style form, without a New button. */
+function openNewRider() {
+	createRiderFor(draft.value.riderName || '')
+}
+
+const riderBlocker = computed(() =>
+	riderDraft.value.riderName.trim() ? null : 'Name the rider',
+)
+
+async function saveRider() {
+	if (riderBlocker.value) return
+	riderSaving.value = true
+	try {
+		const row = await createRider({
+			riderName: riderDraft.value.riderName.trim(),
+			phone: riderDraft.value.phone || null,
+			courier: riderDraft.value.courier || null,
+			vehicle: riderDraft.value.vehicle || null,
+		})
+		// Selected into the delivery, which is the whole reason the form was
+		// opened from the field rather than from a Records screen.
+		draft.value.rider = row.value
+		onRiderPicked(row)
+		riderOpen.value = false
+		settleRider(row)
+		notify(`${row.rider_name} added`, 'good')
+	} catch (e) {
+		notify(e.message || 'Could not add that rider', 'bad')
+	} finally {
+		riderSaving.value = false
+	}
+}
+
+/** Hand the waiting `LinkField` its answer, exactly once. */
+function settleRider(row) {
+	const resolve = riderResolve
+	riderResolve = null
+	// Dismissing resolves with null rather than rejecting: cancelling a quick
+	// entry is an ordinary thing to do, not an error to report.
+	if (resolve) resolve(row || null)
+}
+
+// Covers the dismissals that do not go through `saveRider` — the backdrop, the
+// close button, Escape. Without it the field would sit waiting on a promise
+// that never settles, and its "Creating…" spinner would never stop.
+watch(riderOpen, (open) => {
+	if (!open) settleRider(null)
+})
 
 function onRiderPicked(row) {
 	if (!row) return
@@ -380,14 +468,28 @@ function notify(message, tone = 'good') {
 
 		<BottomSheet v-model="newOpen" title="New delivery" tall>
 			<div class="flex flex-col gap-2.5 px-4 pb-5">
-				<LinkField
-					v-model="draft.rider"
-					:fetcher="riderFetcher"
-					:on-create="createRiderFor"
-					label="Rider"
-					required
-					@picked="onRiderPicked"
-				/>
+				<!-- Search first, create second — the ERPNext link-field shape. Typing
+				     offers "Create …" inside the list; the button beside the label is
+				     for the cashier who already knows this rider is new and would
+				     otherwise have to type a name just to be offered the option. -->
+				<div class="flex items-end gap-2">
+					<LinkField
+						v-model="draft.rider"
+						:fetcher="riderFetcher"
+						:on-create="createRiderFor"
+						label="Rider"
+						required
+						class="min-w-0 flex-1"
+						@picked="onRiderPicked"
+					/>
+					<button
+						class="flex h-8 shrink-0 items-center gap-1.5 rounded border border-outline-gray-3 px-2.5 text-p-sm font-medium text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
+						@click="openNewRider"
+					>
+						<LucidePlus class="h-3.5 w-3.5" />
+						New rider
+					</button>
+				</div>
 				<div class="grid grid-cols-2 gap-2">
 					<input
 						v-model="draft.riderPhone"
@@ -451,6 +553,78 @@ function notify(message, tone = 'good') {
 				</button>
 			</div>
 		</BottomSheet>
+
+		<!-- Quick entry for a rider, opened from the link field above. A Dialog
+		     rather than a second BottomSheet: it sits over the delivery being
+		     filled in, and the point is that the delivery is still there
+		     underneath when this closes. -->
+		<Dialog v-model="riderOpen" :options="{ title: 'New rider', size: 'sm' }">
+			<template #body-content>
+				<div class="flex flex-col gap-2.5">
+					<div>
+						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">Rider name *</label>
+						<input
+							v-model="riderDraft.riderName"
+							type="text"
+							placeholder="Who is riding"
+							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+							@keyup.enter="saveRider"
+						/>
+					</div>
+					<div>
+						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">Phone</label>
+						<input
+							v-model="riderDraft.phone"
+							type="tel"
+							inputmode="tel"
+							placeholder="The number the shop rings"
+							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+							@keyup.enter="saveRider"
+						/>
+					</div>
+					<div class="grid grid-cols-2 gap-2">
+						<div>
+							<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">Courier</label>
+							<input
+								v-model="riderDraft.courier"
+								type="text"
+								placeholder="Company, or the shop"
+								class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+							/>
+						</div>
+						<div>
+							<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">Vehicle</label>
+							<input
+								v-model="riderDraft.vehicle"
+								type="text"
+								placeholder="Plate or bike"
+								class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+							/>
+						</div>
+					</div>
+					<!-- Says what happens next, because this form was opened from a
+					     field that is waiting on it. -->
+					<p class="text-p-xs text-ink-gray-5">
+						Saved to Records and chosen for this delivery. Only the name is required —
+						the rest can be filled in later.
+					</p>
+				</div>
+			</template>
+			<template #actions>
+				<div class="flex gap-2">
+					<Button
+						theme="gray"
+						variant="solid"
+						class="flex-1"
+						:loading="riderSaving"
+						:disabled="!!riderBlocker"
+						:label="riderBlocker || 'Add rider'"
+						@click="saveRider"
+					/>
+					<Button variant="subtle" label="Cancel" @click="riderOpen = false" />
+				</div>
+			</template>
+		</Dialog>
 
 		<Transition
 			enter-active-class="transition-all duration-200"
