@@ -4,6 +4,35 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 59. `can't multiply sequence by non-int of type 'float'` on create
+
+The *second* half of "creating a material request fails". Item 58 fixed a 500
+raised after a successful save; this one is a real refusal to create, and the
+two looked identical from the till.
+
+Every value from `DocumentFormSheet` arrives as a **string**. An
+`<input type="number">` bound with `v-model` yields one — Vue does not convert
+it — and JSON carries it across unchanged, so a quantity of five reaches the
+server as `"5"`. Frappe casts a document's fields to their fieldtype when it
+*saves*, which is too late: `set_missing_values` runs first and reaches
+
+    # erpnext/stock/get_item_details.py:532
+    out.stock_qty = out.qty * out.conversion_factor
+
+which is `"5" * 1.0`.
+
+`documents._typed` now casts by the field's **declared registry type** before
+the value reaches the document — the same data that draws the form, so nothing
+doctype-specific is written into it, and it covers every creatable type at once
+rather than only the one that was reported. Cast on the server and not in the
+browser because this endpoint is reachable directly.
+
+A value that will not parse is passed through **untouched, not zeroed**: `flt`
+would turn a typo into 0, and a quantity that silently became nothing is far
+worse than one ERPNext refuses by name.
+
+`master._set_opening_price` had the same latent shape and now uses `flt`.
+
 ### 58. "Internal Server Error after save or submit" on a Material Request
 
 Found and fixed. The request was being created correctly every time — the 500

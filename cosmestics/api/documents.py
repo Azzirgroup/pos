@@ -1444,6 +1444,50 @@ def _apply_stock_receipt(doc, values):
 	doc.update_stock = 1
 
 
+#: Form field types whose value is a number, and must reach ERPNext as one.
+_NUMERIC_TYPES = {"number", "currency"}
+
+
+def _typed(value, field_type):
+	"""Turn a form value into the type the document will do arithmetic on.
+
+	**This is the "can't multiply sequence by non-int of type 'float'" fix.**
+
+	Every value from this form arrives as a string. An `<input type="number">`
+	bound with `v-model` yields a string in the browser — Vue does not convert
+	it — and JSON carries it across as one, so a quantity of five reaches the
+	server as `"5"` rather than `5`.
+
+	Frappe casts a document's fields to their fieldtype when it *saves*, which
+	is late: `set_missing_values` runs first, and it reaches
+	`erpnext/stock/get_item_details.py`, whose
+
+	    out.stock_qty = out.qty * out.conversion_factor
+
+	is `"5" * 1.0` — Python's error for multiplying a string by a float, raised
+	from deep inside ERPNext with nothing in the message naming the field, the
+	line or the form. That is what a shop saw as "internal server error on
+	creating a material request".
+
+	Casting here rather than in the browser because this endpoint is reachable
+	directly, and a rule only the front end applies is not a rule. The registry
+	already declares each field's type, so the conversion is driven by the same
+	data that draws the form — nothing about any particular doctype is written
+	into it.
+
+	A value that is not a number after all is passed through untouched rather
+	than zeroed. `flt` would silently turn a typo into 0, and a quantity that
+	quietly became nothing is far worse than one ERPNext refuses by name.
+	"""
+	if field_type not in _NUMERIC_TYPES or isinstance(value, (int, float)):
+		return value
+
+	try:
+		return float(value)
+	except (TypeError, ValueError):
+		return value
+
+
 def _insert_one(doctype, spec, values, line_fields, lines, supplier_override, submit):
 	"""One document, one supplier. `supplier_override` is set only mid-split;
 	the ordinary single-document path leaves the header's own value alone."""
@@ -1462,10 +1506,13 @@ def _insert_one(doctype, spec, values, line_fields, lines, supplier_override, su
 			)
 		doc.company = company
 
+	header_types = {f["fieldname"]: f.get("type") for f in spec["fields"]}
+	line_types = {f["fieldname"]: f.get("type") for f in spec["items"]}
+
 	allowed = {f["fieldname"] for f in spec["fields"]}
 	for fieldname, value in values.items():
 		if fieldname in allowed and value not in (None, ""):
-			doc.set(fieldname, value)
+			doc.set(fieldname, _typed(value, header_types.get(fieldname)))
 
 	if supplier_override:
 		doc.supplier = supplier_override
@@ -1477,7 +1524,9 @@ def _insert_one(doctype, spec, values, line_fields, lines, supplier_override, su
 		# Purchase Invoice Item / Purchase Receipt Item — it does the
 		# splitting above and has no business on the child row itself.
 		line = {
-			f: row[f] for f in line_fields if f != "supplier" and row.get(f) not in (None, "")
+			f: _typed(row[f], line_types.get(f))
+			for f in line_fields
+			if f != "supplier" and row.get(f) not in (None, "")
 		}
 		# Fields ERPNext validates per row but a small form should only ask once.
 		for line_field, header_field in inherited.items():

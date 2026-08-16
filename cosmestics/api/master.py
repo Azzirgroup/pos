@@ -498,5 +498,10 @@ def _set_opening_price(item_code: str, price):
 	doc = frappe.new_doc("Item Price")
 	doc.item_code = item_code
 	doc.price_list = price_list
-	doc.price_list_rate = price
+	# `flt`, because the form sends this as a string: an `<input type="number">`
+	# bound with `v-model` yields one, and JSON carries it across as one. Frappe
+	# casts fields when it saves, which is late enough for anything that does
+	# arithmetic in `validate` to see the string first — see `documents._typed`
+	# for the same problem costing a Material Request its creation.
+	doc.price_list_rate = flt(price)
 	doc.insert()
