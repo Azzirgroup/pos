@@ -18,10 +18,19 @@ defineEmits(['add', 'setQty', 'remove'])
 		<div v-if="items.length" class="p-2 sm:p-3">
 			<!-- Dense auto-fill grid of flat cells, per the reference design. It
 			     reflows continuously as the cart panel appears, so there is no
-			     width at which cells are stretched or cramped. -->
+			     width at which cells are stretched or cramped.
+
+			     Wider cells when photos are on. The 160px track is sized for two
+			     lines of product name, and a photo squeezed into it is a letterbox
+			     — the point of turning photos on is that staff recognise the
+			     packaging, which needs the picture to be big enough to recognise.
+			     A shop with photos off keeps the denser grid, which is what it is
+			     for. -->
 			<div
 				class="grid gap-1.5"
-				style="grid-template-columns: repeat(auto-fill, minmax(160px, 1fr))"
+				:style="{
+					gridTemplateColumns: `repeat(auto-fill, minmax(${showImages ? 190 : 160}px, 1fr))`,
+				}"
 			>
 				<ItemCell
 					v-for="item in items"

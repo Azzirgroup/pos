@@ -155,13 +155,19 @@ const fallbackIcon = computed(() => {
 		     the grid stays on one baseline whatever shape the uploads are. -->
 		<div
 			v-if="showImage"
-			class="relative h-20 w-full shrink-0 overflow-hidden bg-surface-gray-2"
+			class="relative h-32 w-full shrink-0 overflow-hidden bg-surface-white"
 		>
+			<!-- `object-contain`, not `cover`. A cosmetics packshot is a tall
+			     bottle on a white background, and cropping one to a wide band
+			     takes the cap and the base — the two ends a cashier recognises it
+			     by — and leaves a rectangle of the middle. Contained, the whole
+			     product is on screen; the white margins either side cost nothing
+			     because the background behind them is white anyway. -->
 			<img
 				v-if="thumbnail"
 				:src="thumbnail"
 				alt=""
-				class="h-full w-full object-cover"
+				class="h-full w-full object-contain p-1"
 				loading="lazy"
 				@error="broken = true"
 			/>
@@ -173,7 +179,7 @@ const fallbackIcon = computed(() => {
 					:src="LOGO"
 					alt=""
 					aria-hidden="true"
-					class="h-9 w-9 opacity-25 grayscale"
+					class="h-11 w-11 opacity-25 grayscale"
 					draggable="false"
 				/>
 			</div>
