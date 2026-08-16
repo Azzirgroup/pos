@@ -6,4 +6,8 @@
 # Patches added in this section will be executed after doctypes are migrated
 # Product photos on the till, for sites installed while the default was off.
 # Runs once, so a shop that turns them back off keeps them off.
-cosmestics.patches.show_item_images_by_default.execute
+#
+# The module path only — `patch_handler.execute_patch` appends `.execute`
+# itself, so naming the function here makes it look for `….execute.execute` and
+# the migrate dies with "is not a package".
+cosmestics.patches.show_item_images_by_default
