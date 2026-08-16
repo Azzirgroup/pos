@@ -38,6 +38,7 @@ import { Button, Dialog, FormControl } from 'frappe-ui'
 import PillTabs from '@/components/PillTabs.vue'
 import ItemGrid from '@/components/ItemGrid.vue'
 import CartPanel from '@/components/CartPanel.vue'
+import CartPreview from '@/components/CartPreview.vue'
 import MobileCartBar from '@/components/MobileCartBar.vue'
 import BottomSheet from '@/components/BottomSheet.vue'
 import PaySheet from '@/components/PaySheet.vue'
@@ -121,6 +122,14 @@ watch(mode, (m) => {
 })
 
 const cartSheet = ref(false)
+/**
+ * The whole cart, full width — see `CartPreview`.
+ *
+ * Opened from the docked panel, which is 360px wide and shows about six lines.
+ * That is the right shape for the ordinary sale and useless for the trolley of
+ * thirty a customer wants read back to them.
+ */
+const cartPreview = ref(false)
 const paySheet = ref(false)
 const heldSheet = ref(false)
 const stockSheet = ref(false)
@@ -1284,6 +1293,7 @@ useShortcuts({
 		if (returnSheet.value) return (returnSheet.value = false)
 		if (quotationSheet.value) return (quotationSheet.value = false)
 		if (heldSheet.value) return (heldSheet.value = false)
+		if (cartPreview.value) return (cartPreview.value = false)
 		if (cartSheet.value) return (cartSheet.value = false)
 		if (query.value) return query.value = ''
 	},
@@ -1506,6 +1516,7 @@ useShortcuts({
 					@dec="cart.dec"
 					@set-qty="cartSetQty"
 					@set-uom="cart.setUom"
+					@preview="cartPreview = true"
 					:allow-rate-change="Boolean(till.context?.allow_rate_change)"
 					:allow-discount-change="Boolean(till.context?.allow_discount_change)"
 				/>
@@ -1822,6 +1833,20 @@ useShortcuts({
 				</div>
 			</div>
 		</BottomSheet>
+
+		<!-- Quantity changes route through the same handlers the panel uses, so the
+		     out-of-stock sheet still fires from here. A second component writing
+		     to the cart store directly is how the one control that skips the shelf
+		     check gets created. -->
+		<CartPreview
+			v-model="cartPreview"
+			:allow-rate-change="Boolean(till.context?.allow_rate_change)"
+			@inc="cartInc"
+			@dec="cart.dec"
+			@set-qty="cartSetQty"
+			@set-uom="cart.setUom"
+			@pay="cartPreview = false; openPay()"
+		/>
 
 		<PaySheet
 			v-model="paySheet"

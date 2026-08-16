@@ -10,6 +10,7 @@ import LucidePause from '~icons/lucide/pause'
 import LucideUndo from '~icons/lucide/undo-2'
 import LucideTrash2 from '~icons/lucide/trash-2'
 import LucideFileText from '~icons/lucide/file-text'
+import LucideExpand from '~icons/lucide/maximize-2'
 
 defineProps({
 	/** Hides the panel's own header when rendered inside the mobile sheet. */
@@ -28,7 +29,17 @@ defineProps({
  * the one that never checked. The view that owns the out-of-stock sheet decides
  * now; this panel only says what the cashier pressed.
  */
-const emit = defineEmits(['pay', 'hold', 'quote', 'pickCustomer', 'inc', 'dec', 'setQty', 'setUom'])
+const emit = defineEmits([
+	'pay',
+	'hold',
+	'quote',
+	'pickCustomer',
+	'inc',
+	'dec',
+	'setQty',
+	'setUom',
+	'preview',
+])
 
 const cart = useCartStore()
 const {
@@ -106,6 +117,19 @@ watch(
 			<span class="tabular shrink-0 text-p-xs text-ink-gray-5">
 				{{ count }} {{ count === 1 ? 'item' : 'items' }}
 			</span>
+			<!-- The whole cart, full width. This column shows about six lines, which
+			     is fine for the ordinary sale and useless for the trolley of thirty
+			     that a customer wants read back to them. Beside the count because
+			     that is the number that tells you when you need it. -->
+			<button
+				class="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-ink-gray-5 transition-colors hover:bg-surface-gray-2 hover:text-ink-gray-7 disabled:opacity-40"
+				:disabled="isEmpty"
+				aria-label="Preview the whole cart"
+				title="See the whole cart"
+				@click="emit('preview')"
+			>
+				<LucideExpand class="h-4 w-4" />
+			</button>
 		</div>
 
 		<!-- Lines -->

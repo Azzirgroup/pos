@@ -19,6 +19,15 @@ export const MODULE_TABS = {
 		{ label: 'Item price', to: '/pricing' },
 		{ label: 'Stock levels', to: '/inventory' },
 		{ label: 'Barcodes', to: '/barcodes' },
+		// Moving stock between stores, receiving it in, writing it off. The
+		// screen and the form both existed — `/documents/stock-entry` has a
+		// create spec and always has — but nothing in the app pointed at it, so
+		// the only way in was to know the URL. A document type with no tab is a
+		// document type nobody can raise.
+		//
+		// Beside Stock counts because the two are the pair a stockkeeper works
+		// in: a count says what is actually there, an entry moves it.
+		{ label: 'Stock entries', to: '/documents/stock-entry' },
 		{ label: 'Stock counts', to: '/documents/stock-reconciliation' },
 		// Filed here rather than under Purchasing because the person who notices
 		// the shelf is empty is the one who raises the request; it appears in both

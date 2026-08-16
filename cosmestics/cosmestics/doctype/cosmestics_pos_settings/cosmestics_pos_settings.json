@@ -241,8 +241,8 @@
    "label": "Require an Open Shift to Sell"
   },
   {
-   "default": "0",
-   "description": "Show each product's photo on the till's item grid. A shop whose staff recognise the packaging faster than the name wants this on; a shop with no photos loaded gains nothing but a slower grid.",
+   "default": "1",
+   "description": "Show each product's photo on the till's item grid. Staff recognise packaging faster than a product name, so this is on by default; a shop with no photos loaded can turn it off and get a denser grid, since a cell with no photo to show is just a taller cell.",
    "fieldname": "show_item_images",
    "fieldtype": "Check",
    "label": "Show Item Photos on the Till"

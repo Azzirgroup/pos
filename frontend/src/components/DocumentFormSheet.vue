@@ -9,6 +9,7 @@ import {
 	getDocumentLinkOptions,
 	getExpenseAccounts,
 	getItemStock,
+	getMasterOptions,
 } from '@/data/api'
 import { fmtMoney, fmtQty } from '@/utils/format'
 import LinkField from './LinkField.vue'
@@ -18,8 +19,8 @@ import LucideX from '~icons/lucide/x'
 /**
  * Link fields whose target can be created from typing a name alone — every
  * other field `master.py` exposes needs at least one more required value
- * (an Item's group, an Account's parent), so offering "Create" there would
- * fail on the very next line ERPNext validates. These four do not.
+ * (an Account's parent), so offering "Create" there would fail on the very
+ * next line ERPNext validates. These four do not.
  */
 const QUICK_CREATE_MASTER = {
 	Supplier: 'supplier',
@@ -28,7 +29,94 @@ const QUICK_CREATE_MASTER = {
 	'Item Group': 'item_group',
 }
 
+/**
+ * "Add item", offered as the last option when a search finds nothing.
+ *
+ * An item cannot be made from a typed name alone — ERPNext wants a group as
+ * well — which is why it was left out of the one-line creates above and why the
+ * field simply said "No matches". That is the wrong place to stop: buying
+ * something the shop has never stocked before is the *ordinary* reason to be
+ * filling in a purchase invoice, and the answer was to abandon the form, go to
+ * Records, make the item, and start again.
+ *
+ * So the offer opens a quick entry instead — ERPNext's own two-step shape, the
+ * same one the rider field uses. `LinkField` awaits whatever `on-create`
+ * returns and selects it, so this hands back a promise that settles when the
+ * dialog does: with the new item, or with null if it was dismissed, which
+ * leaves the field as it was.
+ */
+const itemOpen = ref(false)
+const itemSaving = ref(false)
+const itemDraft = ref(blankItem())
+let itemResolve = null
+
+function blankItem() {
+	return { item_code: '', item_name: '', item_group: '', stock_uom: '' }
+}
+
+function createItem(typed) {
+	itemDraft.value = { ...blankItem(), item_code: typed || '', item_name: typed || '' }
+	itemOpen.value = true
+	return new Promise((resolve) => {
+		itemResolve = resolve
+	})
+}
+
+/** Hand the waiting `LinkField` its answer, exactly once. */
+function settleItem(row) {
+	const resolve = itemResolve
+	itemResolve = null
+	// Dismissing resolves with null rather than rejecting: cancelling a quick
+	// entry is an ordinary thing to do, not an error to report.
+	if (resolve) resolve(row || null)
+}
+
+// Covers the dismissals that never reach `saveItem` — the backdrop, the close
+// button, Escape. Without it the field would wait on a promise that never
+// settles and its "Creating…" spinner would never stop.
+watch(itemOpen, (open) => {
+	if (!open) settleItem(null)
+})
+
+const itemBlocker = computed(() => {
+	const d = itemDraft.value
+	if (!d.item_name.trim()) return 'Name the item'
+	if (!d.item_group) return 'Choose a group'
+	return null
+})
+
+async function saveItem() {
+	if (itemBlocker.value) return
+	itemSaving.value = true
+	try {
+		const values = {
+			// Falls back to the name, which is what a shop types on the packet.
+			// ERPNext names the record after the code, so leaving it blank would
+			// refuse the save for a field most shops do not distinguish anyway.
+			item_code: itemDraft.value.item_code.trim() || itemDraft.value.item_name.trim(),
+			item_name: itemDraft.value.item_name.trim(),
+			item_group: itemDraft.value.item_group,
+			stock_uom: itemDraft.value.stock_uom || undefined,
+		}
+		const res = await createMaster({ key: 'item', values })
+		const option = { label: `${res.title || values.item_name} · ${res.name}`, value: res.name }
+		itemOpen.value = false
+		settleItem(option)
+		emit('notify', { message: `${res.name} added`, tone: 'good' })
+	} catch (e) {
+		emit('notify', { message: e.message || 'Could not add that item', tone: 'bad' })
+	} finally {
+		itemSaving.value = false
+	}
+}
+
+const itemMasterFetcher = (fieldname) => (search) =>
+	getMasterOptions({ key: 'item', fieldname, search })
+
 function onCreateFor(field) {
+	// An item is the one target with a form of its own rather than a one-liner.
+	if (field.type === 'item') return createItem
+
 	const masterKey = QUICK_CREATE_MASTER[field.options]
 	if (!masterKey) return null
 	return async (typed) => {
@@ -377,12 +465,31 @@ const filledCharges = computed(() =>
 	landedCost.value.charges.filter((c) => Number(c.amount) > 0 && c.expense_account),
 )
 
+/**
+ * Fields that only become required once another one is ticked.
+ *
+ * Just the one so far, and it earns the mechanism: `is_paid` without an account
+ * is refused by ERPNext deep inside `validate_cash`, in a sentence naming
+ * neither the box that was ticked nor the field to fill in. Said here instead,
+ * on the button, before the save.
+ */
+const CONDITIONAL_REQUIRED = [{ when: 'is_paid', needs: 'cash_bank_account' }]
+
 /** What is stopping the save, or null. Named so the button can say it. */
 const blocker = computed(() => {
 	if (!form.value) return 'Loading'
+	const declared = new Set(form.value.fields.map((f) => f.fieldname))
 	const missing = form.value.fields
-		.filter((f) => f.required && !String(values.value[f.fieldname] ?? '').trim())
+		.filter((f) => f.required && f.type !== 'check' && !String(values.value[f.fieldname] ?? '').trim())
 		.map((f) => f.label)
+
+	for (const rule of CONDITIONAL_REQUIRED) {
+		if (!declared.has(rule.when) || !declared.has(rule.needs)) continue
+		if (values.value[rule.when] && !values.value[rule.needs]) {
+			missing.push(form.value.fields.find((f) => f.fieldname === rule.needs).label)
+		}
+	}
+
 	if (missing.length) return `Fill in ${missing.join(', ')}`
 	if (!filled.value.length) return 'Add at least one line'
 	if (landedCost.value.enabled && !filledCharges.value.length) {
@@ -458,6 +565,7 @@ async function save(submit) {
 function controlType(field) {
 	if (field.type === 'select') return 'select'
 	if (field.type === 'date') return 'date'
+	if (field.type === 'check') return 'checkbox'
 	if (field.type === 'number' || field.type === 'currency') return 'number'
 	return 'text'
 }
@@ -813,6 +921,51 @@ function optionsFor(field) {
 					label="Save and submit"
 					@click="save(true)"
 				/>
+			</div>
+		</template>
+	</Dialog>
+
+	<!-- "Add item", from the last option in any item field. A Dialog over the
+	     form being filled in, so the invoice is still there underneath when this
+	     closes — the whole point is not having to abandon it. -->
+	<Dialog v-model="itemOpen" :options="{ title: 'Add item', size: 'sm' }">
+		<template #body-content>
+			<div class="flex flex-col gap-2.5">
+				<FormControl v-model="itemDraft.item_name" type="text" label="Name *" @keyup.enter="saveItem" />
+				<FormControl
+					v-model="itemDraft.item_code"
+					type="text"
+					label="Code"
+					placeholder="Same as the name unless you use codes"
+				/>
+				<LinkField
+					v-model="itemDraft.item_group"
+					:fetcher="itemMasterFetcher('item_group')"
+					label="Group"
+					required
+				/>
+				<LinkField v-model="itemDraft.stock_uom" :fetcher="itemMasterFetcher('stock_uom')" label="Unit" />
+				<!-- Says what this does and does not do. An item created mid-purchase
+				     has no selling price, and a shop that discovers that at the till
+				     discovers it with a customer waiting. -->
+				<p class="text-p-xs leading-snug text-ink-gray-5">
+					Saved to Records and chosen for this line. Set a selling price under
+					Records → Items before it can be sold at the till.
+				</p>
+			</div>
+		</template>
+		<template #actions>
+			<div class="flex gap-2">
+				<Button
+					theme="gray"
+					variant="solid"
+					class="flex-1"
+					:loading="itemSaving"
+					:disabled="!!itemBlocker"
+					:label="itemBlocker || 'Add item'"
+					@click="saveItem"
+				/>
+				<Button variant="subtle" label="Cancel" @click="itemOpen = false" />
 			</div>
 		</template>
 	</Dialog>

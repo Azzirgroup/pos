@@ -15,6 +15,7 @@ declare module 'vue' {
     BottomSheet: typeof import('./src/components/BottomSheet.vue')['default']
     CartLine: typeof import('./src/components/CartLine.vue')['default']
     CartPanel: typeof import('./src/components/CartPanel.vue')['default']
+    CartPreview: typeof import('./src/components/CartPreview.vue')['default']
     ChartCard: typeof import('./src/components/charts/ChartCard.vue')['default']
     CustomerLedger: typeof import('./src/components/CustomerLedger.vue')['default']
     CustomerSheet: typeof import('./src/components/CustomerSheet.vue')['default']

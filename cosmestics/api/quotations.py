@@ -32,6 +32,19 @@ from cosmestics.api.search import search_rows
 #: list is a promise the shop cannot keep.
 DEFAULT_VALID_DAYS = 14
 
+#: ERPNext's own words for a quotation nobody is waiting on any more.
+#:
+#: `Ordered` and `Partially Ordered` are set by ERPNext when a Sales Order is
+#: raised against the quote, and by this app's own `mark_converted` — which
+#: fills in `ordered_qty` and lets ERPNext reach the conclusion itself, rather
+#: than forcing the status, because a forced one silently reverts on the next
+#: save (see the note there).
+#:
+#: `Lost` and `Closed` are a quote the shop has given up on. Both belong with
+#: the sold ones: the counter list answers "what have we promised that is still
+#: outstanding", and all four of these are answers to a different question.
+FINISHED_STATUSES = ("Ordered", "Partially Ordered", "Lost", "Closed")
+
 
 @frappe.whitelist(methods=["POST"])
 def create(
@@ -176,11 +189,28 @@ def list_quotations(
 	if cint(today_only):
 		filters["transaction_date"] = nowdate()
 
+	# Asking for the sold ones is asking to see them, whatever `include_sold`
+	# happens to say. Without this the two filters cancel out and the "ordered"
+	# tab is always empty — the one selection whose entire purpose is the rows
+	# the default hides.
+	if status == "ordered":
+		include_sold = 1
+
 	# A quote that has become a sale is finished business. It stays readable in
 	# the desk — and via `include_sold` — but the counter list is about promises
 	# still outstanding, and leaving sold ones in it was the complaint.
+	#
+	# **Two tests, because there are two ways a quote gets taken up.** The custom
+	# field is set when the till turns one into a Sales Invoice, which is the
+	# path this app owns. It is *not* set when somebody raises a Sales Order
+	# against the quote in the desk, or closes it as lost — ERPNext moves the
+	# status and knows nothing about our field. Checking only the field left
+	# those sitting in the counter list for ever with no way to clear them,
+	# which is indistinguishable, from behind the counter, from the till's own
+	# conversion having failed.
 	if not cint(include_sold):
 		filters["cosmestics_converted_invoice"] = ("is", "not set")
+		filters["status"] = ("not in", FINISHED_STATUSES)
 
 	if status == "open":
 		filters["status"] = ("in", ["Draft", "Open", "Replied"])

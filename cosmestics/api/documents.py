@@ -259,6 +259,38 @@ DOCUMENTS = [
 					"options": "Warehouse",
 					"default": "stock_warehouse",
 				},
+				# Most of this shop's buying is paid for on the spot — a runner
+				# comes back from the wholesaler with the goods and a receipt, not
+				# with thirty days of credit. Leaving it unticked kept booking
+				# those as payables that nobody would ever pay, so the ledger
+				# showed money owed to suppliers who had already been paid.
+				#
+				# Ticking it makes ERPNext settle the invoice against the account
+				# below in the same posting — see `_apply_paid_purchase`.
+				{
+					"fieldname": "is_paid",
+					"label": "Paid now",
+					"type": "check",
+					"help": "Tick when the goods were paid for on collection. Leave it off to owe the supplier.",
+				},
+				{
+					"fieldname": "cash_bank_account",
+					"label": "Paid from",
+					"type": "link",
+					"options": "Account",
+					# Cash and bank only. The field takes any account, and offering
+					# every one of them turns a two-tap answer into a search
+					# through the whole chart — including accounts that would post
+					# a purchase against, say, sales revenue.
+					"filters": {"account_type": ("in", ("Bank", "Cash"))},
+					"help": "Which till or bank account the money came out of.",
+				},
+				{
+					"fieldname": "mode_of_payment",
+					"label": "Paid by",
+					"type": "link",
+					"options": "Mode of Payment",
+				},
 			],
 			# A Purchase Invoice is one supplier's document — this per-line
 			# override exists so a bulk entry spanning several suppliers can
@@ -1251,7 +1283,10 @@ def link_options(key: str, fieldname: str, search: str | None = None, limit: int
 		frappe.throw(_("{0} is not a link field on this form").format(fieldname))
 
 	target = "Item" if field["type"] == "item" else field["options"]
-	filters = {}
+	# A field may narrow its own target — "Paid from" wants cash and bank
+	# accounts, not the whole chart. Declared in the registry beside the field
+	# rather than special-cased here, so the next one costs nothing.
+	filters = {k: v for k, v in (field.get("filters") or {}).items()}
 	meta = frappe.get_meta(target)
 	if meta.has_field("disabled"):
 		filters["disabled"] = 0
@@ -1447,6 +1482,11 @@ def _apply_stock_receipt(doc, values):
 #: Form field types whose value is a number, and must reach ERPNext as one.
 _NUMERIC_TYPES = {"number", "currency"}
 
+#: Values a checkbox can arrive as when it means "no". `"0"` is the one that
+#: matters: a string is truthy in Python, so an unticked box sent as `"0"` would
+#: otherwise book a purchase as paid.
+_FALSEY = {"0", "false", "no", "off", ""}
+
 
 def _typed(value, field_type):
 	"""Turn a form value into the type the document will do arithmetic on.
@@ -1479,6 +1519,15 @@ def _typed(value, field_type):
 	than zeroed. `flt` would silently turn a typo into 0, and a quantity that
 	quietly became nothing is far worse than one ERPNext refuses by name.
 	"""
+	if field_type == "check":
+		# A tick is 1 and everything else is 0, decided here rather than left to
+		# Frappe's cast: `"0"` is a non-empty string and therefore true in
+		# Python, and this particular checkbox decides whether a purchase is
+		# booked as already paid.
+		if isinstance(value, str):
+			return 0 if value.strip().lower() in _FALSEY else 1
+		return 1 if value else 0
+
 	if field_type not in _NUMERIC_TYPES or isinstance(value, (int, float)):
 		return value
 
@@ -1486,6 +1535,49 @@ def _typed(value, field_type):
 		return float(value)
 	except (TypeError, ValueError):
 		return value
+
+
+def _apply_paid_purchase(doc, values):
+	"""A purchase that was paid for on collection, settled in the same posting.
+
+	**Why ticking the box is not enough on its own.** ERPNext's `is_paid` only
+	does anything in company with `paid_amount` and `cash_bank_account`: the
+	payment GL entries are guarded on all three (`make_payment_gl_entries`), and
+	`validate_cash` throws if an amount is set with no account. Ticking the box
+	and nothing else produces an invoice that says it is paid, still shows the
+	full amount outstanding, and posts no payment at all — the worst of the
+	three possible outcomes, because it looks settled in the list.
+
+	So the amount is filled in here, from the invoice's own total rather than
+	asked for: a cash purchase is paid in full by definition. A part payment is
+	an invoice left unpaid and a Payment Entry afterwards, which is ERPNext's
+	shape for it and not something this form should be reinventing.
+
+	Totals are computed first because they do not exist yet — `set_missing_values`
+	prices the lines but does not add them up, so `grand_total` is still zero at
+	this point. `calculate_taxes_and_totals` will run again inside `validate`;
+	`paid_amount` survives it, because the recalculation of that field is guarded
+	to Sales Invoice.
+	"""
+	if doc.doctype != "Purchase Invoice" or not cint(values.get("is_paid")):
+		return
+
+	if not doc.get("cash_bank_account"):
+		# Said plainly, naming the field on this form. Left to ERPNext it
+		# surfaces as "Cash or Bank Account is mandatory for making payment
+		# entry", which names neither the box that was ticked nor the one to
+		# fill in.
+		frappe.throw(
+			_("Say which account this was paid from, or untick 'Paid now' to owe the supplier.")
+		)
+
+	doc.calculate_taxes_and_totals()
+
+	total = flt(doc.get("rounded_total") or doc.get("grand_total"))
+	doc.paid_amount = total
+	# In company currency, which is what the GL entries are written in. Equal to
+	# the above on a shop that buys in shillings, and not on one that does not.
+	doc.base_paid_amount = flt(total * flt(doc.get("conversion_rate") or 1))
 
 
 def _insert_one(doctype, spec, values, line_fields, lines, supplier_override, submit):
@@ -1540,6 +1632,9 @@ def _insert_one(doctype, spec, values, line_fields, lines, supplier_override, su
 	# Pulls prices, UOMs and the rest of what the desk would fill in for you.
 	if hasattr(doc, "set_missing_values"):
 		doc.set_missing_values()
+
+	# After the lines are priced: this reads the invoice's own total.
+	_apply_paid_purchase(doc, values)
 
 	doc.insert()
 	if cint(submit):
