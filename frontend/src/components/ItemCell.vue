@@ -1,5 +1,5 @@
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { fmtMoneyShort } from '@/utils/format'
 import LucideMinus from '~icons/lucide/minus'
 import LucidePlus from '~icons/lucide/plus'
@@ -72,15 +72,48 @@ const stockTone = computed(() => {
 })
 
 /**
- * A picture where the item has one, an icon where it does not.
+ * A picture where the item has one, the shop's own mark where it does not.
  *
  * Kept to a 32px square deliberately. This grid earns its speed from density —
  * a cashier scanning sixty products needs them all on one screen — so the
  * thumbnail is a recognition aid at the edge of the cell, not a product photo
  * the layout is built around.
+ *
+ * ## Why a broken photo and a missing one look the same
+ *
+ * `Item.image` is a path the shop's data carries, and it is routinely a path to
+ * a file that is not there: items imported from another site keep the old URL,
+ * and a file uploaded as **private** is served from `/private/files/…` while the
+ * field still reads `/files/…`, so the browser gets a 404 or a login page. On
+ * Frappe Cloud this shows up as every photo attempting to load and failing.
+ *
+ * Nothing in the till can repair that — the file genuinely is not at that
+ * address — so the only question is what the cell does about it. It used to
+ * drop the band entirely, which left that one cell shorter than its neighbours
+ * and the grid visibly ragged, reading as a rendering bug rather than as a
+ * missing photo. Now the band stays and shows the shop's mark: same height,
+ * same baseline, and a cell that plainly has no picture rather than one that
+ * looks broken.
  */
+const LOGO = '/assets/cosmestics/images/logo.svg'
+
 const broken = ref(false)
 const thumbnail = computed(() => (props.item.image && !broken.value ? props.item.image : null))
+
+/**
+ * Give a repaired photo another chance.
+ *
+ * The grid keys cells by item code, so this component survives a catalogue
+ * refresh — and with it a `broken` flag set an hour ago, against an image the
+ * shop has since fixed. Watching the path rather than the item means the reset
+ * happens exactly when there is something new to try.
+ */
+watch(
+	() => props.item.image,
+	() => {
+		broken.value = false
+	},
+)
 
 /**
  * Fallback icon by category. Keyword-matched rather than an exact table of item
@@ -121,10 +154,29 @@ const fallbackIcon = computed(() => {
 		     crop of a bottle is not something anyone recognises. Fixed height so
 		     the grid stays on one baseline whatever shape the uploads are. -->
 		<div
-			v-if="showImage && thumbnail"
+			v-if="showImage"
 			class="relative h-20 w-full shrink-0 overflow-hidden bg-surface-gray-2"
 		>
-			<img :src="thumbnail" alt="" class="h-full w-full object-cover" loading="lazy" @error="broken = true" />
+			<img
+				v-if="thumbnail"
+				:src="thumbnail"
+				alt=""
+				class="h-full w-full object-cover"
+				loading="lazy"
+				@error="broken = true"
+			/>
+			<!-- No photo, or one whose file is not where the item says it is. The
+			     shop's own mark, muted: it fills the band so the grid keeps one
+			     baseline, without pretending to be a picture of the product. -->
+			<div v-else class="grid h-full w-full place-items-center bg-surface-gray-1">
+				<img
+					:src="LOGO"
+					alt=""
+					aria-hidden="true"
+					class="h-9 w-9 opacity-25 grayscale"
+					draggable="false"
+				/>
+			</div>
 		</div>
 
 		<div class="flex min-w-0 flex-1 flex-col gap-0.5 px-2.5 py-2">

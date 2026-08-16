@@ -51,6 +51,7 @@ def get_catalog():
 	barcodes = _barcodes(codes)
 	stock_uoms = {i.item_code: i.stock_uom for i in items}
 	uoms = _sellable_uoms(codes, stock_uoms, prices)
+	images = _images(items)
 
 	rows = []
 	for it in items:
@@ -63,7 +64,7 @@ def get_catalog():
 				"price": flt(prices.get((it.item_code, it.stock_uom)) or prices.get((it.item_code, None))),
 				"stock": flt(stock.get(it.item_code)),
 				"barcodes": barcodes.get(it.item_code, []),
-				"image": it.image,
+				"image": images.get(it.item_code),
 				"uom": it.stock_uom,
 				# Every unit this may be sold in. One entry — the stock unit — on
 				# the vast majority of items, so the till only offers a choice
@@ -83,6 +84,65 @@ def get_catalog():
 		"warehouse": warehouse,
 		"empty": False,
 	}
+
+
+#: Where an uploaded file actually lives. Anything else in `Item.image` — an
+#: absolute URL to another site, an `/assets/…` path shipped with an app — is
+#: somebody's deliberate choice and is passed through untouched.
+_UPLOAD_PREFIXES = ("/files/", "/private/files/")
+
+
+def _images(items) -> dict:
+	"""Item photos, minus the ones that are not there.
+
+	`Item.image` is a path the shop's own data carries, and it is routinely a
+	path to a file this site does not have. Two ways that happens, both common:
+	items imported from another site keep the old URL, and a file uploaded as
+	**private** lives at `/private/files/…` while something later rewrites the
+	field to `/files/…`. Either way the browser asks for a file that is not
+	there and gets a 404 — or, worse, a login page with a 200 on it.
+
+	The till cannot repair that: the picture genuinely is not at that address.
+	What it can do is stop asking. A catalogue of six hundred items with stale
+	paths is six hundred doomed requests on a shop tablet, all of them racing
+	the ones that would have worked — which is what "images just try to load and
+	break" looks like from behind the counter. The cell draws the shop's mark
+	instead, immediately, rather than after a failed round trip (see
+	`ItemCell`).
+
+	**One query, not one per item**, like everything else in this module: the
+	uploaded paths are checked against `File.file_url` in a single `in` lookup.
+	Paths that are not uploads are not checked at all — an app asset or an
+	external URL has no File row and never will, and blanking those would be
+	this function deciding it knows better than the shop.
+	"""
+	paths = {
+		it.item_code: it.image
+		for it in items
+		if it.image and str(it.image).startswith(_UPLOAD_PREFIXES)
+	}
+
+	known = set()
+	if paths:
+		known = set(
+			frappe.get_all(
+				"File",
+				filters={"file_url": ("in", list(set(paths.values())))},
+				pluck="file_url",
+				limit_page_length=0,
+			)
+		)
+
+	out = {}
+	for it in items:
+		if not it.image:
+			continue
+		if it.item_code in paths and paths[it.item_code] not in known:
+			# The field says there is a photo and there is not. Left out rather
+			# than passed on, so the cell shows its placeholder straight away.
+			continue
+		out[it.item_code] = it.image
+	return out
 
 
 def _prices(codes, price_list) -> dict:
