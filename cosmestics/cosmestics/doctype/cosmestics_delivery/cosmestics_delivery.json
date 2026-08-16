@@ -1,0 +1,274 @@
+{
+ "actions": [],
+ "autoname": "naming_series:",
+ "creation": "2026-08-16 09:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "company",
+  "delivery_date",
+  "column_break_head",
+  "status",
+  "dispatched_at",
+  "delivered_at",
+  "order_section",
+  "sales_invoice",
+  "customer",
+  "column_break_order",
+  "customer_name",
+  "amount",
+  "rider_section",
+  "rider",
+  "rider_name",
+  "column_break_rider",
+  "rider_phone",
+  "courier",
+  "vehicle",
+  "where_section",
+  "contact_phone",
+  "address",
+  "column_break_where",
+  "landmark",
+  "map_location",
+  "notes_section",
+  "delivery_instructions",
+  "trip"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "DEL-.YYYY.-.#####.",
+   "reqd": 1
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Company",
+   "options": "Company",
+   "reqd": 1
+  },
+  {
+   "default": "Today",
+   "description": "The day this drop belongs to. What the list view filters on when a manager asks what is going out today.",
+   "fieldname": "delivery_date",
+   "fieldtype": "Date",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Delivery Date",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_head",
+   "fieldtype": "Column Break"
+  },
+  {
+   "default": "Pending",
+   "description": "Pending until it leaves, Dispatched once the rider has it, then Delivered or Failed.",
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Pending\nDispatched\nDelivered\nFailed",
+   "reqd": 1
+  },
+  {
+   "description": "Stamped by the app the moment the status becomes Dispatched. Not typed — a time somebody enters afterwards is the time they remembered, not the time it left.",
+   "fieldname": "dispatched_at",
+   "fieldtype": "Datetime",
+   "label": "Dispatched At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "delivered_at",
+   "fieldtype": "Datetime",
+   "label": "Delivered At",
+   "read_only": 1
+  },
+  {
+   "fieldname": "order_section",
+   "fieldtype": "Section Break",
+   "label": "Order"
+  },
+  {
+   "fieldname": "sales_invoice",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Sales Invoice",
+   "options": "Sales Invoice"
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "in_standard_filter": 1,
+   "label": "Customer",
+   "options": "Customer"
+  },
+  {
+   "fieldname": "column_break_order",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "customer_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Customer Name"
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "label": "Order Value",
+   "read_only": 1
+  },
+  {
+   "fieldname": "rider_section",
+   "fieldtype": "Section Break",
+   "label": "Rider"
+  },
+  {
+   "description": "Picked from the riders the shop already uses, or added on the spot.",
+   "fieldname": "rider",
+   "fieldtype": "Link",
+   "label": "Rider",
+   "options": "Cosmestics Rider",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "rider.rider_name",
+   "fetch_if_empty": 1,
+   "fieldname": "rider_name",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "Rider Name"
+  },
+  {
+   "fieldname": "column_break_rider",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fetch_from": "rider.phone",
+   "fetch_if_empty": 1,
+   "fieldname": "rider_phone",
+   "fieldtype": "Data",
+   "label": "Rider Phone",
+   "options": "Phone"
+  },
+  {
+   "fetch_from": "rider.courier",
+   "fetch_if_empty": 1,
+   "fieldname": "courier",
+   "fieldtype": "Data",
+   "label": "Courier",
+   "reqd": 1
+  },
+  {
+   "fetch_from": "rider.vehicle",
+   "fetch_if_empty": 1,
+   "fieldname": "vehicle",
+   "fieldtype": "Data",
+   "label": "Vehicle"
+  },
+  {
+   "fieldname": "where_section",
+   "fieldtype": "Section Break",
+   "label": "Where It Goes"
+  },
+  {
+   "description": "The customer's own number, pulled from their record and editable — the person receiving a parcel is often not the person who bought it.",
+   "fieldname": "contact_phone",
+   "fieldtype": "Data",
+   "label": "Contact Number",
+   "options": "Phone",
+   "reqd": 1
+  },
+  {
+   "fieldname": "address",
+   "fieldtype": "Small Text",
+   "label": "Address",
+   "reqd": 1
+  },
+  {
+   "fieldname": "column_break_where",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Building, shop, landmark — whatever a rider actually navigates by.",
+   "fieldname": "landmark",
+   "fieldtype": "Data",
+   "label": "Building / Landmark"
+  },
+  {
+   "description": "A pin, if the customer sent one. A map link or plain coordinates both work.",
+   "fieldname": "map_location",
+   "fieldtype": "Data",
+   "label": "Pinned Location"
+  },
+  {
+   "fieldname": "notes_section",
+   "fieldtype": "Section Break",
+   "label": "Instructions"
+  },
+  {
+   "description": "Fragile, time sensitive, call before arriving — anything the rider has to know.",
+   "fieldname": "delivery_instructions",
+   "fieldtype": "Small Text",
+   "label": "Delivery Note"
+  },
+  {
+   "description": "Set when this drop is loaded onto a run with other drops.",
+   "fieldname": "trip",
+   "fieldtype": "Link",
+   "label": "Delivery Trip",
+   "options": "Cosmestics Delivery Trip"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-08-16 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Cosmestics",
+ "name": "Cosmestics Delivery",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "email": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Sales User",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "create": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "Accounts User",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "customer_name",
+ "track_changes": 1
+}

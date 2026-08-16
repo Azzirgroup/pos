@@ -1,7 +1,9 @@
 <script setup>
 import { ref, computed, watch, nextTick } from 'vue'
 import { fmtMoney, fmtMoneyShort, round2 } from '@/utils/format'
+import { createRider, searchRiders } from '@/data/api'
 import BottomSheet from './BottomSheet.vue'
+import LinkField from './LinkField.vue'
 import LucideCheck from '~icons/lucide/check'
 import LucideUserPlus from '~icons/lucide/user-plus'
 import LucideAlertTriangle from '~icons/lucide/alert-triangle'
@@ -149,19 +151,81 @@ const isCredit = computed(() => method.value === 'credit')
 /* ---------- delivery ---------- */
 
 /**
- * Whether this sale leaves the shop on a van, and the details of the drop.
+ * Whether this sale leaves the shop with a rider, and the details of the drop.
  *
  * Captured here rather than assembled afterwards from the Deliveries screen:
  * the cashier is standing with the customer who is telling them the address. An
  * hour later it is remembered wrong or not at all — which is the whole reason
- * trips were being reconstructed by hand.
+ * deliveries were being reconstructed from memory.
  *
- * Only the driver and the destination are asked for at the counter. The vehicle
- * and the driver's number belong to the run, not the drop, and the server keeps
- * whatever the first stop supplied — see `deliveries.add_stop`.
+ * ## Why these fields are required and not others
+ *
+ * A delivery that cannot be acted on is worse than none: it looks recorded and
+ * nobody can do anything with it. Four things make it actionable — who is
+ * taking it, who they ride for, where it goes, and the number to ring when they
+ * cannot find it. Those are enforced. The landmark, the pin and the handling
+ * note all make a drop *easier* and none of them make it possible, so they are
+ * offered and never demanded.
+ *
+ * The status is not asked for at all. Everything created here is Pending;
+ * dispatching stamps a time and messages the customer, and neither should
+ * happen as a side effect of ringing up a sale.
  */
+const blankDelivery = () => ({
+	rider: '',
+	riderName: '',
+	riderPhone: '',
+	courier: '',
+	vehicle: '',
+	contactPhone: '',
+	address: '',
+	landmark: '',
+	mapLocation: '',
+	instructions: '',
+})
+
 const isDelivery = ref(false)
-const delivery = ref({ driverName: '', destination: '', driverPhone: '', vehicle: '', contactPhone: '' })
+const delivery = ref(blankDelivery())
+
+const riderFetcher = (search) => searchRiders(search)
+
+/**
+ * Creating a rider from the field itself.
+ *
+ * A boda rider the shop is using for the first time is the ordinary case at the
+ * exact moment this field is being filled in — not an edge case worth sending a
+ * cashier to a back-office screen for, with a customer waiting and the rider
+ * outside. The number can be added afterwards from the Records screen; what
+ * matters now is that the delivery points at a real rider rather than at a
+ * name.
+ */
+async function createRiderFor(typed) {
+	const row = await createRider({ riderName: typed, phone: delivery.value.riderPhone || null })
+	onRiderPicked(row)
+	return row
+}
+
+/** Fill in what the rider record already knows, without a second round trip. */
+function onRiderPicked(row) {
+	if (!row) return
+	delivery.value.riderName = row.rider_name || row.value || ''
+	// Only into blanks: a cashier who has typed today's number for a rider whose
+	// record still holds last year's meant the one they typed.
+	delivery.value.riderPhone = delivery.value.riderPhone || row.phone || ''
+	delivery.value.courier = delivery.value.courier || row.courier || ''
+	delivery.value.vehicle = delivery.value.vehicle || row.vehicle || ''
+}
+
+/** What is still missing before this delivery could be acted on, or null. */
+const deliveryBlocker = computed(() => {
+	if (!isDelivery.value) return null
+	const d = delivery.value
+	if (!d.rider && !d.riderName.trim()) return 'Choose the rider'
+	if (!d.courier.trim()) return 'Say which courier'
+	if (!d.contactPhone.trim()) return 'Add a contact number'
+	if (!d.address.trim()) return 'Add the delivery address'
+	return null
+})
 
 /* ---------- split tender & part payment ---------- */
 
@@ -227,12 +291,26 @@ function startSplit() {
  * the server sees a part-paid invoice and leaves the balance on the customer's
  * account. See `complete()`.
  */
-const splitOptions = computed(() => [
-	{ key: 'cash', label: 'Cash' },
-	...props.mpesaChannels,
-	{ key: 'card', label: 'Card' },
-	{ key: 'credit', label: 'On account (credit)' },
-])
+const splitOptions = computed(() => {
+	// The same tenders the main grid offers, not a second hand-written list.
+	// The old one named cash, the M-Pesa channels and card explicitly, which
+	// meant a shop that had set up Bank Transfer or a voucher mode could ring it
+	// up as a whole sale and not as half of one — and the list silently went
+	// stale every time the server's did.
+	const base = props.methods.length
+		? props.methods.map((m) => ({ key: m.key, label: m.label }))
+		: [
+				{ key: 'cash', label: 'Cash' },
+				...props.mpesaChannels.map((m) => ({ key: m.key, label: m.label })),
+				{ key: 'card', label: 'Card' },
+			]
+
+	// Credit last and named in full. It is not a Mode of Payment — it is the
+	// absence of one — and "cash and credit" is an ordinary thing to ask for at
+	// a counter, so it has to be sayable here rather than expressed by
+	// underpaying the split and hoping the remainder becomes a debt.
+	return [...base, { key: 'credit', label: 'On account (credit)' }]
+})
 
 /** Amount parked on the customer's account rather than taken now. */
 const creditPart = computed(() =>
@@ -272,8 +350,9 @@ function fillRemaining(i) {
  */
 const canComplete = computed(() => {
 	if (props.total <= 0) return false
-	// A trip with no driver is a record nobody can act on.
-	if (isDelivery.value && !delivery.value.driverName.trim()) return false
+	// A delivery missing any of the four fields that make it actionable is a
+	// record nobody can do anything with — see `deliveryBlocker`.
+	if (deliveryBlocker.value) return false
 	if (isCredit.value) return Boolean(props.customer)
 
 	if (splitMode.value) {
@@ -323,9 +402,29 @@ watch(
 		splitMode.value = false
 		parts.value = []
 		isDelivery.value = false
-		delivery.value = { driverName: '', destination: '', driverPhone: '', vehicle: '', contactPhone: '' }
+		delivery.value = blankDelivery()
+		// The number on file for whoever is buying, as a starting point. Editable
+		// because the person receiving a parcel is routinely not the person who
+		// paid for it.
+		delivery.value.contactPhone = props.customer?.mobile_no || props.customer?.phone || ''
 		await nextTick()
 		tenderedInput.value?.focus()
+	},
+)
+
+/**
+ * A customer named after the sheet opened still fills in the contact number.
+ *
+ * Naming the customer is routinely the *second* thing that happens here — the
+ * cashier reaches the pay sheet, finds they need a customer for the credit or
+ * the delivery, and picks one. Only into a blank, so a number already typed for
+ * whoever is actually receiving the parcel is never overwritten.
+ */
+watch(
+	() => props.customer,
+	(c) => {
+		if (!c || delivery.value.contactPhone) return
+		delivery.value.contactPhone = c.mobile_no || c.phone || ''
 	},
 )
 
@@ -751,8 +850,9 @@ function goBack() {
 				/>
 			</div>
 
-			<!-- Going out on a van. Collapsed by default — most sales are carried
-			     out of the shop, and a form nobody needs is a form in the way. -->
+			<!-- Going out with a rider. Collapsed by default — most sales are
+			     carried out of the shop, and a form nobody needs is a form in the
+			     way. -->
 			<div class="mb-2 rounded-xl border border-outline-gray-2">
 				<label class="flex min-h-touch cursor-pointer items-center gap-3 px-3 py-2.5">
 					<input v-model="isDelivery" type="checkbox" class="h-4 w-4 accent-gray-800" />
@@ -760,36 +860,88 @@ function goBack() {
 					<span class="text-p-base font-medium text-ink-gray-9">Deliver this order</span>
 				</label>
 
-				<div v-if="isDelivery" class="flex flex-col gap-2 border-t border-outline-gray-1 p-3">
-					<input
-						v-model="delivery.driverName"
-						type="text"
-						placeholder="Driver name (required)"
-						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+				<div v-if="isDelivery" class="flex flex-col gap-2.5 border-t border-outline-gray-1 p-3">
+					<!-- The rider is a record, not a name typed into a box: a delivery
+					     that goes missing is chased by phoning them, and a free-text
+					     "boda guy" cannot be phoned. New ones are created from the
+					     field itself — see `createRiderFor`. -->
+					<LinkField
+						v-model="delivery.rider"
+						:fetcher="riderFetcher"
+						:on-create="createRiderFor"
+						label="Rider"
+						required
+						@picked="onRiderPicked"
 					/>
-					<input
-						v-model="delivery.destination"
-						type="text"
-						placeholder="Destination — estate, street, landmark"
-						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
-					/>
+
 					<div class="grid grid-cols-2 gap-2">
 						<input
-							v-model="delivery.vehicle"
-							type="text"
-							placeholder="Vehicle"
+							v-model="delivery.riderPhone"
+							type="tel"
+							inputmode="tel"
+							placeholder="Rider phone"
 							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
 						/>
 						<input
-							v-model="delivery.contactPhone"
-							type="tel"
-							inputmode="tel"
-							placeholder="Customer phone"
+							v-model="delivery.courier"
+							type="text"
+							placeholder="Courier *"
 							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
 						/>
 					</div>
-					<p class="text-p-xs text-ink-gray-5">
-						Joins this driver's run for today if they already have one.
+
+					<!-- Pre-filled from the customer's record and editable, because the
+					     person receiving a parcel is routinely not the person who paid
+					     for it. -->
+					<input
+						v-model="delivery.contactPhone"
+						type="tel"
+						inputmode="tel"
+						placeholder="Contact number *"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+
+					<textarea
+						v-model="delivery.address"
+						rows="2"
+						placeholder="Address * — estate, street, house or shop number"
+						class="w-full resize-y rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 py-2 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+
+					<div class="grid grid-cols-2 gap-2">
+						<input
+							v-model="delivery.landmark"
+							type="text"
+							placeholder="Building or landmark"
+							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						/>
+						<input
+							v-model="delivery.mapLocation"
+							type="text"
+							placeholder="Pinned location (link)"
+							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						/>
+					</div>
+
+					<input
+						v-model="delivery.instructions"
+						type="text"
+						placeholder="Delivery note — fragile, time sensitive, call first…"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+
+					<!-- Says which field is missing rather than leaving the Complete
+					     button grey with no explanation — the failure mode this sheet
+					     has hit before with cash. -->
+					<p
+						v-if="deliveryBlocker"
+						class="rounded-lg bg-surface-amber-2 px-3 py-2 text-p-xs font-medium text-ink-amber-3"
+					>
+						{{ deliveryBlocker }}
+					</p>
+					<p v-else class="text-p-xs text-ink-gray-5">
+						Recorded as Pending. Dispatch it from Delivery when the rider takes it —
+						that is what stamps the time and tells the customer.
 					</p>
 				</div>
 			</div>

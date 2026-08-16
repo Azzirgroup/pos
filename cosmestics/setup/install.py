@@ -61,6 +61,8 @@ def setup_prerequisites():
 	ensure_pin_login_fields()
 	ensure_quote_conversion_fields()
 	ensure_material_request_customer_field()
+	ensure_print_formats()
+	ensure_notification_defaults()
 	ensure_app_icon()
 	# Must run after the field exists, and after `group` is known so a site
 	# upgrading from the group-only scheme keeps its existing neighbours.
@@ -230,6 +232,215 @@ def ensure_material_request_customer_field():
 			),
 		},
 	)
+
+
+#: Print formats this app owns, as {Print Format name: (doctype, html)}. Built
+#: rather than shipped as fixtures so a shop that has edited one keeps their
+#: edit — see `ensure_print_formats`.
+MATERIAL_REQUEST_FORMAT = "Cosmetics Stock Request"
+DELIVERY_LABEL_FORMAT = "Cosmetics Delivery Label"
+
+#: The request, as the shop would have written it on paper.
+#:
+#: Leads with the items, because the reader is being asked to fetch something
+#: and the reference number only matters once they have agreed to. The operator
+#: and the customer account sit under the table for the same reason the WhatsApp
+#: message puts them there — they answer "who do I give this to", which is a
+#: question you only have after deciding to act.
+_MATERIAL_REQUEST_HTML = """
+<div class="cosmetics-print">
+	<h2 style="margin:0 0 2px 0">Stock request</h2>
+	<div style="color:#666;font-size:12px;margin-bottom:12px">
+		{{ doc.name }} &middot; {{ doc.material_request_type }}
+		&middot; {{ frappe.format(doc.transaction_date, {"fieldtype": "Date"}) }}
+	</div>
+
+	<table class="table table-bordered" style="width:100%;font-size:13px">
+		<thead>
+			<tr>
+				<th style="width:8%">#</th>
+				<th style="width:44%">Item</th>
+				<th style="width:14%;text-align:right">Qty</th>
+				<th style="width:10%">UOM</th>
+				<th style="width:24%">To</th>
+			</tr>
+		</thead>
+		<tbody>
+			{% for row in doc.items %}
+			<tr>
+				<td>{{ loop.index }}</td>
+				<td>
+					<b>{{ row.item_name or row.item_code }}</b>
+					{% if row.item_name and row.item_name != row.item_code %}
+					<div style="color:#888;font-size:11px">{{ row.item_code }}</div>
+					{% endif %}
+				</td>
+				<td style="text-align:right">{{ frappe.format(row.qty, {"fieldtype": "Float"}) }}</td>
+				<td>{{ row.uom or "" }}</td>
+				<td>{{ row.warehouse or "" }}</td>
+			</tr>
+			{% endfor %}
+		</tbody>
+	</table>
+
+	<table style="width:100%;font-size:12px;margin-top:12px">
+		<tr>
+			<td style="width:50%;vertical-align:top">
+				<div><b>Requested by:</b> {{ frappe.get_fullname(doc.owner) }}</div>
+				{% if doc.get("cosmestics_for_customer") or doc.get("customer") %}
+				<div><b>For customer:</b>
+					{{ doc.get("cosmestics_for_customer") or doc.get("customer") }}</div>
+				{% endif %}
+			</td>
+			<td style="width:50%;vertical-align:top">
+				{% if doc.set_from_warehouse %}
+				<div><b>Comes from:</b> {{ doc.set_from_warehouse }}</div>
+				{% endif %}
+				<div><b>Needed by:</b>
+					{{ frappe.format(doc.schedule_date, {"fieldtype": "Date"}) or "as soon as possible" }}</div>
+			</td>
+		</tr>
+	</table>
+</div>
+"""
+
+#: The slip that gets taped to the carton.
+#:
+#: Big, and mostly address. It exists to replace somebody writing a name and a
+#: phone number on the box in marker pen, so the two things a rider reads at
+#: arm's length — where it goes and who to ring — are the two things set in
+#: large type. Everything else is a caption.
+_DELIVERY_LABEL_HTML = """
+<div class="cosmetics-print" style="font-size:14px">
+	<table style="width:100%;border-bottom:2px solid #000;padding-bottom:6px">
+		<tr>
+			<td><h2 style="margin:0">DELIVERY</h2></td>
+			<td style="text-align:right">
+				<div style="font-size:18px;font-weight:600">{{ doc.name }}</div>
+				<div style="color:#666;font-size:12px">
+					{{ frappe.format(doc.delivery_date, {"fieldtype": "Date"}) }}
+					&middot; {{ doc.status }}
+				</div>
+			</td>
+		</tr>
+	</table>
+
+	<div style="margin-top:14px">
+		<div style="color:#666;font-size:11px;text-transform:uppercase">Deliver to</div>
+		<div style="font-size:22px;font-weight:700">{{ doc.customer_name or doc.customer or "" }}</div>
+		<div style="font-size:20px;font-weight:600">{{ doc.contact_phone or "" }}</div>
+	</div>
+
+	<div style="margin-top:12px">
+		<div style="color:#666;font-size:11px;text-transform:uppercase">Address</div>
+		<div style="font-size:18px;line-height:1.35">{{ doc.address or "" }}</div>
+		{% if doc.landmark %}
+		<div style="font-size:16px">{{ doc.landmark }}</div>
+		{% endif %}
+		{% if doc.map_location %}
+		<div style="font-size:12px;color:#666">Pin: {{ doc.map_location }}</div>
+		{% endif %}
+	</div>
+
+	{% if doc.delivery_instructions %}
+	<div style="margin-top:12px;border:2px solid #000;padding:8px">
+		<div style="color:#666;font-size:11px;text-transform:uppercase">Handling</div>
+		<div style="font-size:17px;font-weight:600">{{ doc.delivery_instructions }}</div>
+	</div>
+	{% endif %}
+
+	<table style="width:100%;margin-top:14px;font-size:13px;border-top:1px solid #999;padding-top:8px">
+		<tr>
+			<td style="vertical-align:top">
+				<div style="color:#666;font-size:11px;text-transform:uppercase">Rider</div>
+				<div style="font-weight:600">{{ doc.rider_name or doc.rider or "" }}</div>
+				<div>{{ doc.rider_phone or "" }}</div>
+				{% if doc.courier %}<div>{{ doc.courier }}</div>{% endif %}
+				{% if doc.vehicle %}<div>{{ doc.vehicle }}</div>{% endif %}
+			</td>
+			<td style="vertical-align:top;text-align:right">
+				<div style="color:#666;font-size:11px;text-transform:uppercase">Order</div>
+				<div>{{ doc.sales_invoice or "" }}</div>
+				<div style="font-weight:600">
+					{{ frappe.format(doc.amount, {"fieldtype": "Currency"}) }}
+				</div>
+			</td>
+		</tr>
+	</table>
+
+	<div style="margin-top:22px;border-top:1px dashed #999;padding-top:8px;font-size:12px">
+		Received by ______________________________
+		&nbsp;&nbsp; Date __________________
+	</div>
+</div>
+"""
+
+
+def ensure_print_formats():
+	"""The two documents this app hands to a person on paper.
+
+	Created once and then left alone. A shop that has adjusted the wording or
+	the layout of its own delivery label has done so deliberately, and an app
+	that overwrites that on every migrate is an app whose print formats nobody
+	can customise. Only a format this app created and that nobody has since
+	touched is refreshed — and even that is judged by existence, not by diffing
+	HTML, because a whitespace change is not a reason to reset somebody's work.
+	"""
+	formats = [
+		(MATERIAL_REQUEST_FORMAT, "Material Request", _MATERIAL_REQUEST_HTML),
+		(DELIVERY_LABEL_FORMAT, "Cosmestics Delivery", _DELIVERY_LABEL_HTML),
+	]
+
+	for name, doctype, html in formats:
+		if not frappe.db.exists("DocType", doctype):
+			continue
+		if frappe.db.exists("Print Format", name):
+			continue
+
+		frappe.get_doc(
+			{
+				"doctype": "Print Format",
+				"name": name,
+				"doc_type": doctype,
+				"module": "Cosmestics",
+				"print_format_type": "Jinja",
+				# Not standard: a standard format is read from a file on disk and
+				# cannot be edited in the desk, which is the opposite of what a
+				# shop needs from a delivery label.
+				"standard": "No",
+				"custom_format": 1,
+				"disabled": 0,
+				"html": html.strip(),
+			}
+		).insert(ignore_permissions=True)
+
+
+def ensure_notification_defaults():
+	"""Point the notifications at something sensible on a fresh install.
+
+	Only ever fills blanks. Every field here is one a shop is expected to change
+	— which print format, which manager — and a migrate that resets them would
+	silently redirect a shop's messages back to whatever this file says.
+	"""
+	settings = frappe.get_single("Cosmestics POS Settings")
+	changed = False
+
+	defaults = {
+		"material_request_print_format": (
+			MATERIAL_REQUEST_FORMAT if frappe.db.exists("Print Format", MATERIAL_REQUEST_FORMAT) else None
+		),
+		"delivery_print_format": (
+			DELIVERY_LABEL_FORMAT if frappe.db.exists("Print Format", DELIVERY_LABEL_FORMAT) else None
+		),
+	}
+
+	for field, value in defaults.items():
+		if value and settings.meta.has_field(field) and not settings.get(field):
+			settings.set(field, value)
+			changed = True
+
+	if changed:
+		settings.save(ignore_permissions=True)
 
 
 def ensure_app_icon():

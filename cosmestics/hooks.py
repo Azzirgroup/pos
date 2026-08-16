@@ -107,6 +107,9 @@ doc_events = {
 		"validate": "cosmestics.api.pin.hash_user_pin",
 	},
 	"Sales Invoice": {
+		# Credit notes only: tells the customer their sale was reversed. Every
+		# other invoice falls straight through — see `on_sales_invoice_submit`.
+		"on_submit": "cosmestics.api.notifications.on_sales_invoice_submit",
 		# A cancelled sale reopens the quotation it came from — see
 		# `quotations.unmark_converted`.
 		"on_cancel": "cosmestics.api.quotations.on_sales_invoice_cancel",

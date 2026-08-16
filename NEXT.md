@@ -4,6 +4,136 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 58. "Internal Server Error after save or submit" on a Material Request
+
+Found and fixed. The request was being created correctly every time — the 500
+came *after* it, from the notification hook, and it looked like a failure of the
+thing that had just worked.
+
+`on_material_request_submit` called
+
+    frappe.enqueue(..., enqueue_after_commit=True)
+
+inside a `try`, on the assumption that the `try` covered it. It does not.
+`enqueue_after_commit` does not enqueue anything: it registers the call on
+`frappe.db.after_commit`, which Frappe runs **after** the `COMMIT` statement,
+long outside that function and outside any `except` it has. A Redis that is
+down, full or unreachable therefore threw from inside `db.commit()` during
+request teardown — with the Material Request already committed.
+
+So `queue_material_request_notice` now registers a callback that does its own
+enqueuing, wrapped. Same discipline for the two new notices. **If you add
+another `enqueue_after_commit=True` anywhere in this app, its failure reaches
+the user as a 500 on a document that saved.** Use the same shape.
+
+### 57. The material-request notice carries the document, not a spreadsheet
+
+The staff group used to get the table as text plus a CSV. A CSV opens in
+nothing on a phone, which is where the group is read, so the attachment is now
+the **PDF of the request itself** — the same thing the shop would have printed
+and handed over.
+
+Group sends could not attach a PDF before: `whatsapp_integration`'s document
+send takes a `phone_number` and cannot address a group at all. `publish_pdf`
+renders and publishes it (public, like the integration's own attachments — the
+bridge fetches it over plain HTTP in a separate request), and `send_file`
+already knew how to put a file into a group with `chat_id`.
+
+The message names the requesting operator and the customer account as well as
+the items, and both it and the print format are **configurable rather than
+shipped**: `material_request_template` (Jinja, rendered with `doc`, `operator`,
+`customer`, `items`, `link`) and `material_request_print_format` in POS
+Settings. A template that throws falls back to the built-in wording and logs —
+a message in the wrong words beats no message.
+
+`Cosmetics Stock Request` is the print format the installer creates. It is
+created **once and then left alone**, like the delivery label: a shop that has
+adjusted its own wording should not have it reset on every migrate.
+
+### 56. Stock balances beside the lines of a material request
+
+A request is an argument that something is needed, made by somebody who cannot
+see the shelf they are asking about — that is why they are asking. The form now
+shows what the shop holds beside each line, red at zero and amber when the
+quantity asked for exceeds it.
+
+Declared by the registry (`"show_stock": {"warehouse_field": …}`), not by the
+form component, so `DocumentFormSheet` still knows nothing about any particular
+doctype. `stock.item_stock` is a new endpoint rather than the existing
+`warehouse_qtys` because that one returns nothing when no warehouse is chosen,
+and a Purchase request never has one — it answers "here" *and* "anywhere", which
+are different answers ("none here but forty in the back" is not "none").
+
+### 55. Deliveries are documents now
+
+`Cosmestics Delivery` — one order, one address, one status — alongside the
+existing `Cosmestics Delivery Trip`, which is the *run*. The distinction is the
+whole design: a shop asking "what is going out today" is asking about drops, and
+a child row on a trip cannot be listed, filtered or printed on its own.
+
+Carries the seven fields the shop asked for: rider (a `Cosmestics Rider` link,
+creatable from the field itself mid-sale), contact number pulled from the
+customer and editable, address plus landmark plus an optional pin, courier, the
+dispatch timestamp, the status, and the handling note.
+
+Decisions worth keeping:
+
+- **Not submittable.** The whole life of a delivery is its status moving, and a
+  submitted document that must still change needs `allow_on_submit` on every
+  field it has. Nothing here touches stock or a ledger — the invoice behind it
+  did both — so a docstatus would be protecting nothing.
+- **`dispatched_at` is stamped by the transition**, never typed. A time entered
+  afterwards is the time somebody remembered, and the reason to record a
+  dispatch is to be able to say how long a drop took.
+- **The notice fires from `on_update`, not from the API.** A status changed in
+  the desk therefore behaves exactly like one changed at the till.
+- **Riders are their own tiny master.** Not a Supplier (a boda rider will never
+  be billed) and not an Employee (needs a company, a joining date and a payroll
+  answer the shop does not have).
+- Sales create them **Pending**. Dispatching stamps a time and messages the
+  customer, and neither should happen as a side effect of ringing up a sale.
+
+`Cosmetics Delivery Label` is the carton slip — big, mostly address, with a
+signature line, to replace writing on the box in marker pen.
+
+### 54. Receivables came out of the closing sheet
+
+`/credit`, on the till strip beside Delivery. It was a tab inside the sheet
+whose primary action is "Close shift", so a cashier taking a payment
+mid-morning was one mis-tap from ending the day — the same mistake that moved
+Expenses out to its own page.
+
+**A row is a customer, not an invoice.** Somebody walks in and says "I've come
+to pay"; they do not know which invoice they mean and neither does the cashier.
+Leading with invoices makes that a guessing game whose wrong answers scatter one
+customer's payments across documents in no order, and the ageing report becomes
+fiction.
+
+So `credit.pay_customer` allocates **oldest first**, as the shop asked and as
+ERPNext's own ageing assumes. One Payment Entry with several reference rows, not
+one entry per invoice: the customer handed over one amount. Overpayment stays on
+the entry as an unallocated advance and is reported rather than refused. The
+sheet previews the split before anything posts, and a cashier who *does* know
+which invoice they mean can still tap it and pay that one.
+
+### 53. Three smaller things the shop asked for
+
+- **Dashboard tiles stopped cutting numbers off.** `valueSize` shrank the figure
+  but `truncate` was still on the element, so the smallest step was a floor
+  rather than a fix and a seven-figure total still clipped on a two-column
+  phone. It wraps now (`break-words`, so it splits between thousands groups). A
+  tile one line taller is a nuisance; a revenue card that will not say what the
+  revenue was is a bug.
+- **Split payments list every tender, credit included.** The split rows named
+  cash, the M-Pesa channels and card explicitly, so a shop's own modes (Bank
+  Transfer, a voucher) could be a whole sale and not half of one — and the list
+  went stale whenever the server's did. It reads `props.methods` now, with
+  "On account (credit)" appended.
+- **A reversal tells the customer.** `on_sales_invoice_submit` acts only on
+  credit notes and messages the number on file, plus the manager. Amounts are
+  printed positive and the method is named: a customer told "refunded" who then
+  finds nothing in their hand is what naming cash-versus-account prevents.
+
 ### 52. `bench execute smoke.run` does **not** roll back everything
 
 The docstring's promise — "Safe to run against a live site: the transaction is

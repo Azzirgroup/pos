@@ -172,6 +172,283 @@ def pay_credit_sale(
 	}
 
 
+@frappe.whitelist()
+def list_credit_customers(days: int = DEFAULT_DAYS, limit: int = 200) -> dict:
+	"""Who owes the shop money, and how much.
+
+	The other half of `list_credit_sales`. That one answers "which sales are
+	unpaid", which is the right shape for chasing a document; this answers "who
+	owes us", which is the shape of the question actually asked at a counter —
+	a customer walks in to pay and nobody knows which of their four invoices
+	they mean. They do not know either, which is why the payment reconciles
+	itself (see `pay_customer`).
+
+	Built from the same invoices rather than from a balance query, so the total
+	on this list and the total on that one cannot disagree.
+	"""
+	sales = list_credit_sales(days=days, this_shift=0, limit=limit)
+
+	customers = {}
+	for row in sales["rows"]:
+		entry = customers.setdefault(
+			row["customer"],
+			{
+				"customer": row["customer"],
+				"customer_name": row["customer_name"],
+				"outstanding": 0.0,
+				"overdue": 0.0,
+				"invoices": 0,
+				# The oldest unpaid one — the invoice a payment lands on first,
+				# so the list can say so before anybody presses anything.
+				"oldest_date": row["date"],
+				"oldest_invoice": row["name"],
+				"phone": None,
+			},
+		)
+		entry["outstanding"] += row["outstanding"]
+		if row["overdue"]:
+			entry["overdue"] += row["outstanding"]
+		entry["invoices"] += 1
+		if row["date"] < entry["oldest_date"]:
+			entry["oldest_date"] = row["date"]
+			entry["oldest_invoice"] = row["name"]
+
+	rows = sorted(customers.values(), key=lambda r: r["outstanding"], reverse=True)
+
+	# One lookup for the page rather than one per row: this list is refreshed on
+	# every filter change and every payment.
+	if rows:
+		meta = frappe.get_meta("Customer")
+		field = next((f for f in ("mobile_no", "phone") if meta.has_field(f)), None)
+		if field:
+			phones = dict(
+				frappe.get_all(
+					"Customer",
+					filters={"name": ("in", [r["customer"] for r in rows])},
+					fields=["name", field],
+					as_list=True,
+				)
+			)
+			for r in rows:
+				r["phone"] = phones.get(r["customer"])
+
+	return {
+		"rows": rows,
+		"totals": {
+			"customers": len(rows),
+			"outstanding": flt(sum(r["outstanding"] for r in rows)),
+			"overdue": flt(sum(r["overdue"] for r in rows)),
+			"invoices": sum(r["invoices"] for r in rows),
+		},
+		"reason": None if rows else _("Nobody owes anything in this window."),
+	}
+
+
+@frappe.whitelist()
+def customer_credit(customer: str, days: int = DEFAULT_DAYS) -> dict:
+	"""One customer's unpaid sales, oldest first.
+
+	Oldest first rather than newest, deliberately: this is the order a payment
+	is going to be applied in, and a list that shows the opposite invites a
+	cashier to expect the opposite. See `pay_customer`.
+	"""
+	sales = list_credit_sales(days=days, this_shift=0, limit=500)
+	rows = [r for r in sales["rows"] if r["customer"] == customer]
+	rows.sort(key=lambda r: (r["date"], r["name"]))
+
+	return {
+		"customer": customer,
+		"customer_name": rows[0]["customer_name"] if rows else customer,
+		"rows": rows,
+		"totals": {
+			"count": len(rows),
+			"outstanding": flt(sum(r["outstanding"] for r in rows)),
+			"overdue": flt(sum(r["outstanding"] for r in rows if r["overdue"])),
+		},
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def pay_customer(
+	customer: str,
+	amount: float,
+	mode_of_payment: str | None = None,
+	reference: str | None = None,
+	days: int = DEFAULT_DAYS,
+) -> dict:
+	"""Take money from a customer and settle it against their oldest sales first.
+
+	## Why oldest first, and why one payment rather than several
+
+	The shop asked for exactly this, and it is also the only rule that works at
+	a counter. A customer paying 20,000 against a 50,000 invoice and a later
+	30,000 one is not choosing between them — they are paying down what they
+	owe. Asking the cashier which invoice to apply it to makes them guess, and
+	the guesses drift: the same customer's payments end up scattered across
+	invoices in no order, and the ageing report becomes fiction.
+
+	Oldest first is what ERPNext's own ageing assumes, so a shop that follows it
+	gets a receivables report that means something.
+
+	The money moves as **one** Payment Entry with several reference rows, not
+	one entry per invoice. Two reasons. A customer handed over one amount, and
+	a ledger that shows three payments for one handover is a ledger somebody has
+	to reconcile by hand. And a part-allocated entry is ERPNext's ordinary shape
+	— `get_payment_entry` builds exactly this — so nothing here is invented.
+
+	Anything left over after every invoice is settled stays on the entry as an
+	unallocated advance against the customer, which is what it is. It is
+	reported back rather than refused: a customer overpaying by 200 shillings is
+	an ordinary thing, and bouncing the whole payment over it is not.
+	"""
+	amount = flt(amount)
+	if amount <= 0:
+		frappe.throw(_("Enter how much is being paid"))
+
+	if not frappe.db.exists("Customer", customer):
+		frappe.throw(_("{0} is not a customer").format(customer))
+
+	owed = customer_credit(customer, days=days)
+	if not owed["rows"]:
+		frappe.throw(_("{0} does not owe anything").format(customer))
+
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	mode = mode_of_payment or settings.mode_cash or frappe.db.get_value(
+		"Mode of Payment", {"type": "Cash", "enabled": 1}, "name"
+	)
+	if not mode:
+		frappe.throw(_("No mode of payment to receive this through"))
+
+	# The allocation, worked out before anything is written, so the split can be
+	# reported exactly as it was applied.
+	remaining = amount
+	allocation = []
+	for row in owed["rows"]:
+		if remaining <= 0.005:
+			break
+		applied = min(remaining, row["outstanding"])
+		if applied <= 0:
+			continue
+		allocation.append(
+			{
+				"invoice": row["name"],
+				"date": row["date"],
+				"was_owed": row["outstanding"],
+				"applied": flt(applied, 2),
+				"now_owed": flt(row["outstanding"] - applied, 2),
+			}
+		)
+		remaining -= applied
+
+	entry = _make_customer_payment_entry(customer, amount, allocation, mode, reference)
+	movement = _record_customer_receipt(customer, owed["customer_name"], amount, mode, entry)
+
+	settled = [a["invoice"] for a in allocation if a["now_owed"] <= 0.005]
+
+	return {
+		"payment_entry": entry,
+		"customer": customer,
+		"customer_name": owed["customer_name"],
+		"paid": flt(amount, 2),
+		"allocated": allocation,
+		"settled": settled,
+		# What could not be put against an invoice — an overpayment, sitting as
+		# an advance on the customer's account.
+		"unallocated": flt(max(remaining, 0), 2),
+		"outstanding": flt(max(owed["totals"]["outstanding"] - amount, 0), 2),
+		"mode_of_payment": mode,
+		"movement": movement,
+	}
+
+
+def _make_customer_payment_entry(customer, amount, allocation, mode, reference):
+	"""One Payment Entry, allocated across the invoices in `allocation`.
+
+	Built from ERPNext's own `get_payment_entry` against the oldest invoice so
+	the accounts, party fields and exchange rates are whatever ERPNext would
+	have used — then the reference table is replaced with the full allocation.
+	Hand-rolling the whole entry would be a second implementation of party
+	accounting that only this app knows about; hand-rolling only the reference
+	rows is the part ERPNext has no single-call API for.
+	"""
+	from erpnext.accounts.doctype.payment_entry.payment_entry import get_payment_entry
+
+	first = allocation[0]["invoice"]
+	pe = get_payment_entry("Sales Invoice", first, party_amount=amount)
+	pe.mode_of_payment = mode
+	pe.reference_no = reference or f"{customer} payment"
+	pe.reference_date = nowdate()
+	pe.posting_date = nowdate()
+	pe.paid_amount = amount
+	pe.received_amount = amount
+
+	account = frappe.db.get_value(
+		"Mode of Payment Account", {"parent": mode, "company": pe.company}, "default_account"
+	)
+	if account:
+		pe.paid_to = account
+
+	pe.set("references", [])
+	for row in allocation:
+		invoice = frappe.db.get_value(
+			"Sales Invoice", row["invoice"], ["grand_total", "outstanding_amount", "due_date"], as_dict=True
+		)
+		pe.append(
+			"references",
+			{
+				"reference_doctype": "Sales Invoice",
+				"reference_name": row["invoice"],
+				"due_date": invoice.due_date,
+				"total_amount": flt(invoice.grand_total),
+				"outstanding_amount": flt(invoice.outstanding_amount),
+				"allocated_amount": row["applied"],
+			},
+		)
+
+	pe.setup_party_account_field()
+	pe.set_missing_values()
+	# After `set_missing_values`, which can recompute the pair from the
+	# references it now sees — and the shop handed over one amount, not the sum
+	# of what happened to fit.
+	pe.paid_amount = amount
+	pe.received_amount = amount
+	pe.set_amounts()
+	pe.insert(ignore_permissions=True)
+	pe.submit()
+	return pe.name
+
+
+def _record_customer_receipt(customer, customer_name, amount, mode, entry):
+	"""Tell the open shift that money came in — see `_record_till_receipt`.
+
+	The same reasoning, for a payment that spans several invoices: without this
+	the cash is in the drawer and the shift's expected total does not know about
+	it, so the count comes up over with nothing on screen explaining why.
+	"""
+	from cosmestics.api.shift import get_open_shift, post_movement
+
+	if not get_open_shift():
+		return None
+
+	try:
+		return post_movement(
+			movement_type="Credit Payment",
+			amount=amount,
+			mode_of_payment=mode,
+			party=None,
+			person=customer_name or customer,
+			reason=_("{0} paid {1} against their account").format(
+				customer_name or customer,
+				frappe.format_value(amount, {"fieldtype": "Currency"}),
+			),
+			reference_doctype="Payment Entry",
+			reference_name=entry,
+		)
+	except Exception:
+		frappe.log_error(f"Could not record the till receipt for {entry}", "Cosmetics POS")
+		return None
+
+
 def _make_payment_entry(invoice, amount, mode, reference):
 	"""An ordinary Payment Entry, allocated against the invoice.
 

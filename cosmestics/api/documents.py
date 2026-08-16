@@ -425,6 +425,19 @@ DOCUMENTS = [
 			# Every line needs a warehouse and a date of its own; ERPNext validates
 			# them per row, and asking for them twice on a form this small is noise.
 			"line_from_header": {"warehouse": "set_warehouse", "schedule_date": "schedule_date"},
+			# Show what the shop already holds beside each line.
+			#
+			# A request is an argument that something is needed, and the person
+			# making it usually cannot see the shelf they are asking about — that
+			# is the whole reason they are asking. Without a balance on screen the
+			# only way to check is to leave the form, which nobody does under a
+			# queue, so requests get raised for stock that is already in the back.
+			#
+			# `warehouse_field` names which header field decides "here". For a
+			# transfer that is the branch being asked, which is the balance that
+			# actually answers "can they send it?" — the destination's own count is
+			# the number the requester can already see.
+			"show_stock": {"warehouse_field": "set_from_warehouse"},
 		},
 	},
 	{
@@ -1210,6 +1223,11 @@ def new_document_form(key: str) -> dict:
 		"fields": [prepare(f) for f in spec["fields"]],
 		"items": [prepare(f) for f in spec["items"]],
 		"hint": _(spec["hint"]) if spec.get("hint") else None,
+		# Whether the form should show a stock balance beside each line, and
+		# which header field says where "here" is. Declared by the registry
+		# rather than decided in the browser, so the form component still knows
+		# nothing about any particular doctype.
+		"show_stock": spec.get("show_stock"),
 		"can_submit": frappe.has_permission(doctype, "submit")
 		and bool(frappe.get_meta(doctype).is_submittable),
 	}

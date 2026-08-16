@@ -27,7 +27,7 @@ import {
 	recordMovement as apiRecordMovement,
 	voidMovement as apiVoidMovement,
 	createQuotation,
-	addDeliveryStop,
+	createDelivery,
 	markQuotationConverted,
 	updateQuotation,
 	listCreditSales,
@@ -91,6 +91,13 @@ const MODES = [
 	{ label: 'Customer', value: 'customer' },
 	{ label: 'Expenses', value: 'expenses' },
 	{ label: 'Neighbours', value: 'neighbours' },
+	// Both asked for by the shop, and both belong on this strip for the same
+	// reason Expenses does: they are things done *between* sales, at the
+	// counter, several times a day. Delivery sits beside Neighbours because
+	// that is where the shop asked for it; Credit sits beside Delivery for the
+	// same reason. The order is theirs, not ours.
+	{ label: 'Delivery', value: 'delivery' },
+	{ label: 'Credit', value: 'credit' },
 ]
 const mode = ref('menu')
 
@@ -102,6 +109,12 @@ watch(mode, (m) => {
 	// who wanted to write down bus fare.
 	if (m === 'expenses') router.push('/expenses')
 	if (m === 'neighbours') router.push('/neighbours')
+	if (m === 'delivery') router.push('/deliveries')
+	// Receivables, lifted out of the closing sheet. It was reachable only by
+	// opening the sheet whose main action is "Close shift", which is one
+	// mis-tap from ending the day of a cashier who wanted to take a payment —
+	// exactly the mistake Expenses was moved out to avoid.
+	if (m === 'credit') router.push('/credit')
 	// The tabs are actions, not destinations; snap back so the label never lies
 	// about which view you are on.
 	if (m !== 'menu') setTimeout(() => (mode.value = 'menu'), 150)
@@ -1197,15 +1210,19 @@ async function completeSale(payment) {
 			}
 		}
 
-		// On a van. Done after the invoice exists, because a trip stop points at
-		// one — and separately from the sale, so a delivery that cannot be
-		// recorded never costs the shop the sale itself.
-		if (payment.delivery?.driverName) {
+		// Going out with a rider. Done after the invoice exists, because the
+		// delivery points at one — and separately from the sale, so a delivery
+		// that cannot be recorded never costs the shop the sale itself.
+		if (payment.delivery?.rider || payment.delivery?.riderName) {
 			try {
-				const trip = await addDeliveryStop({ invoice: res.invoice, ...payment.delivery })
-				notify(trip.message, 'ok')
+				const drop = await createDelivery({
+					invoice: res.invoice,
+					customer: snapshot.customer,
+					...payment.delivery,
+				})
+				notify(drop.message, 'ok')
 			} catch (e) {
-				console.error('[pos] delivery stop failed', e)
+				console.error('[pos] delivery failed', e)
 				notify(
 					`Sale posted, but the delivery was not recorded: ${e.message || 'server error'}`,
 					'warn',

@@ -576,6 +576,94 @@ def send_file(to: str, message: str, media_url: str, filename: str) -> bool:
 		return False
 
 
+def publish_pdf(doctype: str, name: str, print_format: str | None = None) -> str | None:
+	"""Render a document to a PDF the bridge can fetch, and return its URL.
+
+	**Why this exists alongside `send_document`.** The integration's own document
+	send takes a `phone_number` and cannot address a group at all — see the note
+	there — so a request posted to the staff group could only ever go as text.
+	Rendering the PDF ourselves and publishing it turns the group send into an
+	ordinary media send, which `send_file` already knows how to do.
+
+	Public, for the same reason the CSV and the integration's own attachments
+	are: waclient pulls the file over plain HTTP in a separate request, and a
+	private File would come back as a login page. Unguessable, not
+	access-controlled.
+
+	Returns None rather than raising when the render fails. Every caller is a
+	notification, and a print format somebody has customised into an unprintable
+	page size must not be able to stop the message going out — the text still
+	carries the figures.
+	"""
+	try:
+		printed = frappe.attach_print(
+			doctype,
+			name,
+			file_name=name.replace(" ", "-"),
+			print_format=print_format or None,
+		)
+	except Exception as e:
+		frappe.log_error(f"Could not render {doctype} {name} to PDF: {e}", "Cosmetics POS")
+		return None
+
+	try:
+		doc = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": printed["fname"],
+				"content": printed["fcontent"],
+				"is_private": 0,
+			}
+		)
+		doc.insert(ignore_permissions=True)
+		# Committed so the bridge can fetch it: it reads the file over HTTP in
+		# another request, which cannot see an uncommitted transaction.
+		frappe.db.commit()
+	except Exception as e:
+		frappe.log_error(f"Could not publish the PDF of {doctype} {name}: {e}", "Cosmetics POS")
+		return None
+
+	return f"{frappe.utils.get_url()}{doc.file_url}"
+
+
+def send_with_pdf(
+	to: str,
+	message: str,
+	doctype: str,
+	name: str,
+	print_format: str | None = None,
+) -> bool:
+	"""The message, with the document's own PDF attached, to a number or a group.
+
+	Degrades in one direction only: no PDF is still a message, but no message is
+	nothing at all. So a failed render falls back to sending the text, which
+	already carries what the reader needs to act.
+	"""
+	url = publish_pdf(doctype, name, print_format)
+	if url and send_file(to, message, url, f"{name.replace(' ', '-')}.pdf"):
+		return True
+	return send_text(to, message)
+
+
+def render_template(template: str | None, context: dict, fallback: str) -> str:
+	"""A shop's own wording where they have set one, ours where they have not.
+
+	Rendered rather than formatted so the template can loop over the items — the
+	whole point of letting a shop write it is that they know which of their
+	fields matter. A broken template falls back to the built-in text rather than
+	killing the notification: a message in the wrong words beats no message, and
+	the error goes to the log where somebody can fix the template.
+	"""
+	if not template or not str(template).strip():
+		return fallback
+
+	try:
+		return frappe.render_template(str(template), context).strip() or fallback
+	except Exception as e:
+		frappe.log_error(f"WhatsApp message template failed: {e}", "Cosmetics POS")
+		return fallback
+
+
 def publish_csv(filename: str, columns: list, rows: list) -> str | None:
 	"""Write rows to a CSV the bridge can fetch, and return its URL.
 
@@ -940,12 +1028,37 @@ def _table(headers: list, rows: list) -> str:
 	return "```\n" + "\n".join(body) + "\n```"
 
 
+def request_customer(doc) -> str | None:
+	"""Whose account a request is being brought in for, if anyone's.
+
+	This app's own field first — ERPNext blanks the standard `customer` on every
+	request type except "Customer Provided", so a name typed there on a transfer
+	is silently discarded, which is exactly why the custom field exists (see
+	`install.ensure_material_request_customer_field`). The standard field is
+	still read as a fallback, for requests raised in the desk on a type that
+	keeps it.
+	"""
+	for field in ("cosmestics_for_customer", "customer"):
+		value = doc.get(field) if hasattr(doc, "get") else None
+		if value:
+			return value
+	return None
+
+
 def format_material_request(doc) -> str:
-	"""What is needed, as a table.
+	"""What is needed, who is asking, and who it is for.
 
 	Leads with the goods rather than with document metadata: the person reading
 	this on a phone is being asked to fetch something, and the reference number
 	only matters once they have decided to.
+
+	The operator and the customer account come after the table for the same
+	reason. They are what the reader needs *once they have decided to act* — who
+	to hand it to, and whose name to put on it — and putting them first would
+	push the list of items off a phone screen.
+
+	A shop that wants different wording sets a template in POS Settings; this is
+	what they get until they do. See `render_template`.
 	"""
 	rows = []
 	for item in doc.items:
@@ -958,22 +1071,48 @@ def format_material_request(doc) -> str:
 			]
 		)
 
+	table = _table(["Qty", "Item", "To"], rows)
+	operator = frappe.utils.get_fullname(doc.owner)
+	customer = request_customer(doc)
+	link = app_url("/documents/material-request")
+
 	lines = [
 		"*Stock request*",
 		f"{doc.name} · {doc.material_request_type}",
 		"",
-		_table(["Qty", "Item", "To"], rows),
+		table,
 	]
 
 	if getattr(doc, "set_from_warehouse", None):
 		lines.append(f"From: {doc.set_from_warehouse}")
 
 	lines.append(f"Needed by: {doc.schedule_date or 'as soon as possible'}")
-	lines.append(f"Raised by {frappe.utils.get_fullname(doc.owner)}")
+	lines.append(f"Requested by: {operator}")
+	# Only when there is one. "For: —" on the nine requests out of ten that are
+	# for the shelf is a line that teaches the reader to skip the block.
+	if customer:
+		lines.append(f"For customer: {customer}")
 	lines.append("")
-	lines.append(app_url("/documents/material-request"))
+	lines.append(link)
 
-	return "\n".join(lines)
+	fallback = "\n".join(lines)
+
+	try:
+		template = _settings().get("material_request_template")
+	except Exception:
+		return fallback
+
+	return render_template(
+		template,
+		{
+			"doc": doc,
+			"operator": operator,
+			"customer": customer,
+			"items": table,
+			"link": link,
+		},
+		fallback,
+	)
 
 
 def on_material_request_submit(doc, method=None):
@@ -989,25 +1128,66 @@ def on_material_request_submit(doc, method=None):
 	except Exception:
 		return
 
+	queue_material_request_notice(doc.name)
+
+
+def queue_material_request_notice(docname: str):
+	"""Hand the send to a worker, and never let that failure reach the caller.
+
+	**This is where an "internal server error after submit" came from.** The
+	enqueue used to be written as
+
+	    frappe.enqueue(..., enqueue_after_commit=True)
+
+	inside a `try`, on the assumption that the `try` covered it. It does not:
+	`enqueue_after_commit` does not enqueue anything — it registers the call on
+	`frappe.db.after_commit`, which Frappe runs *after* the `COMMIT` statement,
+	long outside this function and outside any `except` it has. A Redis that is
+	down, full or unreachable therefore threw from inside `db.commit()` during
+	request teardown, which is a 500 the browser sees as "Internal Server
+	Error" — with the Material Request already committed and sitting there,
+	perfectly saved. Save it, submit it, and the app reports a crash for a
+	request that worked.
+
+	So the callback registered here does its own enqueuing, wrapped. The
+	transaction has already committed by the time it runs, which is what
+	`enqueue_after_commit` was for; the difference is that its failure is logged
+	rather than raised.
+	"""
+
+	def _enqueue():
+		try:
+			frappe.enqueue(
+				"cosmestics.api.notifications._enqueued_material_request_notice",
+				queue="short",
+				docname=docname,
+			)
+		except Exception as e:
+			frappe.log_error(
+				f"Could not queue the WhatsApp notice for {docname}: {e}", "Cosmetics POS"
+			)
+
 	try:
-		frappe.enqueue(
-			"cosmestics.api.notifications._enqueued_material_request_notice",
-			queue="short",
-			enqueue_after_commit=True,
-			docname=doc.name,
-		)
+		frappe.db.after_commit.add(_enqueue)
 	except Exception as e:
-		# Enqueuing itself can fail — Redis down is the common one — and that
-		# exception propagates out of `on_submit` and rolls back the Material
-		# Request. A shop then cannot request stock because a notification queue
-		# is unavailable, which inverts this module's whole premise: the request
-		# matters, the message about it does not.
+		# Older Frappe, or a context with no callback manager. Registering the
+		# callback is the only part that can still fail here, and the request
+		# itself must survive it.
 		frappe.log_error(
-			f"Could not queue the WhatsApp notice for {doc.name}: {e}", "Cosmetics POS"
+			f"Could not schedule the WhatsApp notice for {docname}: {e}", "Cosmetics POS"
 		)
 
 
 def _enqueued_material_request_notice(docname: str):
+	"""Post one request to the staff group, with the document attached.
+
+	**A PDF rather than a CSV.** The list used to go as a spreadsheet, on the
+	reasoning that whoever buys the stock works from one. In practice the group
+	is read on a phone, where a CSV opens in nothing, and the shop asked for the
+	document itself — the same thing they would have printed and handed over.
+	The message still carries the table, so the request is readable without
+	opening anything at all.
+	"""
 	doc = frappe.get_doc("Material Request", docname)
 	message = format_material_request(doc)
 
@@ -1016,29 +1196,216 @@ def _enqueued_material_request_notice(docname: str):
 	if not target:
 		return
 
-	# The table in the message is for reading; the CSV is for working from —
-	# whoever is buying wants it in a spreadsheet, not retyped off a phone.
-	columns = [
-		{"key": "item_code", "label": "Item code"},
-		{"key": "item_name", "label": "Item"},
-		{"key": "qty", "label": "Qty"},
-		{"key": "uom", "label": "UOM"},
-		{"key": "warehouse", "label": "To"},
-	]
-	rows = [
-		{
-			"item_code": i.item_code,
-			"item_name": i.item_name,
-			"qty": flt(i.qty),
-			"uom": i.uom,
-			"warehouse": i.warehouse,
-		}
-		for i in doc.items
+	send_with_pdf(
+		target,
+		message,
+		"Material Request",
+		docname,
+		settings.get("material_request_print_format"),
+	)
+
+
+# --------------------------------------------------------------------------
+# Deliveries
+# --------------------------------------------------------------------------
+
+
+def format_delivery_dispatch(doc) -> str:
+	"""A parcel has left the shop, and this is who is bringing it.
+
+	Written for the *customer*, because they are the one who cannot see any of
+	it otherwise: the rider's name and number so they know who is knocking, and
+	the address the shop is working from so a wrong one can be corrected while
+	the rider is still moving. The manager gets the same message rather than a
+	second, terser one — two wordings of the same event is how a shop ends up
+	reconciling two different stories.
+	"""
+	where = ", ".join(filter(None, [(doc.address or "").strip(), (doc.landmark or "").strip()]))
+
+	lines = [
+		"*Delivery on the way*",
+		f"{doc.name}" + (f" · {doc.sales_invoice}" if doc.sales_invoice else ""),
+		"",
+		f"To: {doc.customer_name or doc.customer or '—'}",
+		f"Rider: {doc.rider_name or doc.rider or '—'}"
+		+ (f" · {doc.rider_phone}" if doc.rider_phone else ""),
 	]
 
-	url = publish_csv(docname, columns, rows)
-	if url and send_file(target, message, url, f"{docname}.csv"):
+	if doc.courier:
+		lines.append(f"Courier: {doc.courier}")
+	if where:
+		lines.append(f"Address: {where}")
+	if doc.map_location:
+		lines.append(f"Pin: {doc.map_location}")
+	if doc.delivery_instructions:
+		lines.append(f"Note: {doc.delivery_instructions}")
+	if doc.dispatched_at:
+		lines.append(f"Dispatched: {frappe.utils.format_datetime(doc.dispatched_at)}")
+
+	fallback = "\n".join(lines)
+
+	try:
+		template = _settings().get("delivery_template")
+	except Exception:
+		return fallback
+
+	return render_template(
+		template,
+		{
+			"doc": doc,
+			"customer": doc.customer_name or doc.customer,
+			"rider": doc.rider_name or doc.rider,
+			"rider_phone": doc.rider_phone,
+			"address": where,
+		},
+		fallback,
+	)
+
+
+def queue_delivery_dispatch_notice(name: str):
+	"""Same after-commit discipline as the material request — see
+	`queue_material_request_notice` for why the enqueue is wrapped rather than
+	handed `enqueue_after_commit`."""
+	try:
+		if not _settings().get("notify_delivery_dispatch"):
+			return
+	except Exception:
 		return
 
-	# The list still has to reach the group even if the attachment did not.
-	send_to_staff_group(message)
+	def _enqueue():
+		try:
+			frappe.enqueue(
+				"cosmestics.api.notifications._enqueued_delivery_dispatch_notice",
+				queue="short",
+				name=name,
+			)
+		except Exception as e:
+			frappe.log_error(f"Could not queue the dispatch notice for {name}: {e}", "Cosmetics POS")
+
+	try:
+		frappe.db.after_commit.add(_enqueue)
+	except Exception as e:
+		frappe.log_error(f"Could not schedule the dispatch notice for {name}: {e}", "Cosmetics POS")
+
+
+def _enqueued_delivery_dispatch_notice(name: str):
+	"""The customer, then the manager. Both best-effort and independent."""
+	doc = frappe.get_doc("Cosmestics Delivery", name)
+	settings = _settings()
+	message = format_delivery_dispatch(doc)
+
+	sent_to = []
+
+	# The customer gets the label as well as the text: it is the same slip that
+	# is taped to their carton, so "is this mine?" has an answer on the phone.
+	customer_number = (doc.contact_phone or "").strip()
+	if customer_number and send_with_pdf(
+		customer_number,
+		message,
+		"Cosmestics Delivery",
+		name,
+		settings.get("delivery_print_format"),
+	):
+		sent_to.append(customer_number)
+
+	manager = (settings.get("manager_whatsapp") or "").strip()
+	# Skipped when it is the same number — a manager delivering to themselves
+	# does not need it twice.
+	if manager and manager != customer_number and send_text(manager, message):
+		sent_to.append(manager)
+
+	return sent_to
+
+
+# --------------------------------------------------------------------------
+# Reversals
+# --------------------------------------------------------------------------
+
+
+def format_sales_return(doc) -> str:
+	"""A sale has been reversed, in the customer's own terms.
+
+	Amounts are printed positive. The credit note is correctly negative and the
+	customer does not care: they are being told how much is coming back, not
+	reading a ledger.
+	"""
+	total = abs(flt(doc.rounded_total or doc.grand_total))
+	rows = [
+		[
+			f"{abs(flt(item.qty)):g}",
+			(item.item_name or item.item_code)[:24],
+		]
+		for item in doc.items
+	]
+
+	lines = [
+		"*Sale reversed*",
+		f"{doc.name}" + (f" · against {doc.return_against}" if doc.return_against else ""),
+		"",
+		_table(["Qty", "Item"], rows),
+		f"Refund: {frappe.utils.fmt_money(total, currency=doc.currency)}",
+		# Which of the two routes it took. A customer told "refunded" who then
+		# finds nothing in their hand is the complaint this line prevents: a
+		# credit refund sits on their account until they spend it.
+		f"Method: {'cash' if doc.get('is_pos') else 'credit to your account'}",
+		f"Handled by: {frappe.utils.get_fullname(doc.owner)}",
+	]
+	return "\n".join(lines)
+
+
+def on_sales_invoice_submit(doc, method=None):
+	"""Hooked on Sales Invoice `on_submit`; acts only on credit notes.
+
+	A reversal is the one thing that happens to a sale after the customer has
+	walked away, so it is the one they cannot see for themselves. Every other
+	branch of this hook is deliberately a no-op — an ordinary sale already gets
+	its receipt at the counter.
+	"""
+	if not doc.get("is_return"):
+		return
+
+	try:
+		if not _settings().get("notify_sales_return"):
+			return
+	except Exception:
+		return
+
+	def _enqueue():
+		try:
+			frappe.enqueue(
+				"cosmestics.api.notifications._enqueued_sales_return_notice",
+				queue="short",
+				docname=doc.name,
+			)
+		except Exception as e:
+			frappe.log_error(f"Could not queue the reversal notice for {doc.name}: {e}", "Cosmetics POS")
+
+	try:
+		frappe.db.after_commit.add(_enqueue)
+	except Exception as e:
+		frappe.log_error(f"Could not schedule the reversal notice for {doc.name}: {e}", "Cosmetics POS")
+
+
+def _enqueued_sales_return_notice(docname: str):
+	doc = frappe.get_doc("Sales Invoice", docname)
+
+	numbers = contact_numbers(doctype="Sales Invoice", name=docname).get("numbers") or []
+	if not numbers:
+		# Nothing to do and nothing wrong: a walk-in has no number on file, and
+		# most returns are walk-ins.
+		return None
+
+	to = numbers[0]["number"]
+	if not send_text(to, format_sales_return(doc)):
+		return None
+
+	# The manager's copy, so a reversal is visible to somebody other than the
+	# person who made it.
+	try:
+		manager = (_settings().get("manager_whatsapp") or "").strip()
+	except Exception:
+		manager = None
+	if manager and manager != to:
+		send_text(manager, format_sales_return(doc))
+
+	return to

@@ -39,7 +39,10 @@ export const MODULE_TABS = {
 		// Ahead of the fulfilment tabs, in the order a sale actually happens: a
 		// price is given before anything is delivered or invoiced.
 		{ label: 'Quotations', to: '/documents/quotation' },
-		{ label: 'Deliveries', to: '/documents/delivery-note' },
+		// The shop's own delivery worklist — one drop, one address, one status —
+		// ahead of ERPNext's Delivery Notes, which this shop does not raise.
+		{ label: 'Delivery', to: '/deliveries' },
+		{ label: 'Delivery notes', to: '/documents/delivery-note' },
 		// Several invoices bundled onto one driver's run — its own tab because
 		// it groups Sales Invoices rather than being one, which the "New"
 		// button on this tab handles with its own form.
@@ -55,6 +58,9 @@ export const MODULE_TABS = {
 	],
 	accounts: [
 		{ label: 'Balances', to: '/accounts' },
+		// The one you act on, before the one you read. `/credit` takes the money;
+		// the Receivables report explains the number.
+		{ label: 'Credit', to: '/credit' },
 		{ label: 'Receivables', to: '/accounts/receivables' },
 		{ label: 'Payables', to: '/accounts/payables' },
 		{ label: 'Payments', to: '/documents/payment-entry' },
@@ -131,9 +137,10 @@ function _moduleForPath(path) {
 		path.startsWith('/sales') ||
 		path.startsWith('/customers') ||
 		path.startsWith('/returns') ||
-		path.startsWith('/neighbours')
+		path.startsWith('/neighbours') ||
+		path.startsWith('/deliveries')
 	)
 		return 'sales'
-	if (path.startsWith('/accounts')) return 'accounts'
+	if (path.startsWith('/accounts') || path.startsWith('/credit')) return 'accounts'
 	return null
 }

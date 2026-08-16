@@ -32,6 +32,20 @@ POS_SETTINGS_FIELDS = (
 	"notify_material_request",
 	"whatsapp_group_jid",
 	"whatsapp_sender",
+	# What the staff group actually receives: which print format the attached
+	# PDF is rendered with, and the wording of the message around it. Both are
+	# here rather than in code because the shop asked for the notification to be
+	# set up rather than shipped — see `notifications.render_template`.
+	"material_request_print_format",
+	"material_request_template",
+	"notify_delivery_dispatch",
+	"delivery_print_format",
+	"delivery_template",
+	# One number, used by every notice that needs somebody in charge to see it —
+	# a dispatch and a reversal. A field rather than a constant so a shop that
+	# changes managers changes it here.
+	"manager_whatsapp",
+	"notify_sales_return",
 	# Not `neighbour_supplier_group` any more — which shops the till offers
 	# mid-sale is now a checkbox on the Supplier itself
 	# (`cosmestics_is_neighbour_shop`), not a single shop-wide group setting.
@@ -87,6 +101,12 @@ def get() -> dict:
 			"has_pin": bool(user.get("cosmestics_pin_hash")),
 			"enabled": bool(user.get("cosmestics_pin_login")),
 		},
+		# Print formats per doctype, rather than through the generic link picker.
+		# That one is scoped by doctype alone and capped at twenty rows, which on
+		# a site with fifty print formats means the shop's own delivery label is
+		# often simply not in the list — a picker that cannot offer the right
+		# answer is worse than no picker.
+		"print_formats": _print_format_options(),
 		"profiles": _profiles(),
 		"can_edit_profile": _can_write("POS Profile"),
 		"company": frappe.defaults.get_user_default("Company")
@@ -116,6 +136,30 @@ def _profiles() -> list:
 				"mine": frappe.session.user
 				in [u.user for u in (doc.get("applicable_for_users") or [])],
 			}
+		)
+	return out
+
+
+#: Settings fields that pick a Print Format, and what they print.
+PRINT_FORMAT_FIELDS = {
+	"material_request_print_format": "Material Request",
+	"delivery_print_format": "Cosmestics Delivery",
+}
+
+
+def _print_format_options() -> dict:
+	"""Every enabled print format for each doctype this screen can choose one for."""
+	out = {}
+	for field, doctype in PRINT_FORMAT_FIELDS.items():
+		if not frappe.db.exists("DocType", doctype):
+			out[field] = []
+			continue
+		out[field] = frappe.get_all(
+			"Print Format",
+			filters={"doc_type": doctype, "disabled": 0},
+			pluck="name",
+			order_by="name asc",
+			limit_page_length=0,
 		)
 	return out
 

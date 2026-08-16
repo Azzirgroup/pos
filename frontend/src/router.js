@@ -158,6 +158,23 @@ const routes = [
 		component: () => import('@/views/Neighbours.vue'),
 	},
 	{
+		// Reached from the till strip, beside Neighbours. Its own page for the
+		// same reason Expenses is: dispatching a parcel happens mid-shift, many
+		// times a day, and it belongs nowhere near the button that closes the
+		// drawer.
+		path: '/deliveries',
+		name: 'Deliveries',
+		meta: { title: 'Delivery' },
+		component: () => import('@/views/Deliveries.vue'),
+	},
+	{
+		// Receivables, lifted out of the closing sheet — see the component.
+		path: '/credit',
+		name: 'Credit',
+		meta: { title: 'Credit' },
+		component: () => import('@/views/Credit.vue'),
+	},
+	{
 		path: '/settings',
 		name: 'Settings',
 		meta: { title: 'Settings' },

@@ -275,6 +275,89 @@ export const addDeliveryStop = ({
 /** Runs still being loaded, so a second sale can join one. */
 export const listOpenTrips = () => call('cosmestics.api.deliveries.open_trips')
 
+/**
+ * Riders the shop already uses. Searched on the server rather than filtered
+ * from a pre-fetched list, so a shop with sixty riders still finds the one
+ * standing at the counter.
+ */
+export const searchRiders = (search) =>
+	call('cosmestics.cosmestics.doctype.cosmestics_rider.cosmestics_rider.search_riders', {
+		search: search || null,
+	})
+
+/** Add a rider mid-sale. Returns the same shape `searchRiders` rows have. */
+export const createRider = ({ riderName, phone, courier, vehicle }) =>
+	call('cosmestics.cosmestics.doctype.cosmestics_rider.cosmestics_rider.create_rider', {
+		rider_name: riderName,
+		phone: phone || null,
+		courier: courier || null,
+		vehicle: vehicle || null,
+	})
+
+/**
+ * Record where one order is going. Raised from the pay sheet at the moment the
+ * sale is rung up — see `deliveries.create_delivery` for why that timing
+ * matters.
+ */
+export const createDelivery = ({
+	invoice,
+	customer,
+	rider,
+	riderName,
+	riderPhone,
+	courier,
+	vehicle,
+	contactPhone,
+	address,
+	landmark,
+	mapLocation,
+	instructions,
+	status,
+	trip,
+}) =>
+	call('cosmestics.api.deliveries.create_delivery', {
+		sales_invoice: invoice || null,
+		customer: customer || null,
+		rider: rider || null,
+		rider_name: riderName || null,
+		rider_phone: riderPhone || null,
+		courier: courier || null,
+		vehicle: vehicle || null,
+		contact_phone: contactPhone || null,
+		address: address || null,
+		landmark: landmark || null,
+		map_location: mapLocation || null,
+		delivery_instructions: instructions || null,
+		status: status || 'Pending',
+		trip: trip || null,
+	})
+
+export const listDeliveries = ({ onDate, days, status, search, limit } = {}) =>
+	call('cosmestics.api.deliveries.list_deliveries', {
+		on_date: onDate || null,
+		days: days || 7,
+		status: status || null,
+		search: search || null,
+		limit: limit || 100,
+	})
+
+/**
+ * Move a delivery along. Dispatching is what stamps the time and messages the
+ * customer — both are the doctype's own doing, so this only says which state.
+ */
+export const setDeliveryStatus = ({ name, status }) =>
+	call('cosmestics.api.deliveries.set_delivery_status', { name, status })
+
+export const updateDelivery = ({ name, values }) =>
+	call('cosmestics.api.deliveries.update_delivery', { name, values })
+
+/** The slip that gets taped to the carton. */
+export const getDeliveryPrintUrl = ({ name, printFormat } = {}) =>
+	call('cosmestics.api.deliveries.delivery_print_url', {
+		name,
+		print_format: printFormat || null,
+	})
+
 /** Stock bought from neighbouring shops, and what is still owed for it. */
 export const listNeighbourPurchases = ({ days, status, limit } = {}) =>
 	call('cosmestics.api.sourcing.list_purchases', {
@@ -339,6 +422,30 @@ export const payCreditSale = ({ invoice, amount, modeOfPayment, reference }) =>
 	call('cosmestics.api.credit.pay_credit_sale', {
 		invoice,
 		amount: amount ?? null,
+		mode_of_payment: modeOfPayment || null,
+		reference: reference || null,
+	})
+
+/** Who owes the shop money, one row per customer rather than per invoice. */
+export const listCreditCustomers = ({ days, limit } = {}) =>
+	call('cosmestics.api.credit.list_credit_customers', {
+		days: days || 90,
+		limit: limit || 200,
+	})
+
+/** One customer's unpaid sales, oldest first — the order a payment applies in. */
+export const getCustomerCredit = ({ customer, days } = {}) =>
+	call('cosmestics.api.credit.customer_credit', { customer, days: days || 90 })
+
+/**
+ * Take money from a customer and let it reconcile itself against their oldest
+ * invoices first. The customer is paying down what they owe, not choosing an
+ * invoice — see `credit.pay_customer`.
+ */
+export const payCustomer = ({ customer, amount, modeOfPayment, reference }) =>
+	call('cosmestics.api.credit.pay_customer', {
+		customer,
+		amount,
 		mode_of_payment: modeOfPayment || null,
 		reference: reference || null,
 	})
@@ -423,6 +530,17 @@ export function requestTransfer({ items, fromWarehouse }) {
 /** What a specific warehouse actually holds of each item — {item_code: qty}. */
 export const getWarehouseQtys = ({ itemCodes, warehouse }) =>
 	call('cosmestics.api.stock.warehouse_qtys', { item_codes: itemCodes, warehouse })
+
+/**
+ * Balances for a form that is about to ask for more — {item_code: {here,
+ * total, ordered, uom}}. Unlike `getWarehouseQtys` this answers even when no
+ * warehouse is chosen, which is the case a Purchase request is always in.
+ */
+export const getItemStock = ({ itemCodes, warehouse } = {}) =>
+	call('cosmestics.api.stock.item_stock', {
+		item_codes: itemCodes,
+		warehouse: warehouse || null,
+	})
 
 /* ---------- reorder ---------- */
 

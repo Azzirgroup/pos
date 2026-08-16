@@ -31,6 +31,13 @@ function render(s) {
  * one baseline. The thresholds are in characters because that is what actually
  * decides whether it fits — "KES 723,150.00" and "644" want different sizes and
  * neither is knowable from the value alone.
+ *
+ * The steps go further down than they used to, and the guard rail underneath
+ * changed. Sizing alone was not enough: `truncate` was still on the element, so
+ * the smallest step was a floor rather than a fix, and a long enough figure
+ * clipped anyway on the two-column phone layout. It wraps instead — a revenue
+ * card taking two lines is the correct trade against a revenue card that will
+ * not say what the revenue was.
  */
 function valueSize(text) {
 	const length = String(text ?? '').length
@@ -135,13 +142,19 @@ function deltaLabel(s) {
 				</span>
 				<div class="min-w-0 flex-1">
 					<div class="truncate text-p-xs text-ink-gray-6">{{ s.label }}</div>
-					<!-- `truncate` stays, but only as a guard against a figure spilling
-					     out over the card next to it — `valueSize` is what makes it fit
-					     at any width a shop actually reads this on. `title` covers the
-					     rest: a phone in portrait can still be held to see the whole
-					     number. -->
+					<!-- Wraps rather than truncating. `valueSize` shrinks the figure to
+					     fit on one line at every width a shop actually reads this on,
+					     and where it genuinely cannot — a seven-figure total on a
+					     two-column phone layout — the number takes a second line
+					     instead of losing its last digits. A tile that is one line
+					     taller is a nuisance; a revenue card that will not say what
+					     the revenue was is the bug being reported.
+
+					     `break-words` and not `break-all`: a thousands separator is a
+					     legal break point, so "KES 7,987,650.00" splits between groups
+					     of digits rather than mid-number. -->
 					<div
-						class="tabular mt-1 truncate font-semibold leading-tight"
+						class="tabular mt-1 break-words font-semibold leading-tight"
 						:class="[valueTone(s), valueSize(render(s))]"
 						:title="render(s)"
 					>

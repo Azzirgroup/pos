@@ -1,13 +1,25 @@
-"""Bundling several sales onto one delivery run.
+"""Getting goods to the customer — the drop, and the run it goes out on.
 
-Cosmestics Delivery Trip is a plain custom doctype rather than ERPNext's own
-Delivery Trip — see the module docstring on the doctype itself for why: its
-stops want a Delivery Note, and this shop's sales never raise one.
+Two documents, and the distinction is the whole design:
+
+* **Cosmestics Delivery** is one order going to one address. It carries the
+  rider, the address, the customer's number, the instructions and the status,
+  and it is what a shop means by "today's deliveries".
+* **Cosmestics Delivery Trip** is the *run* — one driver, one van, several
+  drops. A plain custom doctype rather than ERPNext's own Delivery Trip; see
+  the module docstring on the doctype itself for why (its stops want a Delivery
+  Note, and this shop's sales never raise one).
+
+A delivery does not need a trip. Most do not: a boda rider takes one parcel to
+one address and comes back. Trips exist for the days a van goes out loaded, and
+a delivery joins one by naming it.
 """
 
 import frappe
 from frappe import _
-from frappe.utils import flt, get_datetime, now_datetime
+from frappe.utils import add_days, cint, flt, get_datetime, get_url, now_datetime, nowdate, quoted
+
+from cosmestics.cosmestics.doctype.cosmestics_delivery.cosmestics_delivery import STATUSES
 
 
 def _company() -> str | None:
@@ -208,6 +220,382 @@ def add_stop(
 		"total_amount": flt(doc.total_amount),
 		"message": _("{0} added to {1} — {2} stop(s)").format(
 			sales_invoice, doc.name, len(doc.invoices)
+		),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def create_delivery(
+	rider: str | None = None,
+	rider_name: str | None = None,
+	rider_phone: str | None = None,
+	courier: str | None = None,
+	vehicle: str | None = None,
+	contact_phone: str | None = None,
+	address: str | None = None,
+	landmark: str | None = None,
+	map_location: str | None = None,
+	delivery_instructions: str | None = None,
+	sales_invoice: str | None = None,
+	customer: str | None = None,
+	status: str = "Pending",
+	trip: str | None = None,
+) -> dict:
+	"""Record where one order is going, and who is taking it.
+
+	Raised from the pay sheet at the moment the sale is rung up. That timing is
+	the point: the customer is standing there saying the address, and an hour
+	later it is remembered wrong or not at all.
+
+	## Why the rider can be named rather than picked
+
+	`rider` is a link to a `Cosmestics Rider`, and the field is mandatory — a
+	delivery whose rider is a free-text name cannot be phoned when it goes
+	missing. But making the cashier leave the sale to create the record first is
+	how the field ends up holding "boda guy". So a bare `rider_name` creates or
+	finds the rider here, which is the same thing the "+" button in the sheet
+	does, for callers that have a name and no id.
+
+	Created **Pending** by default. Dispatching is a separate, deliberate act:
+	it stamps the time and messages the customer, and neither should happen
+	because a sale was completed.
+	"""
+	from cosmestics.cosmestics.doctype.cosmestics_rider.cosmestics_rider import create_rider
+
+	if status not in STATUSES:
+		frappe.throw(_("{0} is not a delivery status").format(status))
+
+	if not rider:
+		if not (rider_name or "").strip():
+			frappe.throw(_("Name the rider"))
+		rider = create_rider(
+			rider_name=rider_name, phone=rider_phone, courier=courier, vehicle=vehicle
+		)["value"]
+
+	company = _company()
+	if not company:
+		frappe.throw(_("No default company is set"))
+
+	if sales_invoice and not frappe.db.exists("Sales Invoice", sales_invoice):
+		frappe.throw(_("{0} not found").format(sales_invoice))
+
+	doc = frappe.new_doc("Cosmestics Delivery")
+	doc.company = company
+	doc.delivery_date = nowdate()
+	doc.status = status
+	doc.rider = rider
+	doc.sales_invoice = sales_invoice
+	doc.customer = customer
+	doc.trip = trip
+
+	# Only what was actually supplied. The rest is fetched from the rider by the
+	# doctype's own `fetch_from`, and overwriting those with blanks here would
+	# undo it.
+	for field, value in (
+		("rider_name", rider_name),
+		("rider_phone", rider_phone),
+		("courier", courier),
+		("vehicle", vehicle),
+		("contact_phone", contact_phone),
+		("address", address),
+		("landmark", landmark),
+		("map_location", map_location),
+		("delivery_instructions", delivery_instructions),
+	):
+		if value not in (None, ""):
+			doc.set(field, value)
+
+	_fill_rider_details(doc, rider)
+	if not doc.contact_phone:
+		doc.contact_phone = _customer_phone(doc.customer or customer, sales_invoice)
+
+	doc.insert()
+
+	return _delivery_row(doc) | {
+		"message": _("Delivery {0} recorded for {1}").format(
+			doc.name, doc.customer_name or doc.customer or _("the customer")
+		)
+	}
+
+
+def _fill_rider_details(doc, rider):
+	"""Copy the rider's own details onto the drop where it has none.
+
+	`fetch_from` does this in the desk form, driven by the client script; a
+	document built server-side never runs it. Without this a delivery created
+	from the till had a rider link and a blank rider phone, which is precisely
+	the field the dispatch notice needs.
+	"""
+	row = frappe.db.get_value(
+		"Cosmestics Rider", rider, ["rider_name", "phone", "courier", "vehicle"], as_dict=True
+	)
+	if not row:
+		return
+	doc.rider_name = doc.rider_name or row.rider_name
+	doc.rider_phone = doc.rider_phone or row.phone
+	doc.courier = doc.courier or row.courier
+	doc.vehicle = doc.vehicle or row.vehicle
+
+
+def _customer_phone(customer, sales_invoice=None) -> str | None:
+	"""The number to ring about this parcel.
+
+	The customer's own record first, then whatever the invoice carries. Returned
+	rather than required so the field can be pre-filled and then corrected —
+	the person receiving a delivery is often not the person who paid for it.
+	"""
+	if customer:
+		for field in ("mobile_no", "phone"):
+			if frappe.get_meta("Customer").has_field(field):
+				value = frappe.db.get_value("Customer", customer, field)
+				if value:
+					return value
+
+	if sales_invoice:
+		return frappe.db.get_value("Sales Invoice", sales_invoice, "contact_mobile") or None
+
+	return None
+
+
+def _delivery_row(doc) -> dict:
+	return {
+		"name": doc.name,
+		"status": doc.status,
+		"delivery_date": str(doc.delivery_date) if doc.delivery_date else None,
+		"customer": doc.customer,
+		"customer_name": doc.customer_name or doc.customer,
+		"sales_invoice": doc.sales_invoice,
+		"amount": flt(doc.amount),
+		"rider": doc.rider,
+		"rider_name": doc.rider_name,
+		"rider_phone": doc.rider_phone,
+		"courier": doc.courier,
+		"vehicle": doc.vehicle,
+		"contact_phone": doc.contact_phone,
+		"address": doc.address,
+		"landmark": doc.landmark,
+		"map_location": doc.map_location,
+		"delivery_instructions": doc.delivery_instructions,
+		"dispatched_at": str(doc.dispatched_at) if doc.dispatched_at else None,
+		"delivered_at": str(doc.delivered_at) if doc.delivered_at else None,
+		"trip": doc.trip,
+	}
+
+
+@frappe.whitelist()
+def list_deliveries(
+	on_date: str | None = None,
+	days: int = 7,
+	status: str | None = None,
+	search: str | None = None,
+	limit: int = 100,
+) -> dict:
+	"""What is going out, and what has gone.
+
+	Defaults to a week rather than a day. "Today's deliveries" is the question
+	the status column answers, and a list that empties at midnight loses the
+	drop that went out at 6pm and has not been marked delivered yet — which is
+	the one somebody is chasing in the morning.
+
+	`on_date` narrows to a single day for the shop that does want exactly that.
+	"""
+	filters = {}
+	company = _company()
+	if company:
+		filters["company"] = company
+
+	if on_date:
+		filters["delivery_date"] = on_date
+	else:
+		filters["delivery_date"] = (">=", add_days(nowdate(), -max(cint(days) or 7, 0)))
+
+	if status:
+		if status not in STATUSES:
+			frappe.throw(_("{0} is not a delivery status").format(status))
+		filters["status"] = status
+
+	or_filters = None
+	if search:
+		or_filters = [
+			{"name": ("like", f"%{search}%")},
+			{"customer_name": ("like", f"%{search}%")},
+			{"rider_name": ("like", f"%{search}%")},
+			{"sales_invoice": ("like", f"%{search}%")},
+			{"address": ("like", f"%{search}%")},
+		]
+
+	rows = frappe.get_all(
+		"Cosmestics Delivery",
+		filters=filters,
+		or_filters=or_filters,
+		fields=[
+			"name",
+			"status",
+			"delivery_date",
+			"customer",
+			"customer_name",
+			"sales_invoice",
+			"amount",
+			"rider",
+			"rider_name",
+			"rider_phone",
+			"courier",
+			"vehicle",
+			"contact_phone",
+			"address",
+			"landmark",
+			"map_location",
+			"delivery_instructions",
+			"dispatched_at",
+			"delivered_at",
+			"trip",
+		],
+		order_by="delivery_date desc, creation desc",
+		limit_page_length=min(max(cint(limit) or 100, 1), 500),
+	)
+
+	# Pending first within a day: the list is a worklist, and a delivered drop
+	# is history sitting on top of one nobody has taken yet. Sorted here rather
+	# than in `order_by` because expressing it in SQL means a `FIELD(...)` call
+	# in an order clause Frappe is entitled to reject as unsafe — and a list
+	# that 500s is worse than one in a slightly different order.
+	rank = {s: i for i, s in enumerate(("Pending", "Dispatched", "Failed", "Delivered"))}
+	rows.sort(key=lambda r: (str(r["delivery_date"] or ""), -rank.get(r["status"], 9)), reverse=True)
+
+	for r in rows:
+		r["delivery_date"] = str(r["delivery_date"]) if r["delivery_date"] else None
+		r["dispatched_at"] = str(r["dispatched_at"]) if r["dispatched_at"] else None
+		r["delivered_at"] = str(r["delivered_at"]) if r["delivered_at"] else None
+
+	counts = {s: 0 for s in STATUSES}
+	for r in rows:
+		counts[r["status"]] = counts.get(r["status"], 0) + 1
+
+	return {
+		"rows": rows,
+		"statuses": list(STATUSES),
+		"totals": {
+			"count": len(rows),
+			"value": flt(sum(flt(r["amount"]) for r in rows)),
+			**counts,
+		},
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_delivery_status(name: str, status: str) -> dict:
+	"""Move a delivery along.
+
+	The timestamps and the dispatch notice are the doctype's own business — see
+	`CosmesticsDelivery.stamp_status_times` and `on_update` — so this only has
+	to say which state it is going to. That keeps a status changed from the desk
+	behaving exactly like one changed from the till.
+	"""
+	if status not in STATUSES:
+		frappe.throw(_("{0} is not a delivery status").format(status))
+
+	doc = frappe.get_doc("Cosmestics Delivery", name)
+	doc.check_permission("write")
+
+	if doc.status == status:
+		return _delivery_row(doc) | {"message": _("{0} is already {1}").format(name, _(status))}
+
+	doc.status = status
+	doc.save()
+
+	return _delivery_row(doc) | {
+		"message": _("{0} marked {1}").format(name, _(status)),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def update_delivery(name: str, values: dict | str) -> dict:
+	"""Correct a drop that is already recorded.
+
+	Allow-listed rather than passed through, the same rule the rest of the app
+	follows: a caller can fix the address or the rider, and cannot reach in and
+	rewrite the amount or the timestamps, which are records of what happened
+	rather than fields anybody decides.
+	"""
+	if isinstance(values, str):
+		values = frappe.parse_json(values)
+	values = values or {}
+
+	editable = (
+		"rider",
+		"rider_name",
+		"rider_phone",
+		"courier",
+		"vehicle",
+		"contact_phone",
+		"address",
+		"landmark",
+		"map_location",
+		"delivery_instructions",
+		"delivery_date",
+		"trip",
+	)
+
+	doc = frappe.get_doc("Cosmestics Delivery", name)
+	doc.check_permission("write")
+
+	changed = []
+	for field in editable:
+		if field not in values:
+			continue
+		if doc.get(field) != values[field]:
+			doc.set(field, values[field])
+			changed.append(field)
+
+	if changed:
+		doc.save()
+
+	return _delivery_row(doc) | {
+		"changed": changed,
+		"message": _("{0} updated").format(name) if changed else _("Nothing changed"),
+	}
+
+
+@frappe.whitelist()
+def delivery_print_url(name: str, print_format: str | None = None) -> dict:
+	"""The slip that gets taped to the carton.
+
+	Rendered by ERPNext's print engine rather than drawn in the browser, for the
+	same reason the receipt is: it carries the shop's letterhead and it matches
+	what the desk would print for the same record. The shop asked for this to
+	replace writing the address on the box by hand, so the format leads with the
+	address and the rider rather than with document metadata — see
+	`install.ensure_delivery_print_format`.
+	"""
+	if not frappe.db.exists("Cosmestics Delivery", name):
+		frappe.throw(_("{0} not found").format(name), frappe.DoesNotExistError)
+	frappe.get_doc("Cosmestics Delivery", name).check_permission("read")
+
+	if not print_format:
+		try:
+			print_format = frappe.get_cached_doc("Cosmestics POS Settings").get(
+				"delivery_print_format"
+			)
+		except Exception:
+			print_format = None
+
+	params = [
+		f"doctype={quoted('Cosmestics Delivery')}",
+		f"name={quoted(name)}",
+		"trigger_print=1",
+		"no_letterhead=0",
+	]
+	if print_format:
+		params.append(f"format={quoted(print_format)}")
+
+	return {
+		"name": name,
+		"url": get_url("/printview?" + "&".join(params)),
+		"formats": frappe.get_all(
+			"Print Format",
+			filters={"doc_type": "Cosmestics Delivery", "disabled": 0},
+			pluck="name",
+			order_by="name asc",
 		),
 	}
 

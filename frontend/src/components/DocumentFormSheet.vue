@@ -8,8 +8,9 @@ import {
 	getDocumentForm,
 	getDocumentLinkOptions,
 	getExpenseAccounts,
+	getItemStock,
 } from '@/data/api'
-import { fmtMoney } from '@/utils/format'
+import { fmtMoney, fmtQty } from '@/utils/format'
 import LinkField from './LinkField.vue'
 import LucidePlus from '~icons/lucide/plus'
 import LucideX from '~icons/lucide/x'
@@ -155,6 +156,123 @@ async function load() {
 
 function linkFetcher(fieldname) {
 	return (search) => getDocumentLinkOptions({ key: props.docKey, fieldname, search })
+}
+
+/* ---------- stock beside the lines ---------- */
+
+/**
+ * What the shop already holds of each item on the form.
+ *
+ * Only for the document types whose registry entry asks for it — `show_stock`
+ * comes from the server, so nothing here knows that Material Request is the
+ * type that wants it. See `documents.DOCUMENTS`.
+ *
+ * The point is the comparison, not the number: somebody raising a request
+ * cannot see the shelf they are asking about, which is exactly why they are
+ * asking. Without a balance beside the line the only way to check is to leave
+ * the form, which nobody does under a queue — so requests get raised for stock
+ * that is already in the back.
+ */
+const stock = ref({})
+const stockLoading = ref(false)
+
+/** Which header field says where "here" is, per the registry. Often blank —
+ *  a Purchase request has no source warehouse, and the total still means
+ *  something. */
+const stockWarehouse = computed(() => {
+	const field = form.value?.show_stock?.warehouse_field
+	return (field && values.value[field]) || null
+})
+
+const wantedCodes = computed(() =>
+	[...new Set(lines.value.map((l) => l.item_code).filter(Boolean))],
+)
+
+let stockTimer = null
+watch(
+	// Both, because the answer changes with either: adding a line asks about a
+	// new item, and changing the source branch re-asks about all of them.
+	() => [form.value?.show_stock ? 1 : 0, wantedCodes.value.join('|'), stockWarehouse.value],
+	([enabled, codes]) => {
+		clearTimeout(stockTimer)
+		if (!enabled || !codes) {
+			stock.value = {}
+			return
+		}
+		// Debounced: a cashier picking an item fires this on every keystroke of
+		// the search behind it, and the answer is only interesting once they
+		// have settled on one.
+		stockTimer = setTimeout(loadStock, 300)
+	},
+)
+
+async function loadStock() {
+	if (!wantedCodes.value.length) {
+		stock.value = {}
+		return
+	}
+	stockLoading.value = true
+	try {
+		stock.value = await getItemStock({
+			itemCodes: wantedCodes.value,
+			warehouse: stockWarehouse.value,
+		})
+	} catch (e) {
+		// Silent. A balance is context, and losing it must not read as the form
+		// itself having failed — the request can still be raised without it.
+		console.warn('[pos] stock lookup failed', e)
+		stock.value = {}
+	} finally {
+		stockLoading.value = false
+	}
+}
+
+/**
+ * The balance to show for one line, and whether it covers what is being asked
+ * for.
+ *
+ * `here` is the named branch's own count where one was chosen, and the total
+ * across every warehouse otherwise. Both are labelled, because "none here but
+ * forty in the back" and "none anywhere" call for different actions and a
+ * single number cannot tell them apart.
+ */
+function stockFor(line) {
+	const row = line.item_code ? stock.value[line.item_code] : null
+	if (!row) return null
+
+	const named = stockWarehouse.value && row.here !== null && row.here !== undefined
+	const available = named ? row.here : row.total
+	const asked = Number(line.qty) || 0
+
+	return {
+		available,
+		total: row.total,
+		named,
+		uom: row.uom,
+		// Short only once a quantity has been typed — an untouched line is not
+		// yet a claim about anything.
+		short: asked > 0 && available < asked,
+		none: available <= 0,
+	}
+}
+
+function stockLabel(line) {
+	const s = stockFor(line)
+	if (!s) return ''
+	const where = s.named ? 'there' : 'in stock'
+	const unit = s.uom ? ` ${s.uom}` : ''
+	const text = `${fmtQty(s.available)}${unit} ${where}`
+	// The elsewhere figure only when it adds something — repeating the same
+	// number twice is noise on a line that already has six controls.
+	return s.named && s.total !== s.available ? `${text} · ${fmtQty(s.total)} in total` : text
+}
+
+function stockTone(line) {
+	const s = stockFor(line)
+	if (!s) return ''
+	if (s.none) return 'bg-surface-red-2 text-ink-red-3'
+	if (s.short) return 'bg-surface-amber-2 text-ink-amber-3'
+	return 'bg-surface-green-2 text-ink-green-3'
 }
 
 const expenseAccountFetcher = (search) => getExpenseAccounts(search)
@@ -494,35 +612,72 @@ function optionsFor(field) {
 						<div
 							v-for="(line, i) in lines"
 							:key="i"
-							class="flex flex-wrap items-end gap-2 rounded-lg border border-outline-gray-2 p-2.5"
+							class="flex flex-col gap-1.5 rounded-lg border border-outline-gray-2 p-2.5"
 						>
-							<div
-								v-for="field in form.items"
-								:key="field.fieldname"
-								:class="field.type === 'item' ? 'min-w-[200px] flex-1' : 'w-[120px]'"
-							>
-								<LinkField
-									v-if="field.type === 'link' || field.type === 'item'"
-									v-model="line[field.fieldname]"
-									:fetcher="linkFetcher(field.fieldname)"
-									:on-create="onCreateFor(field)"
-									:label="field.label"
-								/>
-								<FormControl
-									v-else
-									v-model="line[field.fieldname]"
-									:type="controlType(field)"
-									:label="field.label"
-									:options="controlType(field) === 'select' ? optionsFor(field) : undefined"
-								/>
+							<div class="flex flex-wrap items-end gap-2">
+								<div
+									v-for="field in form.items"
+									:key="field.fieldname"
+									:class="field.type === 'item' ? 'min-w-[200px] flex-1' : 'w-[120px]'"
+								>
+									<LinkField
+										v-if="field.type === 'link' || field.type === 'item'"
+										v-model="line[field.fieldname]"
+										:fetcher="linkFetcher(field.fieldname)"
+										:on-create="onCreateFor(field)"
+										:label="field.label"
+									/>
+									<FormControl
+										v-else
+										v-model="line[field.fieldname]"
+										:type="controlType(field)"
+										:label="field.label"
+										:options="controlType(field) === 'select' ? optionsFor(field) : undefined"
+									/>
+								</div>
+								<button
+									class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ink-gray-5 transition-colors hover:bg-surface-gray-2 hover:text-ink-red-3"
+									:aria-label="`Remove line ${i + 1}`"
+									@click="removeLine(i)"
+								>
+									<LucideX class="h-4 w-4" />
+								</button>
 							</div>
-							<button
-								class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ink-gray-5 transition-colors hover:bg-surface-gray-2 hover:text-ink-red-3"
-								:aria-label="`Remove line ${i + 1}`"
-								@click="removeLine(i)"
+
+							<!-- What the shop already holds of this item, right beside the
+							     quantity being asked for. Only for the types whose registry
+							     entry asks for it, and only once an item is chosen — an
+							     empty line has nothing to compare against. -->
+							<div
+								v-if="form.show_stock && line.item_code"
+								class="flex flex-wrap items-center gap-2"
 							>
-								<LucideX class="h-4 w-4" />
-							</button>
+								<span
+									v-if="stockFor(line)"
+									class="tabular rounded-full px-2 py-0.5 text-p-xs font-medium"
+									:class="stockTone(line)"
+								>
+									{{ stockLabel(line) }}
+								</span>
+								<span v-else-if="stockLoading" class="text-p-xs text-ink-gray-5">
+									Checking stock…
+								</span>
+								<!-- Named rather than left to be worked out from two numbers
+								     under a queue: the shortfall is the reason the line is
+								     on the form at all. -->
+								<span
+									v-if="stockFor(line)?.short"
+									class="tabular text-p-xs font-medium text-ink-amber-3"
+								>
+									Short by {{ fmtQty(Number(line.qty || 0) - stockFor(line).available) }}
+								</span>
+								<span
+									v-if="stockWarehouse"
+									class="truncate text-p-xs text-ink-gray-5"
+								>
+									at {{ stockWarehouse }}
+								</span>
+							</div>
 						</div>
 
 						<div class="flex items-center gap-3">

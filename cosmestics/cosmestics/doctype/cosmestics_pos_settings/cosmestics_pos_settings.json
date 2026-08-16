@@ -16,8 +16,17 @@
   "whatsapp_section",
   "notify_material_request",
   "whatsapp_group_jid",
+  "material_request_print_format",
   "column_break_wa",
   "whatsapp_sender",
+  "notify_sales_return",
+  "material_request_template",
+  "delivery_notice_section",
+  "notify_delivery_dispatch",
+  "manager_whatsapp",
+  "column_break_delivery_notice",
+  "delivery_print_format",
+  "delivery_template",
   "sourcing_section",
   "neighbour_supplier_group",
   "column_break_src",
@@ -107,6 +116,14 @@
    "mandatory_depends_on": "notify_material_request"
   },
   {
+   "depends_on": "notify_material_request",
+   "description": "Print Format the attached PDF is rendered with. Leave blank to use whatever ERPNext prints a Material Request with by default.",
+   "fieldname": "material_request_print_format",
+   "fieldtype": "Link",
+   "label": "Material Request Print Format",
+   "options": "Print Format"
+  },
+  {
    "fieldname": "column_break_wa",
    "fieldtype": "Column Break"
   },
@@ -115,6 +132,60 @@
    "fieldname": "whatsapp_sender",
    "fieldtype": "Data",
    "label": "Sender"
+  },
+  {
+   "default": "1",
+   "description": "Tell the customer on WhatsApp when a sale of theirs is reversed, so a refund is never a surprise on their statement.",
+   "fieldname": "notify_sales_return",
+   "fieldtype": "Check",
+   "label": "Notify Customers of Sales Reversals"
+  },
+  {
+   "depends_on": "notify_material_request",
+   "description": "The message posted with the PDF. Jinja, rendered against the request as <b>doc</b> — {{ doc.name }}, {{ operator }}, {{ customer }}, {{ items }}, {{ link }}. Leave blank for the built-in wording.",
+   "fieldname": "material_request_template",
+   "fieldtype": "Code",
+   "label": "Material Request Message Template",
+   "options": "Jinja"
+  },
+  {
+   "fieldname": "delivery_notice_section",
+   "fieldtype": "Section Break",
+   "label": "Delivery Notifications"
+  },
+  {
+   "default": "1",
+   "description": "Message the customer and the manager when a delivery is dispatched.",
+   "fieldname": "notify_delivery_dispatch",
+   "fieldtype": "Check",
+   "label": "Notify on Dispatch"
+  },
+  {
+   "depends_on": "notify_delivery_dispatch",
+   "description": "Phone number or group JID that gets a copy of every dispatch notice. A number, not a name.",
+   "fieldname": "manager_whatsapp",
+   "fieldtype": "Data",
+   "label": "Manager WhatsApp",
+   "options": "Phone"
+  },
+  {
+   "fieldname": "column_break_delivery_notice",
+   "fieldtype": "Column Break"
+  },
+  {
+   "description": "Print Format for the slip that goes on the carton. Leave blank to use the app's own delivery label.",
+   "fieldname": "delivery_print_format",
+   "fieldtype": "Link",
+   "label": "Delivery Label Print Format",
+   "options": "Print Format"
+  },
+  {
+   "depends_on": "notify_delivery_dispatch",
+   "description": "Dispatch message. Jinja, rendered against the delivery as <b>doc</b> — {{ doc.name }}, {{ customer }}, {{ rider }}, {{ rider_phone }}, {{ address }}. Leave blank for the built-in wording.",
+   "fieldname": "delivery_template",
+   "fieldtype": "Code",
+   "label": "Dispatch Message Template",
+   "options": "Jinja"
   },
   {
    "fieldname": "sourcing_section",

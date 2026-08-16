@@ -34,7 +34,16 @@ const props = defineProps({
 	required: { type: Boolean, default: false },
 })
 
-const emit = defineEmits(['update:modelValue'])
+/**
+ * `picked` carries the whole option, not just its id.
+ *
+ * A caller that only needs the value binds `v-model` and ignores this. A caller
+ * filling a form *around* the field needs the rest of the row — choosing a
+ * rider should fill in their phone number, and re-fetching the record the user
+ * just picked from a list that already contained it is a round trip for data
+ * the browser is holding.
+ */
+const emit = defineEmits(['update:modelValue', 'picked'])
 
 const query = ref(props.modelValue || '')
 const results = ref([])
@@ -77,6 +86,7 @@ watch(
 function pick(option) {
 	query.value = option.value
 	emit('update:modelValue', option.value)
+	emit('picked', option)
 	open.value = false
 }
 

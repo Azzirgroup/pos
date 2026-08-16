@@ -419,6 +419,32 @@ function notify(message, tone = 'good') {
 										</span>
 									</div>
 								</template>
+								<!-- Print formats come with the settings payload, per field, rather
+								     than through the generic link picker: that one is scoped by
+								     doctype alone and capped at twenty rows, so on a site with fifty
+								     formats the shop's own delivery label was often simply not
+								     offered. -->
+								<select
+									v-else-if="data.print_formats?.[field]"
+									v-model="pos[field]"
+									:disabled="!data.can_edit_pos"
+									class="h-10 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none disabled:text-ink-gray-5"
+								>
+									<option :value="null">Default format</option>
+									<option v-for="f in data.print_formats[field]" :key="f" :value="f">
+										{{ f }}
+									</option>
+								</select>
+								<!-- A message template is several lines of Jinja, and a single-line
+								     input for it is a field nobody can read back what they typed
+								     into. -->
+								<textarea
+									v-else-if="['Code', 'Small Text', 'Text'].includes(meta(field).fieldtype)"
+									v-model="pos[field]"
+									rows="5"
+									:disabled="!data.can_edit_pos"
+									class="w-full resize-y rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 py-2 font-mono text-p-sm text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none disabled:text-ink-gray-5"
+								/>
 								<input
 									v-else-if="meta(field).fieldtype === 'Check'"
 									v-model="pos[field]"
