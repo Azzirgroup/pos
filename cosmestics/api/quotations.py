@@ -155,11 +155,58 @@ def _resolve_party(customer: str | None, settings) -> tuple[str, str]:
 
 
 def _walk_in_customer(settings) -> str | None:
-	"""The customer a nameless quote is raised against."""
-	profile = frappe.db.get_value("POS Profile", {"disabled": 0}, "customer")
+	"""The customer a nameless quote is raised against.
+
+	## The bug this replaces
+
+	It used to ask for `POS Profile` with `{"disabled": 0}` — *any* enabled
+	profile, whichever the database happened to return first — and then, failing
+	that, for `Customer` with `{"disabled": 0}`, which is **the first customer
+	row in the table**. On a shop with a thousand customers that is an arbitrary
+	real person, and quoting a walk-in printed their name on the quotation. It
+	is the sort of wrong that reads as a mix-up rather than as a bug: the name is
+	plausible, it is somebody the shop knows, and nothing on screen says where it
+	came from.
+
+	So: this till's own profile first, from the open shift — a warehouse and a
+	default customer are properties of the counter, and a second branch's
+	profile is not an answer to a question about this one. Then the app's shared
+	walk-in customer, which is the same party a walk-in *sale* is booked
+	against; a quote and the sale it becomes naming different people is the next
+	version of this same complaint.
+
+	Never an arbitrary row. If neither can be resolved the caller says so and
+	asks for a customer, which is a question a cashier can answer.
+	"""
+	from cosmestics.api.pos import _active_pos_profile
+	from cosmestics.api.pos import _walk_in_customer as till_walk_in
+
+	profile = _active_pos_profile()
 	if profile:
-		return profile
-	return frappe.db.get_value("Customer", {"disabled": 0}, "name")
+		customer = frappe.db.get_value("POS Profile", profile, "customer")
+		if customer:
+			return customer
+
+	# No shift open — a quote can perfectly well be given before anybody counts
+	# the drawer. A single enabled profile is unambiguous; several are not, and
+	# picking between them is exactly the guess that put a stranger's name on a
+	# quotation.
+	profiles = frappe.get_all(
+		"POS Profile", filters={"disabled": 0}, pluck="name", limit_page_length=2
+	)
+	if len(profiles) == 1:
+		customer = frappe.db.get_value("POS Profile", profiles[0], "customer")
+		if customer:
+			return customer
+
+	try:
+		return till_walk_in()
+	except Exception:
+		# Creating the walk-in customer can fail on a site with no customer group
+		# or territory set up. Returning nothing makes the caller ask for a
+		# customer by name, which is recoverable; guessing one is not.
+		frappe.log_error("Could not resolve a walk-in customer to quote to", "Cosmetics POS")
+		return None
 
 
 @frappe.whitelist()
