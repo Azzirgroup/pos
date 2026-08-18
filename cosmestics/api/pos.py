@@ -629,6 +629,44 @@ def receipt_url(invoice: str, print_format: str | None = None) -> dict:
 	}
 
 
+@frappe.whitelist()
+def receipt_html(invoice: str, print_format: str | None = None) -> dict:
+	"""The receipt as finished HTML, rendered here rather than in the browser.
+
+	## Why this exists alongside `receipt_url`
+
+	`receipt_url` hands back a `/printview?…` address, and the till loads it into
+	a hidden iframe and prints it. That address is a **desk page**: it ships the
+	desk JavaScript bundle and assembles the printout in the browser after the
+	document has loaded. Inside a one-pixel hidden frame on a shop's connection
+	that is slow, and the frame's `load` event — which is what triggers the print
+	— fires long before the receipt has been drawn into it. The dialog then opens
+	on a page with nothing on it yet, or the frame is gone before it opens at
+	all. From the counter that is a Print button that does nothing.
+
+	`frappe.get_print` runs the same print format through the same engine on the
+	server and returns the finished markup, so what reaches the frame is a
+	complete document with no script to wait for. One round trip, no bundle, no
+	race.
+
+	The URL form is kept: a browser that cannot print an `srcdoc` frame, and
+	anyone who wants the printview in a tab, still has it.
+	"""
+	if not frappe.db.exists("Sales Invoice", invoice):
+		frappe.throw(_("{0} not found").format(invoice), frappe.DoesNotExistError)
+	frappe.get_doc("Sales Invoice", invoice).check_permission("read")
+
+	return {
+		"invoice": invoice,
+		"html": frappe.get_print(
+			"Sales Invoice",
+			invoice,
+			print_format=print_format or None,
+			no_letterhead=0,
+		),
+	}
+
+
 def _payment_account(mode, company) -> str | None:
 	account = frappe.db.get_value(
 		"Mode of Payment Account", {"parent": mode, "company": company}, "default_account"

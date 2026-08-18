@@ -538,7 +538,12 @@ async function loadQuote(row) {
 									class="flex shrink-0 items-center gap-1 rounded-full bg-[#EDE9FE] px-2 py-0.5 text-p-xs font-medium text-[#6D28D9]"
 								>
 									<LucideUserRound class="h-3 w-3" />
-									{{ q.salesperson }}
+									<!-- `title` carries the login id behind the display name.
+								     Two staff sharing a full name, or one with none set,
+								     make the name alone ambiguous — and "it says the wrong
+								     person raised it" cannot be checked without knowing
+								     which account it was created under. -->
+								<span :title="q.raised_by">{{ q.salesperson }}</span>
 								</span>
 							</div>
 							<div class="truncate text-p-xs text-ink-gray-5">

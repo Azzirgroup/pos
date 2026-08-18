@@ -29,13 +29,33 @@ function mountFrame(apply, onError) {
 		'position:fixed;right:0;bottom:0;width:1px;height:1px;opacity:0;border:0'
 
 	frame.onload = () => {
+		let removed = false
+		const drop = () => {
+			if (removed) return
+			removed = true
+			frame.remove()
+		}
+
 		try {
-			frame.contentWindow.focus()
-			frame.contentWindow.print()
+			const win = frame.contentWindow
+			win.focus()
+			// Torn down when the dialog actually closes, rather than one second
+			// later regardless. A fixed timer is a guess about how long a person
+			// spends looking at a print dialog, and removing the frame while it is
+			// still open cancels the print — which is one of the ways "nothing
+			// happens when I press print" comes about.
+			win.addEventListener?.('afterprint', () => setTimeout(drop, 200))
+			win.print()
 		} catch (e) {
 			onError?.(e)
+			drop()
+			return
 		}
-		setTimeout(() => frame.remove(), 1000)
+
+		// Backstop for browsers with no `afterprint`. Long, deliberately: the
+		// frame is one pixel and invisible, so leaving it a while costs nothing,
+		// while removing it early costs the printout.
+		setTimeout(drop, 60_000)
 	}
 	frame.onerror = (e) => {
 		onError?.(e)

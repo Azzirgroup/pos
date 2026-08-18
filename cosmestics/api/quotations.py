@@ -318,6 +318,12 @@ def list_quotations(
 				# morning still reads Open until then.
 				"expired": bool(r.valid_till and str(r.valid_till) < today),
 				"salesperson": names.get(r.owner) or r.owner,
+				# The login id as well as the display name. Two staff sharing a
+				# full name, or a user with none set, make the chip alone
+				# ambiguous — and "the quote says the wrong person raised it" is
+				# not answerable without knowing which account it was actually
+				# created under.
+				"raised_by": r.owner,
 			}
 		)
 
@@ -523,7 +529,29 @@ def update(name: str, items: list | str, valid_days: int | None = None, notes: s
 
 	from erpnext.controllers.accounts_controller import update_child_qty_rate
 
-	update_child_qty_rate("Quotation", frappe.as_json(trans_items), name)
+	try:
+		update_child_qty_rate("Quotation", frappe.as_json(trans_items), name)
+	except (frappe.ValidationError, frappe.PermissionError):
+		# ERPNext refusing the edit for a reason it has already worded — "cannot
+		# update rate as item X is already ordered", and the like. Those read
+		# perfectly well at a counter; wrapping them would bury the sentence
+		# somebody needs.
+		raise
+	except Exception as e:
+		# Anything else is a crash inside `update_child_qty_rate`, which walks a
+		# long path of ERPNext's own bookkeeping. It arrives at the till as
+		# "Internal Server Error" with the reason left in a log nobody at a
+		# counter can open — the same failure `documents.create_document`
+		# already learned to translate, and for the same reason: the quote is
+		# unchanged either way, so this only decides whether the person standing
+		# in front of the customer is told anything useful.
+		frappe.log_error(
+			f"quotations.update({name}) failed\nlines={len(lines)}\n{frappe.get_traceback()}",
+			"Cosmetics POS",
+		)
+		frappe.throw(
+			_("Could not update {0}: {1}").format(name, str(e)[:200] or type(e).__name__)
+		)
 
 	doc.reload()
 

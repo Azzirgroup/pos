@@ -21,6 +21,7 @@ import {
 	closeShift as apiCloseShift,
 	getPaymentMethods,
 	getReceiptUrl,
+	getReceiptHtml,
 	getRecentSales,
 	sendDocumentWhatsapp,
 	getMovementOptions,
@@ -53,7 +54,7 @@ import ReturnSheet from '@/components/ReturnSheet.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import MaterialRequestSheet from '@/components/MaterialRequestSheet.vue'
 import { saleMessage } from '@/utils/salesMessage'
-import { printUrl } from '@/utils/silentPrint'
+import { printHtml, printUrl } from '@/utils/silentPrint'
 import { cameraScanSupported } from '@/composables/useCameraScanner'
 import LucideTriangleAlert from '~icons/lucide/triangle-alert'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
@@ -371,6 +372,28 @@ async function printReceipt(invoice) {
 	const target = invoice || lastSale.value?.invoice
 	if (!target) return
 	// Straight to the till printer — no tab, no preview. See `utils/silentPrint`.
+	//
+	// The receipt is fetched as finished HTML rather than as a `/printview`
+	// address. That address is a desk page which assembles the printout in the
+	// browser, and inside the hidden print frame it loses a race with its own
+	// load event: the dialog opens on a page with nothing on it yet, or the
+	// frame is gone before it opens at all. From the counter that is a Print
+	// button that does nothing, which is what was reported for Recent sales.
+	//
+	// Said out loud while it fetches, because the gap between the tap and the
+	// dialog is a second of nothing on a shop's connection, and a cashier who
+	// gets no acknowledgement presses again.
+	notify('Preparing the receipt…')
+	try {
+		const { html } = await getReceiptHtml({ invoice: target })
+		printHtml(html, () => notify('Could not reach the printer', 'warn'))
+		return
+	} catch (e) {
+		// Older sites, or a print format the server could not render: fall back
+		// to the printview rather than leaving the cashier with no receipt.
+		console.warn('[pos] receipt html failed, falling back to printview', e)
+	}
+
 	try {
 		const { url } = await getReceiptUrl({ invoice: target })
 		printUrl(url, () => notify('Could not reach the printer', 'warn'))

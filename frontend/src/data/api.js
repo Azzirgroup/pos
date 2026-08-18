@@ -118,9 +118,19 @@ export const getCatalog = () => call('cosmestics.api.catalog.get_catalog')
 /** Tenders this till accepts, and the M-Pesa channels behind the M-Pesa button. */
 export const getPaymentMethods = () => call('cosmestics.api.pos.get_payment_methods')
 
-/** Printable receipt for a completed sale. */
+/** Printable receipt for a completed sale, as a printview URL. */
 export const getReceiptUrl = ({ invoice, printFormat } = {}) =>
 	call('cosmestics.api.pos.receipt_url', { invoice, print_format: printFormat || null })
+
+/**
+ * The same receipt as finished HTML, rendered on the server.
+ *
+ * What the till prints. The URL above points at a desk page that assembles
+ * itself in the browser, which loses a race with the hidden print frame — see
+ * `pos.receipt_html`.
+ */
+export const getReceiptHtml = ({ invoice, printFormat } = {}) =>
+	call('cosmestics.api.pos.receipt_html', { invoice, print_format: printFormat || null })
 
 /* ---------- shift ---------- */
 
