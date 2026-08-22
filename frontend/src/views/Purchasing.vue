@@ -208,14 +208,14 @@ const formTitle = computed(
 )
 
 const total = computed(() =>
-	draft.value.items.reduce((sum, line) => sum + Number(line.qty || 0) * Number(line.rate || 0), 0),
+	filledLines.value.reduce((sum, line) => sum + Number(line.qty || 0) * Number(line.rate || 0), 0),
 )
 
 const blocker = computed(() => {
 	const d = draft.value
 	if (mode.value !== 'count' && !d.supplier) return 'Choose the supplier'
-	if (!d.items.length) return 'Add at least one item'
-	if (!d.items.some((l) => Number(l.qty) > 0)) return 'Nothing has a quantity'
+	if (!filledLines.value.length) return 'Add at least one item'
+	if (!filledLines.value.some((l) => Number(l.qty) > 0)) return 'Nothing has a quantity'
 	return null
 })
 
@@ -224,6 +224,9 @@ function openNew() {
 	editingName.value = null
 	draft.value = blank()
 	draft.value.postingDate = onDate.value
+	// One empty line waiting, so the first thing on screen is somewhere to type
+	// rather than a button that produces somewhere to type.
+	draft.value.items = [blankLine()]
 	formOpen.value = true
 }
 
@@ -240,7 +243,7 @@ async function openFor(row, next) {
 			remarks: doc.remarks || '',
 			fromWarehouse: doc.from_warehouse || '',
 			toWarehouse: doc.warehouse || '',
-			items: doc.items.map((l) => ({ ...l })),
+			items: doc.items.map((l) => ({ ...l, _id: ++nextLineId })),
 		}
 		formOpen.value = true
 	} catch (e) {
@@ -252,29 +255,65 @@ const supplierFetcher = (term) => searchPurchaseSuppliers(term)
 const itemFetcher = (term) => searchPurchaseItems(term)
 const warehouseFetcher = (term) => searchPurchaseWarehouses(term)
 
-/** The item picker sitting above the lines, so adding is one act not two. */
-const picking = ref('')
+/**
+ * Lines are added blank and filled in, one at a time.
+ *
+ * This used to be a search box above the list: pick a product there and a
+ * finished row appeared below, with the item fixed and unchangeable. It worked,
+ * but it is not how the item-request form behaves, and these two are filled in
+ * by the same people on the same day — in one, the item lives on the line and
+ * you press "Add line" to get another; in the other it lived somewhere else
+ * entirely and the line had no item field at all. Picking the wrong product
+ * meant deleting the row and starting it again.
+ *
+ * So: a line carries its own item field, and "Add line" gives you an empty one.
+ * A blank line costs nothing — `_clean_lines` on the server drops any row with
+ * no item code, and `filledLines` below keeps them out of the total.
+ */
 
-function addLine(option) {
+/** Client-side row identity, so `v-for` keys survive a splice from the middle.
+ *  Keying on `item_code` cannot work now that a new line has none yet, and
+ *  keying on the index makes Vue reuse the wrong input when a row is removed. */
+let nextLineId = 0
+
+function blankLine() {
+	return { _id: ++nextLineId, item_code: '', item_name: '', uom: '', qty: 1, rate: 0 }
+}
+
+function addLine() {
+	draft.value.items.push(blankLine())
+}
+
+/**
+ * Fill the rest of the line from the product that was chosen.
+ *
+ * Duplicates are refused rather than merged. ERPNext would accept two rows of
+ * the same item, but the store keeper's count is applied by item code
+ * (`_apply_counted_quantities`), so two rows of one product would both take the
+ * counted quantity and the purchase would silently double. Saying so is better
+ * than a total that is quietly wrong.
+ */
+function onItemPicked(line, option) {
 	if (!option) return
 	const code = option.item_code || option.value
-	const existing = draft.value.items.find((l) => l.item_code === code)
-	if (existing) {
-		// Scanning the same product twice means two of it, not a second line —
-		// the same rule the till's cart follows.
-		existing.qty = Number(existing.qty || 0) + 1
-	} else {
-		draft.value.items.push({
-			item_code: code,
-			item_name: option.item_name || option.label || code,
-			uom: option.uom || '',
-			qty: 1,
-			rate: Number(option.rate || 0),
-		})
+
+	if (draft.value.items.some((l) => l !== line && l.item_code === code)) {
+		notify(`${option.item_name || code} is already on this purchase — change its quantity instead`, 'bad')
+		line.item_code = ''
+		return
 	}
-	// Cleared so the next product can be typed straight away.
-	picking.value = ''
+
+	line.item_code = code
+	line.item_name = option.item_name || option.label || code
+	line.uom = option.uom || ''
+	// Only as a starting point, and only into a blank: the last price paid is a
+	// good guess and never the answer, and a rate already typed is what the
+	// supplier actually charged this time.
+	if (!Number(line.rate)) line.rate = Number(option.rate || 0)
 }
+
+/** Rows that name a product. The rest are lines somebody has not filled in yet. */
+const filledLines = computed(() => draft.value.items.filter((l) => l.item_code))
 
 function removeLine(index) {
 	draft.value.items.splice(index, 1)
@@ -373,7 +412,7 @@ async function save() {
 	if (blocker.value) return
 	saving.value = true
 	try {
-		const payload = draft.value.items.map((l) => ({
+		const payload = filledLines.value.map((l) => ({
 			item_code: l.item_code,
 			qty: Number(l.qty || 0),
 			rate: Number(l.rate || 0),
@@ -745,16 +784,6 @@ function notify(message, tone = 'good') {
 					<template v-if="draft.fromWarehouse"> · from {{ draft.fromWarehouse }}</template>
 				</p>
 
-				<!-- The picker sits above the lines, so adding is one act. Cleared on
-				     each pick so the next product can be typed straight away. -->
-				<LinkField
-					v-if="!readOnlyLines"
-					v-model="picking"
-					:fetcher="itemFetcher"
-					label="Add an item"
-					@picked="addLine"
-				/>
-
 				<!-- One bordered card per line, fields labelled and laid out in a
 				     row that wraps, with the stock balance underneath — the same
 				     shape the item-request form uses. The two were a flat table and
@@ -770,17 +799,30 @@ function notify(message, tone = 'good') {
 
 					<div
 						v-for="(line, i) in draft.items"
-						:key="line.item_code"
+						:key="line._id"
 						class="flex flex-col gap-1.5 rounded-lg border border-outline-gray-2 p-2.5"
 					>
 						<div class="flex flex-wrap items-end gap-2">
+							<!-- The item lives on the line, as it does on the item-request
+							     form. The store keeper counting a delivery cannot change it —
+							     they say how much arrived, not what was bought — so for them
+							     it stays the plain label it always was. -->
 							<div class="min-w-[200px] flex-1">
-								<label class="mb-1.5 block text-p-sm text-ink-gray-6">Item</label>
-								<div
-									class="flex h-8 items-center rounded border border-outline-gray-3 bg-surface-gray-1 px-2"
-								>
-									<span class="truncate text-p-sm text-ink-gray-8">{{ line.item_name }}</span>
-								</div>
+								<LinkField
+									v-if="!readOnlyLines"
+									v-model="line.item_code"
+									:fetcher="itemFetcher"
+									label="Item"
+									@picked="(option) => onItemPicked(line, option)"
+								/>
+								<template v-else>
+									<label class="mb-1.5 block text-p-sm text-ink-gray-6">Item</label>
+									<div
+										class="flex h-8 items-center rounded border border-outline-gray-3 bg-surface-gray-1 px-2"
+									>
+										<span class="truncate text-p-sm text-ink-gray-8">{{ line.item_name }}</span>
+									</div>
+								</template>
 							</div>
 							<div class="w-[120px]">
 								<label class="mb-1.5 block text-p-sm text-ink-gray-6">Qty</label>
@@ -823,7 +865,7 @@ function notify(message, tone = 'good') {
 							</button>
 						</div>
 
-						<div class="flex flex-wrap items-center gap-2">
+						<div v-if="line.item_code" class="flex flex-wrap items-center gap-2">
 							<span class="truncate text-p-xs text-ink-gray-5">
 								{{ line.item_code }}<template v-if="line.uom"> · {{ line.uom }}</template>
 							</span>
@@ -842,6 +884,16 @@ function notify(message, tone = 'good') {
 							</span>
 						</div>
 					</div>
+
+					<!-- One line at a time, the way the item-request form does it. -->
+					<Button
+						v-if="!readOnlyLines"
+						variant="subtle"
+						:icon-left="LucidePlus"
+						label="Add line"
+						class="self-start"
+						@click="addLine"
+					/>
 				</div>
 
 				<div class="flex items-center justify-between px-1">
