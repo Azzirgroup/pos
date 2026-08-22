@@ -1489,7 +1489,7 @@ useShortcuts({
 				variant="subtle"
 				class="!bg-teal-100 !text-teal-700 hover:!bg-teal-200 active:!bg-teal-300"
 				:icon-left="LucideClipboardList"
-				label="Request material"
+				label="Request for item"
 				@click="materialSheet = true"
 			/>
 

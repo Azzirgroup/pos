@@ -312,6 +312,7 @@ export const createRider = ({ riderName, phone, courier, vehicle }) =>
 export const createDelivery = ({
 	invoice,
 	customer,
+	customerName,
 	rider,
 	riderName,
 	riderPhone,
@@ -328,6 +329,7 @@ export const createDelivery = ({
 	call('cosmestics.api.deliveries.create_delivery', {
 		sales_invoice: invoice || null,
 		customer: customer || null,
+		customer_name: customerName || null,
 		rider: rider || null,
 		rider_name: riderName || null,
 		rider_phone: riderPhone || null,
@@ -360,6 +362,16 @@ export const setDeliveryStatus = ({ name, status }) =>
 
 export const updateDelivery = ({ name, values }) =>
 	call('cosmestics.api.deliveries.update_delivery', { name, values })
+
+/** One drop in full, read fresh so a sheet cannot show a stale row. */
+export const getDelivery = ({ name }) => call('cosmestics.api.deliveries.get_delivery', { name })
+
+/**
+ * Remove a drop that should never have been recorded. Refused server-side once
+ * it has gone out — see `deliveries.delete_delivery`.
+ */
+export const deleteDelivery = ({ name }) =>
+	call('cosmestics.api.deliveries.delete_delivery', { name })
 
 /** The slip that gets taped to the carton. */
 export const getDeliveryPrintUrl = ({ name, printFormat } = {}) =>
@@ -591,6 +603,50 @@ export const getInventory = (params = {}) => call('cosmestics.api.modules.invent
 export const getWarehouses = () => call('cosmestics.api.modules.warehouses')
 export const getSales = (params = {}) => call('cosmestics.api.modules.sales', params)
 export const getPurchasing = (params = {}) => call('cosmestics.api.modules.purchasing', params)
+
+/* ---------- buying stock in ---------- */
+
+/**
+ * The day's purchases. Defaults to today on the server, which is what makes
+ * the screen open on today rather than on a month of history.
+ */
+export const getDayPurchases = ({ onDate, search } = {}) =>
+	call('cosmestics.api.buying.day_purchases', {
+		on_date: onDate || null,
+		search: search || null,
+	})
+
+export const getPurchase = ({ name }) => call('cosmestics.api.buying.get_purchase', { name })
+
+export const createPurchase = ({ supplier, items, postingDate, billNo, remarks }) =>
+	call('cosmestics.api.buying.create_purchase', {
+		supplier,
+		items,
+		posting_date: postingDate || null,
+		bill_no: billNo || null,
+		remarks: remarks || null,
+	})
+
+export const updatePurchase = ({ name, values }) =>
+	call('cosmestics.api.buying.update_purchase', { name, values })
+
+/** The store keeper's count. Submitting the invoice is what this does. */
+export const confirmPurchase = ({ name, items, remarks }) =>
+	call('cosmestics.api.buying.confirm_purchase', {
+		name,
+		items: items || null,
+		remarks: remarks || null,
+	})
+
+export const reopenPurchase = ({ name }) => call('cosmestics.api.buying.reopen_purchase', { name })
+
+export const deletePurchase = ({ name }) => call('cosmestics.api.buying.delete_purchase', { name })
+
+export const searchPurchaseSuppliers = (search) =>
+	call('cosmestics.api.buying.search_suppliers', { search: search || null })
+
+export const searchPurchaseItems = (search) =>
+	call('cosmestics.api.buying.search_purchase_items', { search: search || null })
 export const getAccounts = (params = {}) => call('cosmestics.api.modules.accounts', params)
 
 /* ---------- reports ---------- */

@@ -57,6 +57,13 @@ NOT_CREATABLE = {
 	"pos-closing": "Created by closing a shift at the till, so it reconciles against what was counted.",
 	"payment-entry": "Raised against an invoice, so the money lands on the right one. Open the invoice and record the payment there.",
 	"landed-cost-voucher": "Spreads freight and duty across receipts that already exist, so start from the Purchase Receipt.",
+	# The shop's purchasing runs through its own two-hand flow now — a manager
+	# posts the purchase, the store keeper counts what arrived and confirms,
+	# and confirming is what submits it. Raising a Purchase Invoice from this
+	# generic form skipped the confirmation entirely and submitted on the spot,
+	# which is the "purchasing is too complex" complaint in one button: two ways
+	# in, one of which quietly bypasses the review. This list stays readable.
+	"purchase-invoice": "Raised on the Purchasing screen, where the store confirms what actually arrived before it is posted.",
 }
 
 
@@ -768,7 +775,9 @@ def list_types() -> list:
 				"party_label": _(d["party_field"]).title() if d.get("party_field") else None,
 				# Only offered when the type declares a form *and* this user may
 				# create it: a "New" button that throws on save is worse than none.
-				"creatable": bool(d.get("create")) and frappe.has_permission(d["doctype"], "create"),
+				"creatable": bool(d.get("create"))
+				and d["key"] not in NOT_CREATABLE
+				and frappe.has_permission(d["doctype"], "create"),
 				# Why there is no button, when there is none. A missing control with
 				# no explanation reads as something broken; these are documents that
 				# genuinely come from somewhere else.
@@ -1180,6 +1189,14 @@ def _party_mobile(entry: dict, doc) -> str | None:
 
 
 def _create_spec(entry: dict) -> dict:
+	# `NOT_CREATABLE` is checked before the spec, not instead of it: a type can
+	# have a perfectly good form here and still be the wrong door — see the
+	# Purchase Invoice note on that map. Refusing at this one choke point covers
+	# `create_form`, `link_options` and `create_document` together, so hiding the
+	# button and refusing the write cannot come apart.
+	if entry["key"] in NOT_CREATABLE:
+		frappe.throw(_(NOT_CREATABLE[entry["key"]]))
+
 	spec = entry.get("create")
 	if not spec:
 		frappe.throw(_("{0} cannot be created from here yet").format(_(entry["doctype"])))

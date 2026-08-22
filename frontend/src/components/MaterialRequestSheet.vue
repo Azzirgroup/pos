@@ -176,7 +176,7 @@ function onCreated() {
 					<LucideClipboardList class="h-4 w-4" />
 				</span>
 				<div class="min-w-0 flex-1">
-					<h2 class="text-p-lg font-semibold text-ink-gray-9">Material requests</h2>
+					<h2 class="text-p-lg font-semibold text-ink-gray-9">Item requests</h2>
 					<p class="text-p-xs text-ink-gray-5">Stock asked for. Load one into the cart to sell it.</p>
 				</div>
 			</header>

@@ -6,6 +6,9 @@ import {
 	listDeliveries,
 	setDeliveryStatus,
 	getDeliveryPrintUrl,
+	getDelivery,
+	updateDelivery,
+	deleteDelivery,
 	createDelivery,
 	createRider,
 	searchRiders,
@@ -23,6 +26,12 @@ import LucidePlus from '~icons/lucide/plus'
 import LucideSearch from '~icons/lucide/search'
 import LucidePhone from '~icons/lucide/phone'
 import LucideMapPin from '~icons/lucide/map-pin'
+import LucideEye from '~icons/lucide/eye'
+import LucidePencil from '~icons/lucide/pencil'
+import LucideTrash2 from '~icons/lucide/trash-2'
+import LucideChevronLeft from '~icons/lucide/chevron-left'
+import LucideChevronRight from '~icons/lucide/chevron-right'
+import LucideCalendarDays from '~icons/lucide/calendar-days'
 
 /**
  * What is going out, and where it has got to.
@@ -63,18 +72,78 @@ const STATUS_TONES = {
 	Failed: 'bg-surface-red-2 text-ink-red-3',
 }
 
+/** Every status, for the edit sheet — which may set any of them. */
+const ALL_STATUSES = ['Pending', 'Dispatched', 'Delivered', 'Failed']
+
+/**
+ * Today, in the shop's own timezone.
+ *
+ * `toISOString()` alone is UTC, which in Nairobi means the screen flips to
+ * "tomorrow" at three in the afternoon. The offset is subtracted first so the
+ * date this sends matches the date on the wall.
+ */
+function localDay(date = new Date()) {
+	const shifted = new Date(date.getTime() - date.getTimezoneOffset() * 60000)
+	return shifted.toISOString().slice(0, 10)
+}
+
+function addDays(iso, delta) {
+	const d = new Date(`${iso}T12:00:00`)
+	d.setDate(d.getDate() + delta)
+	return localDay(d)
+}
+
 const data = ref(null)
 const loading = ref(false)
 const busy = ref('')
 const status = ref('')
 const search = ref('')
-const onDate = ref('')
+
+/**
+ * The screen opens on **today**, and the calendar pages back.
+ *
+ * It used to open on a rolling fortnight with an empty date box beside it, and
+ * the complaint was exactly what that produces: a counter asking "what is going
+ * out today" had to read past two weeks of history to find out, and the date
+ * input — a bare `<input type="date">` squeezed into a filter row — was the
+ * only way to narrow it. Now the day *is* the view: arrows either side, the
+ * date in the middle, and a Today button that is only offered when you are not
+ * on it.
+ *
+ * The fortnight is still there, behind "Recent", for the Monday-morning
+ * question the old default was really serving: what went out on Friday and was
+ * never marked delivered.
+ */
+const today = ref(localDay())
+const onDate = ref(localDay())
+const showRecent = ref(false)
+
+const dayLabel = computed(() => {
+	if (showRecent.value) return 'Last 14 days'
+	if (onDate.value === today.value) return 'Today'
+	if (onDate.value === addDays(today.value, -1)) return 'Yesterday'
+	return new Date(`${onDate.value}T12:00:00`).toLocaleDateString(undefined, {
+		weekday: 'short',
+		day: 'numeric',
+		month: 'short',
+	})
+})
 
 const rows = computed(() => data.value?.rows || [])
 
 const stats = computed(() => {
 	const t = data.value?.totals || {}
 	return [
+		// Asked for by name: how many deliveries have been posted today. Counted
+		// on the server from the rows on screen, so it means the same thing when
+		// the view has been paged back to last Tuesday.
+		{
+			label: "Today's deliveries",
+			value: t.today || 0,
+			type: 'number',
+			icon: 'truck',
+			hint: 'Posted today',
+		},
 		{
 			label: 'Pending',
 			value: t.Pending || 0,
@@ -91,22 +160,26 @@ const stats = computed(() => {
 onMounted(load)
 
 let timer = null
-watch([status, onDate], load)
+watch([status, onDate, showRecent], load)
 watch(search, () => {
 	clearTimeout(timer)
 	timer = setTimeout(load, 300)
 })
 
 async function load() {
+	// A till is left open all day, and sometimes overnight. Without this the
+	// "Today" label and the button that jumps back to it keep pointing at
+	// yesterday until somebody reloads.
+	today.value = localDay()
 	loading.value = true
 	try {
 		data.value = await listDeliveries({
 			status: status.value || null,
 			search: search.value || null,
-			onDate: onDate.value || null,
-			// A fortnight when nothing is filtered. A delivery that went out on
-			// Friday and was never marked delivered is exactly the one somebody
-			// is chasing on Monday, and a list that resets at midnight loses it.
+			// One day, unless "Recent" is on — then the fortnight the screen used
+			// to default to, which is the window that catches a Friday drop
+			// nobody closed off.
+			onDate: showRecent.value ? null : onDate.value,
 			days: 14,
 		})
 	} catch (e) {
@@ -115,6 +188,16 @@ async function load() {
 	} finally {
 		loading.value = false
 	}
+}
+
+function stepDay(delta) {
+	showRecent.value = false
+	onDate.value = addDays(onDate.value, delta)
+}
+
+function goToday() {
+	showRecent.value = false
+	onDate.value = today.value
 }
 
 async function move(row, next) {
@@ -151,6 +234,133 @@ async function printLabel(row) {
 	}
 }
 
+/* ---------- opening, correcting and removing one ---------- */
+
+/**
+ * The row opens.
+ *
+ * Every field this screen records was already being collected and none of it
+ * could be read back — the row showed an address and a status, and the map pin,
+ * the instructions, the invoice and the vehicle were only ever visible to
+ * whoever typed them. A worklist you cannot open is a worklist you have to
+ * remember.
+ *
+ * Read fresh rather than reusing the row in hand: on a shared till the list can
+ * be minutes old, and a sheet that opens on a stale status is how two people
+ * dispatch the same parcel.
+ */
+const detail = ref(null)
+const detailOpen = ref(false)
+const detailLoading = ref(false)
+
+async function openRow(row) {
+	detail.value = row
+	detailOpen.value = true
+	detailLoading.value = true
+	try {
+		detail.value = await getDelivery({ name: row.name })
+	} catch (e) {
+		notify(e.message || 'Could not open that delivery', 'bad')
+	} finally {
+		detailLoading.value = false
+	}
+}
+
+/**
+ * Correcting a drop that is already recorded.
+ *
+ * Including its **status**, which the row buttons deliberately cannot do: those
+ * offer the one or two moves a rider actually makes next, in order, because
+ * that is what a counter needs at a glance. Reversing a delivery marked
+ * delivered by mistake back to Pending is the other thing — rarer, deliberate,
+ * and it belongs in a form rather than on a button somebody can fat-finger.
+ *
+ * The customer's *name* is here as well as on the new-delivery form. A drop
+ * typed in for a phone order had nowhere to put it and read "Walk-in" on the
+ * worklist with a number beside it, which tells a rider nothing about who they
+ * are looking for.
+ */
+const editOpen = ref(false)
+const editing = ref(null)
+const editDraft = ref(null)
+const editSaving = ref(false)
+
+function openEdit(row) {
+	editing.value = row.name
+	editDraft.value = {
+		status: row.status,
+		customer_name: row.customer_name || '',
+		contact_phone: row.contact_phone || '',
+		address: row.address || '',
+		landmark: row.landmark || '',
+		map_location: row.map_location || '',
+		delivery_instructions: row.delivery_instructions || '',
+		rider_name: row.rider_name || '',
+		rider_phone: row.rider_phone || '',
+		courier: row.courier || '',
+		vehicle: row.vehicle || '',
+		delivery_date: row.delivery_date || '',
+	}
+	editOpen.value = true
+}
+
+const editBlocker = computed(() => {
+	const d = editDraft.value
+	if (!d) return null
+	if (!d.address.trim()) return 'Add the delivery address'
+	if (!d.contact_phone.trim()) return 'Add a contact number'
+	return null
+})
+
+async function saveEdit() {
+	if (editBlocker.value || !editing.value) return
+	editSaving.value = true
+	try {
+		const res = await updateDelivery({ name: editing.value, values: { ...editDraft.value } })
+		editOpen.value = false
+		// The detail sheet is usually open underneath — this is reached from it —
+		// so it is refreshed rather than left showing what was just corrected.
+		if (detailOpen.value && detail.value?.name === res.name) detail.value = res
+		await load()
+		notify(res.message, 'good')
+	} catch (e) {
+		notify(e.message || 'Could not save that change', 'bad')
+	} finally {
+		editSaving.value = false
+	}
+}
+
+/**
+ * Removing one.
+ *
+ * Confirmed in a sheet rather than a browser `confirm()`, and the sheet names
+ * the delivery: this list is read on a tablet at a counter, where the row under
+ * your thumb and the row you meant are one pixel apart.
+ *
+ * A drop that has already gone out is refused by the server — see
+ * `deliveries.delete_delivery` — so the button is not offered for those either.
+ */
+const removing = ref(null)
+const removeBusy = ref(false)
+
+const canRemove = (row) => row.status === 'Pending' || row.status === 'Failed'
+
+async function confirmRemove() {
+	if (!removing.value) return
+	removeBusy.value = true
+	try {
+		const res = await deleteDelivery({ name: removing.value.name })
+		if (detail.value?.name === removing.value.name) detailOpen.value = false
+		removing.value = null
+		await load()
+		notify(res.message, 'good')
+	} catch (e) {
+		notify(e.message || 'Could not delete that delivery', 'bad')
+	} finally {
+		removeBusy.value = false
+	}
+}
+
 /* ---------- raising one by hand ---------- */
 
 /**
@@ -167,6 +377,7 @@ const draft = ref(blank())
 
 function blank() {
 	return {
+		customerName: '',
 		rider: '',
 		riderName: '',
 		riderPhone: '',
@@ -351,18 +562,69 @@ function notify(message, tone = 'good') {
 					class="h-9 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 pl-8 pr-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
 				/>
 			</div>
-			<input
-				v-model="onDate"
-				type="date"
-				aria-label="Deliveries on one day"
-				class="h-9 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
-			/>
-			<button
-				v-if="onDate"
-				class="h-9 rounded-lg border border-outline-gray-2 px-3 text-p-sm font-medium text-ink-gray-7 hover:bg-surface-gray-2"
-				@click="onDate = ''"
+			<!-- The day, as a pager rather than a date box.
+			     Arrows for "the day before this one", which is how somebody
+			     actually moves through a delivery log, and the date itself as the
+			     calendar for the jump that is further than a tap or two. The
+			     native picker is still underneath — it is what every phone and
+			     tablet already knows how to open — but it is no longer the only
+			     way to change the day, which is what made it feel broken. -->
+			<div
+				class="flex h-9 shrink-0 items-center rounded-lg border border-outline-gray-2 bg-surface-gray-2"
 			>
-				Clear
+				<button
+					class="grid h-full w-8 place-items-center rounded-l-lg text-ink-gray-6 transition-colors hover:bg-surface-gray-3 hover:text-ink-gray-8"
+					aria-label="Day before"
+					@click="stepDay(-1)"
+				>
+					<LucideChevronLeft class="h-4 w-4" />
+				</button>
+				<label
+					class="relative flex h-full cursor-pointer items-center gap-1.5 px-2 text-p-sm font-medium text-ink-gray-8"
+					:title="onDate"
+				>
+					<LucideCalendarDays class="h-4 w-4 shrink-0 text-ink-gray-5" />
+					<span class="whitespace-nowrap">{{ dayLabel }}</span>
+					<!-- Covers the label so a tap anywhere on it opens the picker.
+					     Transparent rather than hidden: a `display: none` input has
+					     no `showPicker` to open on any browser. -->
+					<input
+						v-model="onDate"
+						type="date"
+						aria-label="Pick a delivery day"
+						class="absolute inset-0 h-full w-full cursor-pointer opacity-0"
+						@change="showRecent = false"
+					/>
+				</label>
+				<button
+					class="grid h-full w-8 place-items-center text-ink-gray-6 transition-colors hover:bg-surface-gray-3 hover:text-ink-gray-8 disabled:opacity-30"
+					aria-label="Day after"
+					:disabled="!showRecent && onDate >= today"
+					@click="stepDay(1)"
+				>
+					<LucideChevronRight class="h-4 w-4" />
+				</button>
+				<!-- Only offered when it would do something. -->
+				<button
+					v-if="showRecent || onDate !== today"
+					class="h-full border-l border-outline-gray-2 px-2.5 text-p-xs font-semibold text-ink-gray-7 transition-colors hover:bg-surface-gray-3"
+					@click="goToday"
+				>
+					Today
+				</button>
+			</div>
+			<!-- The old default, kept as a choice: Monday morning wants the drop
+			     that went out on Friday and was never closed off. -->
+			<button
+				class="h-9 shrink-0 rounded-lg border px-3 text-p-sm font-medium transition-colors"
+				:class="
+					showRecent
+						? 'border-outline-gray-4 bg-surface-gray-7 text-ink-white'
+						: 'border-outline-gray-2 text-ink-gray-7 hover:bg-surface-gray-2'
+				"
+				@click="showRecent = !showRecent"
+			>
+				Recent
 			</button>
 		</div>
 
@@ -371,7 +633,11 @@ function notify(message, tone = 'good') {
 				Loading…
 			</p>
 			<p v-else-if="!rows.length" class="py-10 text-center text-p-sm text-ink-gray-5">
-				Nothing to deliver here. Tick "Deliver this order" when taking payment, or add one above.
+				<template v-if="showRecent">Nothing in the last fortnight.</template>
+				<template v-else>
+					Nothing going out {{ dayLabel === 'Today' ? 'today' : `on ${dayLabel}` }}. Tick
+					"Deliver this order" when taking payment, or add one above.
+				</template>
 			</p>
 
 			<div v-else class="flex flex-col gap-2">
@@ -380,7 +646,16 @@ function notify(message, tone = 'good') {
 					:key="row.name"
 					class="flex flex-col gap-2 rounded-xl border border-outline-gray-2 bg-surface-white p-3"
 				>
-					<div class="flex min-w-0 items-start gap-3">
+					<!-- The whole head of the card opens it. The action buttons at the
+					     foot are outside this, so tapping "Mark dispatched" does not
+					     also open a sheet over the thing it just did. -->
+					<div
+						class="-m-1 flex min-w-0 cursor-pointer items-start gap-3 rounded-lg p-1 transition-colors hover:bg-surface-gray-1"
+						role="button"
+						tabindex="0"
+						@click="openRow(row)"
+						@keyup.enter="openRow(row)"
+					>
 						<span
 							class="grid h-9 w-9 shrink-0 place-items-center rounded-lg"
 							:class="STATUS_TONES[row.status]"
@@ -454,17 +729,313 @@ function notify(message, tone = 'good') {
 						>
 							{{ busy === row.name ? 'Working…' : `Mark ${next.toLowerCase()}` }}
 						</button>
-						<button
-							class="ml-auto flex items-center gap-1.5 rounded-md border border-outline-gray-2 px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
-							@click="printLabel(row)"
-						>
-							<LucidePrinter class="h-3.5 w-3.5" />
-							Label
-						</button>
+						<!-- View, edit, delete — asked for by name, and grouped away from
+						     the status buttons on the left. Those two sets do different
+						     kinds of thing: one moves the delivery along, the other
+						     manages the record of it. -->
+						<div class="ml-auto flex items-center gap-1.5">
+							<button
+								class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
+								title="View the full delivery"
+								@click="openRow(row)"
+							>
+								<LucideEye class="h-3.5 w-3.5" />
+								<span class="hidden sm:inline">View</span>
+							</button>
+							<button
+								class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
+								title="Correct this delivery"
+								@click="openEdit(row)"
+							>
+								<LucidePencil class="h-3.5 w-3.5" />
+								<span class="hidden sm:inline">Edit</span>
+							</button>
+							<button
+								class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
+								title="Print the label"
+								@click="printLabel(row)"
+							>
+								<LucidePrinter class="h-3.5 w-3.5" />
+								<span class="hidden sm:inline">Label</span>
+							</button>
+							<!-- Not offered once it has gone out: the server refuses those
+							     — see `deliveries.delete_delivery` — and a button that
+							     always errors is worse than no button. -->
+							<button
+								v-if="canRemove(row)"
+								class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-7 transition-colors hover:border-outline-red-2 hover:bg-surface-red-1 hover:text-ink-red-3"
+								title="Delete this delivery"
+								@click="removing = row"
+							>
+								<LucideTrash2 class="h-3.5 w-3.5" />
+								<span class="hidden sm:inline">Delete</span>
+							</button>
+						</div>
 					</div>
 				</div>
 			</div>
 		</div>
+
+		<!-- The delivery, opened. Everything the row could not fit, and the two
+		     buttons somebody who has just read it wants next. -->
+		<BottomSheet v-model="detailOpen" :title="detail?.name || 'Delivery'" tall>
+			<div v-if="detail" class="flex flex-col gap-3 px-4 pb-5">
+				<div class="flex flex-wrap items-center gap-2">
+					<span
+						class="rounded-full px-2.5 py-1 text-p-xs font-semibold"
+						:class="STATUS_TONES[detail.status]"
+					>
+						{{ detail.status }}
+					</span>
+					<span class="text-p-sm text-ink-gray-6">{{ detail.delivery_date }}</span>
+					<span v-if="detailLoading" class="text-p-xs text-ink-gray-4">Refreshing…</span>
+					<span v-if="detail.amount" class="tabular ml-auto text-p-base font-medium text-ink-gray-9">
+						{{ fmtMoney(detail.amount) }}
+					</span>
+				</div>
+
+				<dl class="grid grid-cols-1 gap-x-4 gap-y-2.5 sm:grid-cols-2">
+					<div>
+						<dt class="text-p-xs text-ink-gray-5">Customer</dt>
+						<dd class="text-p-sm text-ink-gray-9">
+							{{ detail.customer_name || detail.customer || 'Walk-in' }}
+						</dd>
+					</div>
+					<div>
+						<dt class="text-p-xs text-ink-gray-5">Contact</dt>
+						<dd class="text-p-sm text-ink-gray-9">
+							<a
+								v-if="detail.contact_phone"
+								:href="`tel:${detail.contact_phone}`"
+								class="underline underline-offset-2"
+							>
+								{{ detail.contact_phone }}
+							</a>
+							<template v-else>—</template>
+						</dd>
+					</div>
+					<div class="sm:col-span-2">
+						<dt class="text-p-xs text-ink-gray-5">Address</dt>
+						<dd class="whitespace-pre-line text-p-sm text-ink-gray-9">
+							{{ detail.address || '—' }}
+						</dd>
+					</div>
+					<div>
+						<dt class="text-p-xs text-ink-gray-5">Building or landmark</dt>
+						<dd class="text-p-sm text-ink-gray-9">{{ detail.landmark || '—' }}</dd>
+					</div>
+					<div>
+						<dt class="text-p-xs text-ink-gray-5">Pinned location</dt>
+						<dd class="truncate text-p-sm text-ink-gray-9">
+							<a
+								v-if="detail.map_location"
+								:href="detail.map_location"
+								target="_blank"
+								rel="noopener"
+								class="underline underline-offset-2"
+							>
+								Open the map
+							</a>
+							<template v-else>—</template>
+						</dd>
+					</div>
+					<div>
+						<dt class="text-p-xs text-ink-gray-5">Rider</dt>
+						<dd class="text-p-sm text-ink-gray-9">
+							{{ detail.rider_name || '—' }}
+							<span v-if="detail.rider_phone" class="text-ink-gray-6">
+								· {{ detail.rider_phone }}
+							</span>
+						</dd>
+					</div>
+					<div>
+						<dt class="text-p-xs text-ink-gray-5">Courier</dt>
+						<dd class="text-p-sm text-ink-gray-9">
+							{{ detail.courier || '—' }}
+							<span v-if="detail.vehicle" class="text-ink-gray-6">· {{ detail.vehicle }}</span>
+						</dd>
+					</div>
+					<div v-if="detail.sales_invoice">
+						<dt class="text-p-xs text-ink-gray-5">Invoice</dt>
+						<dd class="text-p-sm text-ink-gray-9">{{ detail.sales_invoice }}</dd>
+					</div>
+					<!-- The two timestamps the shop asks about after the fact: when did
+					     it leave, and when did it land. -->
+					<div v-if="detail.dispatched_at">
+						<dt class="text-p-xs text-ink-gray-5">Dispatched</dt>
+						<dd class="text-p-sm text-ink-gray-9">{{ detail.dispatched_at.slice(0, 16) }}</dd>
+					</div>
+					<div v-if="detail.delivered_at">
+						<dt class="text-p-xs text-ink-gray-5">Delivered</dt>
+						<dd class="text-p-sm text-ink-gray-9">{{ detail.delivered_at.slice(0, 16) }}</dd>
+					</div>
+				</dl>
+
+				<p
+					v-if="detail.delivery_instructions"
+					class="rounded-lg bg-surface-amber-1 px-3 py-2 text-p-sm font-medium text-ink-amber-3"
+				>
+					{{ detail.delivery_instructions }}
+				</p>
+
+				<div class="flex flex-wrap gap-2 border-t border-outline-gray-2 pt-3">
+					<Button
+						variant="subtle"
+						:icon-left="LucidePencil"
+						label="Edit"
+						@click="openEdit(detail)"
+					/>
+					<Button
+						variant="subtle"
+						:icon-left="LucidePrinter"
+						label="Label"
+						@click="printLabel(detail)"
+					/>
+					<Button
+						v-if="canRemove(detail)"
+						theme="red"
+						variant="subtle"
+						:icon-left="LucideTrash2"
+						label="Delete"
+						@click="removing = detail"
+					/>
+				</div>
+			</div>
+		</BottomSheet>
+
+		<!-- Correcting one. The status is a plain select rather than the ordered
+		     buttons on the row: this is where a delivery marked delivered by
+		     mistake gets put back to pending, which the row deliberately will not
+		     offer. -->
+		<BottomSheet v-model="editOpen" title="Edit delivery" tall>
+			<div v-if="editDraft" class="flex flex-col gap-2.5 px-4 pb-5">
+				<div class="grid grid-cols-2 gap-2">
+					<div>
+						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">Status</label>
+						<select
+							v-model="editDraft.status"
+							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						>
+							<option v-for="s in ALL_STATUSES" :key="s" :value="s">{{ s }}</option>
+						</select>
+					</div>
+					<div>
+						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
+							Delivery date
+						</label>
+						<input
+							v-model="editDraft.delivery_date"
+							type="date"
+							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+						/>
+					</div>
+				</div>
+				<input
+					v-model="editDraft.customer_name"
+					type="text"
+					placeholder="Customer name"
+					class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+				/>
+				<input
+					v-model="editDraft.contact_phone"
+					type="tel"
+					placeholder="Contact number *"
+					class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+				/>
+				<textarea
+					v-model="editDraft.address"
+					rows="2"
+					placeholder="Address *"
+					class="w-full resize-y rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 py-2 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+				/>
+				<div class="grid grid-cols-2 gap-2">
+					<input
+						v-model="editDraft.landmark"
+						type="text"
+						placeholder="Building or landmark"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+					<input
+						v-model="editDraft.map_location"
+						type="text"
+						placeholder="Pinned location (link)"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+				</div>
+				<div class="grid grid-cols-2 gap-2">
+					<input
+						v-model="editDraft.rider_name"
+						type="text"
+						placeholder="Rider"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+					<input
+						v-model="editDraft.rider_phone"
+						type="tel"
+						placeholder="Rider phone"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+				</div>
+				<div class="grid grid-cols-2 gap-2">
+					<input
+						v-model="editDraft.courier"
+						type="text"
+						placeholder="Courier"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+					<input
+						v-model="editDraft.vehicle"
+						type="text"
+						placeholder="Vehicle"
+						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+				</div>
+				<input
+					v-model="editDraft.delivery_instructions"
+					type="text"
+					placeholder="Delivery note"
+					class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+				/>
+
+				<button
+					class="mt-1 flex min-h-touch w-full items-center justify-center gap-2 rounded-xl bg-surface-gray-7 py-3 text-p-base font-semibold text-ink-white transition-all active:scale-[0.98] disabled:bg-surface-gray-4 disabled:text-ink-gray-5"
+					:disabled="!!editBlocker || editSaving"
+					@click="saveEdit"
+				>
+					{{ editBlocker || (editSaving ? 'Saving…' : 'Save changes') }}
+				</button>
+			</div>
+		</BottomSheet>
+
+		<!-- Named rather than a bare "Are you sure": on a tablet at a counter the
+		     row under your thumb and the row you meant are one pixel apart. -->
+		<Dialog
+			:model-value="!!removing"
+			:options="{ title: 'Delete this delivery?', size: 'sm' }"
+			@update:model-value="(open) => !open && (removing = null)"
+		>
+			<template #body-content>
+				<p class="text-p-base text-ink-gray-7">
+					{{ removing?.name }} for
+					{{ removing?.customer_name || removing?.customer || 'a walk-in customer' }} will be
+					removed. Nothing has been posted against it, so there is nothing to reverse — but it
+					cannot be brought back.
+				</p>
+			</template>
+			<template #actions>
+				<div class="flex gap-2">
+					<Button
+						theme="red"
+						variant="solid"
+						class="flex-1"
+						:loading="removeBusy"
+						label="Delete"
+						@click="confirmRemove"
+					/>
+					<Button variant="subtle" label="Keep it" @click="removing = null" />
+				</div>
+			</template>
+		</Dialog>
 
 		<BottomSheet v-model="newOpen" title="New delivery" tall>
 			<div class="flex flex-col gap-2.5 px-4 pb-5">
@@ -504,6 +1075,15 @@ function notify(message, tone = 'good') {
 						class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
 					/>
 				</div>
+				<!-- Who it is for. The form only asked for a number, so a phone
+				     order typed in by hand showed as "Walk-in" on the worklist and a
+				     rider had a number to ring and no name to ask for. -->
+				<input
+					v-model="draft.customerName"
+					type="text"
+					placeholder="Customer name"
+					class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+				/>
 				<input
 					v-model="draft.contactPhone"
 					type="tel"

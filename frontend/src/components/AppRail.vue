@@ -1,6 +1,7 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
+import { useSessionStore } from '@/stores/session'
 import LucideHome from '~icons/lucide/house'
 import LucideShoppingCart from '~icons/lucide/shopping-cart'
 import LucideBoxes from '~icons/lucide/boxes'
@@ -21,6 +22,17 @@ const props = defineProps({
 
 const route = useRoute()
 const router = useRouter()
+
+/**
+ * Whether this account may see the shop's numbers.
+ *
+ * Read here so the two entries that lead to them are simply not drawn. The
+ * router refuses the navigation anyway and the server refuses the data, but a
+ * rail offering a button that bounces you back to the till is a rail that looks
+ * broken — the honest thing is not to offer it.
+ */
+const session = useSessionStore()
+onMounted(session.load)
 
 const expanded = computed(() => props.mode === 'labels')
 
@@ -54,9 +66,11 @@ const TONES = {
 	// is where the rail already places it.
 }
 
-const GROUPS = [
+const GROUPS = computed(() => [
 	[
-		{ to: '/dashboard', icon: LucideHome, label: 'Dashboard', tone: 'home' },
+		...(session.canViewAnalytics
+			? [{ to: '/dashboard', icon: LucideHome, label: 'Dashboard', tone: 'home' }]
+			: []),
 		{ to: '/pos', icon: LucideShoppingCart, label: 'Point of sale', tone: 'sell' },
 		// Directly under the till: a shift belongs to the counter, and the
 		// person closing one has usually just come from it.
@@ -81,8 +95,11 @@ const GROUPS = [
 	// happens, and records are reached from the "New" button and from the
 	// Suppliers / Customers / Accounts tabs. Both routes still exist for anyone
 	// who has one bookmarked.
-	[{ to: '/reports', icon: LucideChartColumn, label: 'Reports', tone: 'money' }],
-]
+	session.canViewAnalytics
+		? [{ to: '/reports', icon: LucideChartColumn, label: 'Reports', tone: 'money' }]
+		: [],
+	// An empty group renders nothing, not a stray divider — see the template.
+].filter((group) => group.length))
 
 function isActive(to) {
 	return route.path.startsWith(to)

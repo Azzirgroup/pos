@@ -126,9 +126,32 @@ REPORTS = [
 ]
 
 
+#: Reports that are part of doing the job rather than reading the shop's
+#: numbers, and are therefore not gated.
+#:
+#: Each is reached from an operational tab and answers an operational question:
+#: the buy list under Inventory, who owes what under Accounts, and where a
+#: carton went under Stock. Locking these behind the analytics role would take
+#: the receivables list away from the person chasing the debt, which is not what
+#: "restrict analytics" means.
+OPERATIONAL_REPORTS = frozenset(
+	{"below_reorder", "receivables", "payables", "stock_movement"}
+)
+
+
 @frappe.whitelist()
 def list_reports():
-	return REPORTS
+	"""The report picker — the analytics screen itself, so role-gated.
+
+	The four operational reports still list for everyone: they are what the
+	Inventory and Accounts tabs link to, and a picker that hides them would make
+	those tabs look broken.
+	"""
+	from cosmestics.permissions import can_view_analytics
+
+	if can_view_analytics():
+		return REPORTS
+	return [r for r in REPORTS if r["key"] in OPERATIONAL_REPORTS]
 
 
 def _window(days):
@@ -138,6 +161,14 @@ def _window(days):
 
 @frappe.whitelist()
 def run(report: str, days: int = 30, warehouse: str | None = None):
+	from cosmestics.permissions import ANALYTICS, require
+
+	if report not in OPERATIONAL_REPORTS:
+		require(
+			ANALYTICS,
+			frappe._("Reports are limited to the accounts that hold Cosmestics Analytics."),
+		)
+
 	fn = {
 		"sales_summary": _sales_summary,
 		"top_items": _top_items,

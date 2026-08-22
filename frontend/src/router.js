@@ -11,9 +11,11 @@ const routes = [
 	{ path: '/', redirect: '/pos' },
 	{ path: '/pos', name: 'Sell', meta: { title: 'POS' }, component: () => import('@/views/Sell.vue') },
 	{
+		// The shop's numbers, not its work. Gated on `analytics` — see the
+		// navigation guard at the foot of this file.
 		path: '/dashboard',
 		name: 'Dashboard',
-		meta: { title: 'Dashboard' },
+		meta: { title: 'Dashboard', analytics: true },
 		component: () => import('@/views/Dashboard.vue'),
 	},
 	{
@@ -126,9 +128,13 @@ const routes = [
 		component: () => import('@/views/Reports.vue'),
 	},
 	{
+		// The report picker. The four fixed-subject reports above — receivables,
+		// payables, the buy list, stock movement — are deliberately *not* gated:
+		// they are operational, they are linked from the Inventory and Accounts
+		// tabs, and taking them away would make those tabs look broken.
 		path: '/reports',
 		name: 'Reports',
-		meta: { title: 'Reports' },
+		meta: { title: 'Reports', analytics: true },
 		component: () => import('@/views/Reports.vue'),
 	},
 	{
@@ -185,6 +191,28 @@ const routes = [
 const router = createRouter({
 	history: createWebHistory('/pos'),
 	routes,
+})
+
+/**
+ * Keep the shop's numbers to the accounts that are allowed to read them.
+ *
+ * Hiding the rail entry is not enough on its own: the routes are bookmarkable
+ * and somebody who has been on the dashboard once has the URL in their history.
+ * So the guard runs before every navigation, waits for the session if it has
+ * not arrived yet, and sends anyone without the role back to the till — which
+ * is a screen they can definitely use, unlike an error page.
+ *
+ * The server refuses the underlying calls regardless (see
+ * `cosmestics.permissions`). This is about not showing somebody a broken screen.
+ */
+router.beforeEach(async (to) => {
+	if (!to.meta?.analytics) return true
+
+	const { useSessionStore } = await import('@/stores/session')
+	const session = useSessionStore()
+	await session.load()
+
+	return session.canViewAnalytics ? true : { path: '/pos' }
 })
 
 /**

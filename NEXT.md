@@ -4,6 +4,59 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 60. The Classic Cosmetics review
+
+Seven things the shop asked for, in one pass. Nothing here is speculative — each
+maps to a line in their review document.
+
+**Three roles, this app's own.** `cosmestics/permissions.py` defines
+`Cosmestics Purchase Manager`, `Cosmestics Store Keeper` and
+`Cosmestics Analytics`; `install.ensure_roles` creates them on every migrate,
+with `desk_access = 0` so handing one out does not hand out ERPNext. `System
+Manager` holds all three implicitly, so a fresh site is never locked out.
+
+**They have to be assigned before anything gated works.** Nobody but a System
+Manager can post a purchase, confirm one, or open the dashboard until somebody
+grants the roles in the desk. That is the intended state, and it is also the
+first thing that will look like a bug.
+
+**Purchasing is now a two-hand flow** — `cosmestics/api/buying.py` and a
+rewritten `views/Purchasing.vue`. A manager posts a purchase; it saves as a
+**draft** Purchase Invoice (`update_stock = 1`, nothing received, nothing
+owed). A store keeper opens it, corrects the quantities against what actually
+turned up, and confirms — and confirming is what *submits* it. The split is
+enforced server-side: `update_purchase` lets a manager change anything and lets
+a store keeper change **quantities only**.
+
+`reopen_purchase` handles "the manager should be able to edit what was received
+that day": ERPNext will not edit a submitted document, so it cancels and inserts
+an amendment. **The name changes** (`…-1`) — anything that quotes a purchase
+number to a supplier needs to know that.
+
+**Two doors became one.** `documents.NOT_CREATABLE` now lists `purchase-invoice`,
+and `_create_spec` refuses every key on that map — which covers `create_form`,
+`link_options` and `create_document` in one place, so the hidden button and the
+refused write cannot come apart. Raising a Purchase Invoice from the generic
+document form used to submit on the spot, skipping the confirmation entirely.
+
+**Deliveries opens on today.** The old rolling fortnight is still there behind
+"Recent" — it is what catches a Friday drop nobody closed off — but the day is
+now the view, with a pager either side of it. Rows open into a detail sheet, and
+carry View / Edit / Label / Delete. The edit sheet is the only place a status can
+be set freely (the row buttons still offer just the next legal move), which is
+how a delivery marked delivered by mistake goes back to Pending.
+
+`delete_delivery` refuses anything already dispatched — that is a record of a
+rider leaving with a parcel and a message the customer has already had.
+
+**Deliveries carry a customer name.** The doctype always had the field; nothing
+asked for it, so a phone order typed in by hand read "Walk-in" on the worklist.
+
+**Gone:** the Delivery Trips tab (the shop runs one rider, one parcel), and the
+till's "Request material" button is now "Request for item".
+
+## Older
+
 ### 59. `can't multiply sequence by non-int of type 'float'` on create
 
 The *second* half of "creating a material request fails". Item 58 fixed a 500

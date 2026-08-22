@@ -17,11 +17,17 @@ def me():
 	parts = [p for p in full_name.replace(".", " ").split() if p]
 	initials = "".join(p[0] for p in parts[:2]).upper() or user[:2].upper()
 
+	from cosmestics.permissions import abilities
+
 	return {
 		"user": user,
 		"full_name": full_name,
 		"initials": initials,
 		"roles": frappe.get_roles(user),
+		# What this session may do, resolved on the server. The frontend gates
+		# screens on this rather than matching role names itself — see
+		# `permissions.abilities`.
+		"can": abilities(user),
 	}
 
 

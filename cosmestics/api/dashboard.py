@@ -68,6 +68,18 @@ def _delta(current, previous):
 
 @frappe.whitelist()
 def overview(days: int = DEFAULT_DAYS) -> dict:
+	"""The shop's numbers, for the accounts that are allowed to read them.
+
+	Gated on the server as well as hidden in the rail: a whitelisted method is
+	reachable by URL, and "the button is not drawn" is not a permission.
+	"""
+	from cosmestics.permissions import ANALYTICS, require
+
+	require(
+		ANALYTICS,
+		frappe._("The dashboard is limited to the accounts that hold Cosmestics Analytics."),
+	)
+
 	start, end, days = _window(days)
 	prev_end = add_days(start, -1)
 	prev_start = add_days(prev_end, -(days - 1))

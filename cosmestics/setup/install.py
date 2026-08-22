@@ -45,6 +45,7 @@ def after_migrate():
 
 
 def setup_prerequisites():
+	ensure_roles()
 	group = ensure_neighbour_supplier_group()
 	ensure_neighbour_shop_field()
 	ensure_default_neighbour(group)
@@ -67,6 +68,30 @@ def setup_prerequisites():
 	# Must run after the field exists, and after `group` is known so a site
 	# upgrading from the group-only scheme keeps its existing neighbours.
 	backfill_neighbour_shop_flag(group)
+
+
+def ensure_roles():
+	"""The app's own roles, so a shop can hand one out without handing out the desk.
+
+	Created here rather than shipped as a fixture for the same reason every
+	other structural record in this file is: a fixture is applied once at
+	install and a role deleted by accident never comes back, whereas this runs
+	on every migrate.
+
+	`desk_access = 0` on all three. They exist to gate screens in the till app,
+	not to let a shop assistant into ERPNext — a role that grants desk access is
+	a role that puts the whole Purchase Invoice form in front of somebody whose
+	entire job is counting cartons.
+	"""
+	from cosmestics.permissions import APP_ROLES
+
+	for role in APP_ROLES:
+		if frappe.db.exists("Role", role):
+			continue
+		doc = frappe.new_doc("Role")
+		doc.role_name = role
+		doc.desk_access = 0
+		doc.insert(ignore_permissions=True)
 
 
 def ensure_short_account_field():

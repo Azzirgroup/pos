@@ -32,13 +32,23 @@ export const MODULE_TABS = {
 		// Filed here rather than under Purchasing because the person who notices
 		// the shelf is empty is the one who raises the request; it appears in both
 		// strips for that reason.
-		{ label: 'Material requests', to: '/documents/material-request' },
+		{ label: 'Item requests', to: '/documents/material-request' },
 		{ label: 'Reorder levels', to: '/reorder' },
 	],
 	purchasing: [
-		{ label: 'Overview', to: '/purchasing' },
-		{ label: 'Requests', to: '/documents/material-request' },
+		// Buying now *happens* here rather than being summarised here — a manager
+		// posts the purchase and the store keeper confirms what arrived, both on
+		// this one screen. It leads the strip for that reason; the tabs after it
+		// are the paperwork you go and read afterwards.
+		{ label: 'Purchases', to: '/purchasing' },
+		// Asking for stock, which is all a material request is. It is not a way
+		// to buy anything and never was — the buying is the tab before this one.
+		{ label: 'Item requests', to: '/documents/material-request' },
 		{ label: 'Receipts', to: '/documents/purchase-receipt' },
+		// The ERPNext-level list of what Purchases posted. Read-only from here:
+		// raising one by hand would skip the store's confirmation, so the New
+		// button is gone and the screen says where to go instead — see
+		// `documents.NOT_CREATABLE`.
 		{ label: 'Invoices', to: '/documents/purchase-invoice' },
 		{ label: 'Landed costs', to: '/documents/landed-cost-voucher' },
 		{ label: 'Suppliers', to: '/suppliers' },
@@ -52,10 +62,12 @@ export const MODULE_TABS = {
 		// ahead of ERPNext's Delivery Notes, which this shop does not raise.
 		{ label: 'Delivery', to: '/deliveries' },
 		{ label: 'Delivery notes', to: '/documents/delivery-note' },
-		// Several invoices bundled onto one driver's run — its own tab because
-		// it groups Sales Invoices rather than being one, which the "New"
-		// button on this tab handles with its own form.
-		{ label: 'Delivery Trips', to: '/documents/delivery-trip' },
+		// Delivery Trips used to sit here. Removed at the shop's request: they
+		// run one rider, one parcel, one address, so a tab for grouping several
+		// invoices onto a van was a control nobody used and everybody had to
+		// read past. The doctype and `/documents/delivery-trip` both still work
+		// for anyone who has the URL — this is the strip getting shorter, not a
+		// feature being deleted.
 		{ label: 'Invoices', to: '/documents/sales-invoice' },
 		{ label: 'Payments', to: '/documents/payment-entry' },
 		{ label: 'Returns', to: '/returns' },

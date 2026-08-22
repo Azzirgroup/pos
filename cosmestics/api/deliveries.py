@@ -238,6 +238,7 @@ def create_delivery(
 	delivery_instructions: str | None = None,
 	sales_invoice: str | None = None,
 	customer: str | None = None,
+	customer_name: str | None = None,
 	status: str = "Pending",
 	trip: str | None = None,
 ) -> dict:
@@ -292,6 +293,14 @@ def create_delivery(
 	# doctype's own `fetch_from`, and overwriting those with blanks here would
 	# undo it.
 	for field, value in (
+		# Who the parcel is for, written down as a name.
+		#
+		# The form only ever asked for a phone number, on the assumption that a
+		# delivery raised from the pay sheet already carries a Customer link. Most
+		# do; the ones typed in by hand for a caller do not, and those rows read
+		# "Walk-in" on the worklist with a number beside them — which is nothing to
+		# go on when a rider asks who they are looking for.
+		("customer_name", customer_name),
 		("rider_name", rider_name),
 		("rider_phone", rider_phone),
 		("courier", courier),
@@ -471,11 +480,20 @@ def list_deliveries(
 	for r in rows:
 		counts[r["status"]] = counts.get(r["status"], 0) + 1
 
+	# Counted from the rows rather than queried again. When the screen is on
+	# today — which is where it now opens — this is simply `count`; the separate
+	# figure matters on the days somebody has paged back, where "how many went
+	# out today" is still the question the card is asked.
+	today = nowdate()
+	today_count = sum(1 for r in rows if r["delivery_date"] == today)
+
 	return {
 		"rows": rows,
 		"statuses": list(STATUSES),
+		"today": today,
 		"totals": {
 			"count": len(rows),
+			"today": today_count,
 			"value": flt(sum(flt(r["amount"]) for r in rows)),
 			**counts,
 		},
@@ -522,6 +540,8 @@ def update_delivery(name: str, values: dict | str) -> dict:
 	values = values or {}
 
 	editable = (
+		"customer",
+		"customer_name",
 		"rider",
 		"rider_name",
 		"rider_phone",
@@ -534,10 +554,19 @@ def update_delivery(name: str, values: dict | str) -> dict:
 		"delivery_instructions",
 		"delivery_date",
 		"trip",
+		# Editable here as well as through `set_delivery_status`, because the edit
+		# sheet asks about the whole drop at once — a status corrected in the same
+		# breath as an address should not need a second round trip. It still goes
+		# through the doctype, so the timestamps and the dispatch notice behave
+		# identically either way.
+		"status",
 	)
 
 	doc = frappe.get_doc("Cosmestics Delivery", name)
 	doc.check_permission("write")
+
+	if "status" in values and values["status"] not in STATUSES:
+		frappe.throw(_("{0} is not a delivery status").format(values["status"]))
 
 	changed = []
 	for field in editable:
@@ -553,6 +582,53 @@ def update_delivery(name: str, values: dict | str) -> dict:
 	return _delivery_row(doc) | {
 		"changed": changed,
 		"message": _("{0} updated").format(name) if changed else _("Nothing changed"),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def delete_delivery(name: str) -> dict:
+	"""Remove a drop that should never have been recorded.
+
+	A delivery is not a ledger entry — nothing is posted by raising one — so a
+	duplicate typed in twice at a busy counter is rubbish on a worklist rather
+	than a correction that has to be traceable. Deleting is the honest fix.
+
+	One that has already gone out is a different matter: `dispatched_at` is a
+	record of a rider leaving with a parcel and a message the customer has
+	already received, and erasing it would leave the shop unable to answer where
+	the goods went. Those are marked Failed instead, which is what the button
+	beside this one does.
+	"""
+	doc = frappe.get_doc("Cosmestics Delivery", name)
+	doc.check_permission("delete")
+
+	if doc.dispatched_at or doc.status in ("Dispatched", "Delivered"):
+		frappe.throw(
+			_(
+				"{0} has already gone out, so it cannot be deleted. Mark it failed "
+				"instead — that keeps the record of where it went."
+			).format(name)
+		)
+
+	frappe.delete_doc("Cosmestics Delivery", name)
+
+	return {"name": name, "message": _("{0} deleted").format(name)}
+
+
+@frappe.whitelist()
+def get_delivery(name: str) -> dict:
+	"""One drop, in full.
+
+	The list already carries every field this returns — it is read fresh so the
+	detail sheet cannot show a row that changed under it while the page sat
+	open, which on a shared till is a matter of minutes.
+	"""
+	doc = frappe.get_doc("Cosmestics Delivery", name)
+	doc.check_permission("read")
+	return _delivery_row(doc) | {
+		"owner": doc.owner,
+		"creation": str(doc.creation),
+		"modified": str(doc.modified),
 	}
 
 
