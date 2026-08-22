@@ -42,6 +42,7 @@ import CartPanel from '@/components/CartPanel.vue'
 import CartPreview from '@/components/CartPreview.vue'
 import MobileCartBar from '@/components/MobileCartBar.vue'
 import BottomSheet from '@/components/BottomSheet.vue'
+import DateField from '@/components/DateField.vue'
 import PaySheet from '@/components/PaySheet.vue'
 import HeldSheet from '@/components/HeldSheet.vue'
 import StockActionSheet from '@/components/StockActionSheet.vue'
@@ -1737,14 +1738,10 @@ useShortcuts({
 					</span>
 				</div>
 
-				<div class="flex items-center gap-2">
-					<label class="text-p-sm text-ink-gray-7" for="recent-date">On</label>
-					<input
-						id="recent-date"
-						v-model="recentDate"
-						type="date"
-						class="h-10 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
-					/>
+				<div class="flex items-end gap-2">
+					<!-- Tappable across its whole width, and it says the day in words
+					     rather than in ISO — see `DateField`. -->
+					<DateField v-model="recentDate" label="On" class="w-[220px]" />
 					<button
 						v-if="recentDate"
 						class="min-h-touch rounded-lg border border-outline-gray-2 px-3 text-p-sm font-medium text-ink-gray-7 hover:bg-surface-gray-2"

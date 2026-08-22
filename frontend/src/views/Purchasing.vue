@@ -1,7 +1,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { Button, Dialog } from 'frappe-ui'
-import { fmtMoney } from '@/utils/format'
+import { fmtMoney, fmtQty } from '@/utils/format'
 import {
 	getDayPurchases,
 	getPurchase,
@@ -12,12 +12,15 @@ import {
 	deletePurchase,
 	searchPurchaseSuppliers,
 	searchPurchaseItems,
+	searchPurchaseWarehouses,
+	getItemStock,
 } from '@/data/api'
 import { useSessionStore } from '@/stores/session'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import PillTabs from '@/components/PillTabs.vue'
 import LinkField from '@/components/LinkField.vue'
+import DateField from '@/components/DateField.vue'
 import BottomSheet from '@/components/BottomSheet.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucidePlus from '~icons/lucide/plus'
@@ -184,6 +187,11 @@ function blank() {
 		postingDate: localDay(),
 		billNo: '',
 		remarks: '',
+		// Where the goods came from and where they land. Only the destination
+		// matters to ERPNext; the source is for stock moved in from another
+		// branch, and is blank for the ordinary supplier purchase.
+		fromWarehouse: '',
+		toWarehouse: '',
 		items: [],
 	}
 }
@@ -230,6 +238,8 @@ async function openFor(row, next) {
 			postingDate: doc.posting_date,
 			billNo: doc.bill_no || '',
 			remarks: doc.remarks || '',
+			fromWarehouse: doc.from_warehouse || '',
+			toWarehouse: doc.warehouse || '',
 			items: doc.items.map((l) => ({ ...l })),
 		}
 		formOpen.value = true
@@ -240,6 +250,7 @@ async function openFor(row, next) {
 
 const supplierFetcher = (term) => searchPurchaseSuppliers(term)
 const itemFetcher = (term) => searchPurchaseItems(term)
+const warehouseFetcher = (term) => searchPurchaseWarehouses(term)
 
 /** The item picker sitting above the lines, so adding is one act not two. */
 const picking = ref('')
@@ -269,6 +280,95 @@ function removeLine(index) {
 	draft.value.items.splice(index, 1)
 }
 
+/* ---------- what the shelf already holds ---------- */
+
+/**
+ * The stock balance beside each line, exactly as the item-request form shows
+ * it.
+ *
+ * The same question is being asked in both places from opposite ends: a request
+ * argues that something is needed, a purchase says it has been bought, and
+ * whoever is filling either one cannot see the shelf. On this form it answers
+ * "have we over-ordered?" before the money is committed, and it gives the store
+ * keeper counting cartons a figure to check the delivery against.
+ *
+ * Against the receiving warehouse where one is named, so the number means the
+ * shelf these goods are actually landing on.
+ */
+const stock = ref({})
+const stockLoading = ref(false)
+
+let stockTimer = null
+watch(
+	() => [
+		formOpen.value ? 1 : 0,
+		draft.value.items.map((l) => l.item_code).join('|'),
+		draft.value.toWarehouse,
+	],
+	([open, codes]) => {
+		clearTimeout(stockTimer)
+		if (!open || !codes) {
+			stock.value = {}
+			return
+		}
+		// Debounced: adding several lines in a row fires this on each one, and
+		// only the settled list is worth asking about.
+		stockTimer = setTimeout(loadStock, 300)
+	},
+)
+
+async function loadStock() {
+	const codes = [...new Set(draft.value.items.map((l) => l.item_code).filter(Boolean))]
+	if (!codes.length) {
+		stock.value = {}
+		return
+	}
+	stockLoading.value = true
+	try {
+		stock.value = await getItemStock({
+			itemCodes: codes,
+			warehouse: draft.value.toWarehouse || null,
+		})
+	} catch (e) {
+		// Silent. A balance is context; losing it must not read as the form
+		// itself having failed, and the purchase posts perfectly well without it.
+		console.warn('[purchasing] stock lookup failed', e)
+		stock.value = {}
+	} finally {
+		stockLoading.value = false
+	}
+}
+
+/** The figure for one line, and where it is a figure *for*. */
+function stockFor(line) {
+	const row = line.item_code ? stock.value[line.item_code] : null
+	if (!row) return null
+	const named = draft.value.toWarehouse && row.here !== null && row.here !== undefined
+	return {
+		available: named ? row.here : row.total,
+		named,
+		uom: row.uom,
+	}
+}
+
+function stockLabel(line) {
+	const s = stockFor(line)
+	if (!s) return ''
+	const unit = s.uom ? ` ${s.uom}` : ''
+	return `${fmtQty(s.available)}${unit} ${s.named ? 'there' : 'in stock'}`
+}
+
+function stockTone(line) {
+	const s = stockFor(line)
+	if (!s) return ''
+	// Quieter than the request form's, and deliberately so: on a purchase a low
+	// balance is the *reason* for the document, not a warning about it. Only
+	// "none at all" is worth a colour.
+	return s.available <= 0
+		? 'bg-surface-amber-2 text-ink-amber-3'
+		: 'bg-surface-gray-3 text-ink-gray-7'
+}
+
 async function save() {
 	if (blocker.value) return
 	saving.value = true
@@ -287,6 +387,8 @@ async function save() {
 				postingDate: draft.value.postingDate,
 				billNo: draft.value.billNo,
 				remarks: draft.value.remarks,
+				fromWarehouse: draft.value.fromWarehouse,
+				toWarehouse: draft.value.toWarehouse,
 			})
 		} else if (mode.value === 'edit') {
 			res = await updatePurchase({
@@ -296,6 +398,8 @@ async function save() {
 					posting_date: draft.value.postingDate,
 					bill_no: draft.value.billNo,
 					remarks: draft.value.remarks,
+					set_from_warehouse: draft.value.fromWarehouse || null,
+					set_warehouse: draft.value.toWarehouse || null,
 					items: payload,
 				},
 			})
@@ -601,15 +705,10 @@ function notify(message, tone = 'good') {
 					required
 				/>
 
-				<div v-if="mode !== 'count'" class="grid grid-cols-2 gap-2">
-					<div>
-						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">Date</label>
-						<input
-							v-model="draft.postingDate"
-							type="date"
-							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
-						/>
-					</div>
+				<div v-if="mode !== 'count'" class="grid gap-2 sm:grid-cols-2">
+					<!-- The whole control opens the calendar, not just the glyph at
+					     the end of it — see `DateField`. -->
+					<DateField v-model="draft.postingDate" label="Date" />
 					<div>
 						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
 							Supplier bill no.
@@ -621,7 +720,30 @@ function notify(message, tone = 'good') {
 							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 placeholder-ink-gray-4 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
 						/>
 					</div>
+					<!-- Where the goods came from, and where they land. Only the
+					     destination matters to the stock ledger, and it defaults to
+					     the till's own warehouse — so a form that leaves both alone
+					     behaves exactly as it did before these existed. From is for
+					     stock moved in from another branch, and is blank for the
+					     ordinary supplier purchase. -->
+					<LinkField
+						v-model="draft.fromWarehouse"
+						:fetcher="warehouseFetcher"
+						label="From warehouse"
+					/>
+					<LinkField
+						v-model="draft.toWarehouse"
+						:fetcher="warehouseFetcher"
+						label="To warehouse"
+					/>
 				</div>
+
+				<!-- The store keeper counts against a shelf, so it is named even on
+				     the screen that cannot change it. -->
+				<p v-else-if="draft.toWarehouse" class="text-p-xs text-ink-gray-5">
+					Receiving into {{ draft.toWarehouse }}
+					<template v-if="draft.fromWarehouse"> · from {{ draft.fromWarehouse }}</template>
+				</p>
 
 				<!-- The picker sits above the lines, so adding is one act. Cleared on
 				     each pick so the next product can be typed straight away. -->
@@ -633,58 +755,92 @@ function notify(message, tone = 'good') {
 					@picked="addLine"
 				/>
 
-				<div class="rounded-lg border border-outline-gray-2">
-					<div
+				<!-- One bordered card per line, fields labelled and laid out in a
+				     row that wraps, with the stock balance underneath — the same
+				     shape the item-request form uses. The two were a flat table and
+				     a card list, and staff move between them all day: a line is a
+				     line, and it should look like one in both places. -->
+				<div class="flex flex-col gap-2">
+					<p
 						v-if="!draft.items.length"
-						class="px-3 py-6 text-center text-p-sm text-ink-gray-5"
+						class="rounded-lg border border-outline-gray-2 px-3 py-6 text-center text-p-sm text-ink-gray-5"
 					>
 						Nothing on this purchase yet.
-					</div>
+					</p>
+
 					<div
 						v-for="(line, i) in draft.items"
 						:key="line.item_code"
-						class="flex items-center gap-2 border-b border-outline-gray-1 px-2.5 py-2 last:border-b-0"
+						class="flex flex-col gap-1.5 rounded-lg border border-outline-gray-2 p-2.5"
 					>
-						<div class="min-w-0 flex-1">
-							<p class="truncate text-p-sm font-medium text-ink-gray-9">{{ line.item_name }}</p>
-							<p class="truncate text-p-xs text-ink-gray-5">
+						<div class="flex flex-wrap items-end gap-2">
+							<div class="min-w-[200px] flex-1">
+								<label class="mb-1.5 block text-p-sm text-ink-gray-6">Item</label>
+								<div
+									class="flex h-8 items-center rounded border border-outline-gray-3 bg-surface-gray-1 px-2"
+								>
+									<span class="truncate text-p-sm text-ink-gray-8">{{ line.item_name }}</span>
+								</div>
+							</div>
+							<div class="w-[120px]">
+								<label class="mb-1.5 block text-p-sm text-ink-gray-6">Qty</label>
+								<input
+									v-model.number="line.qty"
+									type="number"
+									min="0"
+									step="any"
+									inputmode="decimal"
+									class="h-8 w-full rounded border border-outline-gray-3 bg-surface-white px-2 text-right text-p-sm text-ink-gray-8 focus:border-outline-gray-5 focus:outline-none focus:ring-1 focus:ring-outline-gray-3"
+								/>
+							</div>
+							<div class="w-[120px]">
+								<label class="mb-1.5 block text-p-sm text-ink-gray-6">Rate</label>
+								<input
+									v-model.number="line.rate"
+									type="number"
+									min="0"
+									step="any"
+									inputmode="decimal"
+									:disabled="readOnlyLines"
+									class="h-8 w-full rounded border border-outline-gray-3 bg-surface-white px-2 text-right text-p-sm text-ink-gray-8 focus:border-outline-gray-5 focus:outline-none focus:ring-1 focus:ring-outline-gray-3 disabled:bg-surface-gray-2 disabled:text-ink-gray-5"
+								/>
+							</div>
+							<div class="w-[120px]">
+								<label class="mb-1.5 block text-p-sm text-ink-gray-6">Amount</label>
+								<div
+									class="tabular flex h-8 items-center justify-end rounded border border-outline-gray-3 bg-surface-gray-1 px-2 text-p-sm font-medium text-ink-gray-8"
+								>
+									{{ fmtMoney(Number(line.qty || 0) * Number(line.rate || 0)) }}
+								</div>
+							</div>
+							<button
+								v-if="!readOnlyLines"
+								class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ink-gray-5 transition-colors hover:bg-surface-gray-2 hover:text-ink-red-3"
+								:aria-label="`Remove ${line.item_name}`"
+								@click="removeLine(i)"
+							>
+								<LucideX class="h-4 w-4" />
+							</button>
+						</div>
+
+						<div class="flex flex-wrap items-center gap-2">
+							<span class="truncate text-p-xs text-ink-gray-5">
 								{{ line.item_code }}<template v-if="line.uom"> · {{ line.uom }}</template>
-							</p>
+							</span>
+							<span
+								v-if="stockFor(line)"
+								class="tabular rounded-full px-2 py-0.5 text-p-xs font-medium"
+								:class="stockTone(line)"
+							>
+								{{ stockLabel(line) }}
+							</span>
+							<span v-else-if="stockLoading" class="text-p-xs text-ink-gray-5">
+								Checking stock…
+							</span>
+							<span v-if="draft.toWarehouse" class="truncate text-p-xs text-ink-gray-5">
+								at {{ draft.toWarehouse }}
+							</span>
 						</div>
-						<div class="w-[72px] shrink-0">
-							<label class="mb-0.5 block text-p-xs text-ink-gray-5">Qty</label>
-							<input
-								v-model.number="line.qty"
-								type="number"
-								min="0"
-								step="any"
-								inputmode="decimal"
-								class="h-9 w-full rounded border border-outline-gray-2 bg-surface-gray-2 px-2 text-right text-p-sm text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
-							/>
-						</div>
-						<div class="w-[92px] shrink-0">
-							<label class="mb-0.5 block text-p-xs text-ink-gray-5">Rate</label>
-							<input
-								v-model.number="line.rate"
-								type="number"
-								min="0"
-								step="any"
-								inputmode="decimal"
-								:disabled="readOnlyLines"
-								class="h-9 w-full rounded border border-outline-gray-2 bg-surface-gray-2 px-2 text-right text-p-sm text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none disabled:text-ink-gray-5"
-							/>
-						</div>
-						<span class="tabular w-[96px] shrink-0 pt-4 text-right text-p-sm text-ink-gray-7">
-							{{ fmtMoney(Number(line.qty || 0) * Number(line.rate || 0)) }}
-						</span>
-						<button
-							v-if="!readOnlyLines"
-							class="mt-4 grid h-7 w-7 shrink-0 place-items-center rounded text-ink-gray-5 transition-colors hover:bg-surface-red-1 hover:text-ink-red-3"
-							:aria-label="`Remove ${line.item_name}`"
-							@click="removeLine(i)"
-						>
-							<LucideX class="h-4 w-4" />
-						</button>
 					</div>
 				</div>
 

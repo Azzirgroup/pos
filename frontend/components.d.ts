@@ -20,6 +20,7 @@ declare module 'vue' {
     CustomerLedger: typeof import('./src/components/CustomerLedger.vue')['default']
     CustomerSheet: typeof import('./src/components/CustomerSheet.vue')['default']
     DataTable: typeof import('./src/components/DataTable.vue')['default']
+    DateField: typeof import('./src/components/DateField.vue')['default']
     DeliveryTripSheet: typeof import('./src/components/DeliveryTripSheet.vue')['default']
     DocumentFormSheet: typeof import('./src/components/DocumentFormSheet.vue')['default']
     DocumentModal: typeof import('./src/components/DocumentModal.vue')['default']

@@ -10,6 +10,7 @@ import LucideReceipt from '~icons/lucide/receipt-text'
 import LucideLandmark from '~icons/lucide/landmark'
 import LucideUsers from '~icons/lucide/users'
 import LucideSettings from '~icons/lucide/settings-2'
+import LucideDesk from '~icons/lucide/layout-grid'
 import LucideChartColumn from '~icons/lucide/chart-column'
 import LucideFactory from '~icons/lucide/factory'
 import LucideClock from '~icons/lucide/clock'
@@ -157,6 +158,28 @@ function isActive(to) {
 				<LucideSettings class="h-[18px] w-[18px] shrink-0" />
 				<span v-if="expanded" class="truncate text-p-sm">Settings</span>
 			</button>
+
+			<!-- Back to ERPNext.
+			     Not a router link: the desk is a different application served by
+			     the same site, so this leaves the SPA rather than navigating
+			     inside it. `href` rather than `router.push` for exactly that
+			     reason — pushing `/app` would hand the path to vue-router, which
+			     has no such route and would land on a blank screen.
+
+			     At the foot of the rail with Settings, because it is the same
+			     kind of thing: somewhere you go occasionally and never mid-sale.
+			     A cashier has no reason to press it; a manager who needs the full
+			     ledger had to type the URL until now. -->
+			<a
+				href="/app"
+				class="flex h-9 items-center rounded-lg text-ink-gray-6 transition-colors hover:bg-surface-gray-2 hover:text-ink-gray-8"
+				:class="expanded ? 'w-full gap-2.5 px-2.5' : 'w-9 justify-center'"
+				aria-label="Open the ERPNext desk"
+				title="Open the ERPNext desk"
+			>
+				<LucideDesk class="h-[18px] w-[18px] shrink-0" />
+				<span v-if="expanded" class="truncate text-p-sm">Back to desk</span>
+			</a>
 		</div>
 	</nav>
 </template>

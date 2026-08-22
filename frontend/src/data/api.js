@@ -618,13 +618,23 @@ export const getDayPurchases = ({ onDate, search } = {}) =>
 
 export const getPurchase = ({ name }) => call('cosmestics.api.buying.get_purchase', { name })
 
-export const createPurchase = ({ supplier, items, postingDate, billNo, remarks }) =>
+export const createPurchase = ({
+	supplier,
+	items,
+	postingDate,
+	billNo,
+	remarks,
+	fromWarehouse,
+	toWarehouse,
+}) =>
 	call('cosmestics.api.buying.create_purchase', {
 		supplier,
 		items,
 		posting_date: postingDate || null,
 		bill_no: billNo || null,
 		remarks: remarks || null,
+		from_warehouse: fromWarehouse || null,
+		to_warehouse: toWarehouse || null,
 	})
 
 export const updatePurchase = ({ name, values }) =>
@@ -644,6 +654,10 @@ export const deletePurchase = ({ name }) => call('cosmestics.api.buying.delete_p
 
 export const searchPurchaseSuppliers = (search) =>
 	call('cosmestics.api.buying.search_suppliers', { search: search || null })
+
+/** Warehouses a purchase can move stock between. */
+export const searchPurchaseWarehouses = (search) =>
+	call('cosmestics.api.buying.search_warehouses', { search: search || null })
 
 export const searchPurchaseItems = (search) =>
 	call('cosmestics.api.buying.search_purchase_items', { search: search || null })

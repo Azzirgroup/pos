@@ -18,6 +18,7 @@ import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import PillTabs from '@/components/PillTabs.vue'
 import LinkField from '@/components/LinkField.vue'
+import DateField from '@/components/DateField.vue'
 import BottomSheet from '@/components/BottomSheet.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucidePrinter from '~icons/lucide/printer'
@@ -919,16 +920,9 @@ function notify(message, tone = 'good') {
 							<option v-for="s in ALL_STATUSES" :key="s" :value="s">{{ s }}</option>
 						</select>
 					</div>
-					<div>
-						<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
-							Delivery date
-						</label>
-						<input
-							v-model="editDraft.delivery_date"
-							type="date"
-							class="h-11 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
-						/>
-					</div>
+					<!-- The whole control opens the calendar, not the glyph at the
+					     end of it — see `DateField`. -->
+					<DateField v-model="editDraft.delivery_date" label="Delivery date" />
 				</div>
 				<input
 					v-model="editDraft.customer_name"

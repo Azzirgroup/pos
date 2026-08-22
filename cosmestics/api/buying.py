@@ -79,6 +79,71 @@ def _warehouse() -> str:
 	return warehouse
 
 
+def _resolve_warehouses(from_warehouse: str | None, to_warehouse: str | None) -> tuple:
+	"""Where the goods came from, and where they land.
+
+	**Only the destination is required**, and it falls back to the till's own
+	warehouse — which is what every purchase did before these fields existed, so
+	a form that leaves them alone behaves exactly as it used to.
+
+	The source is genuinely optional and usually blank: goods bought from a
+	supplier come from the supplier, not from a warehouse this shop keeps. It
+	earns its place for the case the shop asked about — stock moved in from
+	another branch or a store of their own — where naming it is the difference
+	between a purchase you can trace and one that appeared from nowhere.
+
+	Refusing the same warehouse for both is the one rule worth enforcing here:
+	that is not a purchase, it is a document that would move stock onto the shelf
+	it came off, and ERPNext's own message for it names neither field.
+	"""
+	source = (from_warehouse or "").strip() or None
+	target = (to_warehouse or "").strip() or None
+
+	for warehouse in (source, target):
+		if warehouse and not frappe.db.exists("Warehouse", warehouse):
+			frappe.throw(_("{0} is not a warehouse").format(warehouse))
+
+	target = target or _warehouse()
+
+	if source and source == target:
+		frappe.throw(_("The goods cannot come from and go to the same warehouse"))
+
+	return source, target
+
+
+@frappe.whitelist()
+def search_warehouses(search: str | None = None, limit: int = 20) -> list:
+	"""Warehouses a purchase can name, for the form's link fields.
+
+	Its own lookup rather than the generic one in `documents.link_options`,
+	which only serves fields a registered `create` spec declares — this screen
+	is not one of those, and widening that endpoint to take any doctype would
+	make it a way to read any table on the site.
+
+	Group nodes are left out: they hold no stock, so naming one produces a
+	document ERPNext refuses on save.
+	"""
+	filters = {"is_group": 0, "disabled": 0}
+	company = frappe.defaults.get_user_default("Company") or frappe.defaults.get_global_default(
+		"company"
+	)
+	if company:
+		filters["company"] = company
+	if search:
+		filters["name"] = ("like", f"%{search}%")
+
+	return [
+		{"label": r, "value": r}
+		for r in frappe.get_all(
+			"Warehouse",
+			filters=filters,
+			pluck="name",
+			order_by="name asc",
+			limit_page_length=min(cint(limit) or 20, 50),
+		)
+	]
+
+
 # --------------------------------------------------------------------------
 # Reading the day
 # --------------------------------------------------------------------------
@@ -264,6 +329,10 @@ def get_purchase(name: str) -> dict:
 		"posting_date": str(doc.posting_date),
 		"bill_no": doc.bill_no,
 		"remarks": doc.remarks,
+		# Both halves of the movement, so the form can show where the goods came
+		# from as well as where they landed.
+		"from_warehouse": doc.get("set_from_warehouse"),
+		"warehouse": doc.get("set_warehouse"),
 		"docstatus": doc.docstatus,
 		"stage": STAGE_BY_DOCSTATUS.get(doc.docstatus, doc.status),
 		"status": doc.status,
@@ -348,6 +417,8 @@ def create_purchase(
 	posting_date: str | None = None,
 	bill_no: str | None = None,
 	remarks: str | None = None,
+	from_warehouse: str | None = None,
+	to_warehouse: str | None = None,
 ) -> dict:
 	"""Post a purchase, as a draft, for the store keeper to check against.
 
@@ -366,7 +437,7 @@ def create_purchase(
 		frappe.throw(_("{0} is not a supplier").format(supplier))
 
 	lines = _clean_lines(items)
-	warehouse = _warehouse()
+	source, warehouse = _resolve_warehouses(from_warehouse, to_warehouse)
 
 	doc = frappe.new_doc("Purchase Invoice")
 	doc.company = _company()
@@ -377,11 +448,16 @@ def create_purchase(
 	# docstring.
 	doc.update_stock = 1
 	doc.set_warehouse = warehouse
+	if source:
+		doc.set_from_warehouse = source
 	doc.bill_no = bill_no
 	doc.remarks = remarks
 
 	for line in lines:
-		doc.append("items", {**line, "warehouse": warehouse})
+		row = {**line, "warehouse": warehouse}
+		if source:
+			row["from_warehouse"] = source
+		doc.append("items", row)
 
 	doc.insert()
 
@@ -431,14 +507,25 @@ def update_purchase(name: str, values: dict | str) -> dict:
 		for field in ("bill_no", "remarks"):
 			if field in values:
 				doc.set(field, values[field])
+		if "set_from_warehouse" in values or "set_warehouse" in values:
+			source, warehouse = _resolve_warehouses(
+				values.get("set_from_warehouse", doc.set_from_warehouse),
+				values.get("set_warehouse", doc.set_warehouse),
+			)
+			doc.set_from_warehouse = source
+			doc.set_warehouse = warehouse
 
 	if "items" in values:
 		lines = _clean_lines(values["items"])
 		if manager:
 			warehouse = doc.set_warehouse or _warehouse()
+			source = doc.set_from_warehouse
 			doc.items = []
 			for line in lines:
-				doc.append("items", {**line, "warehouse": warehouse})
+				row = {**line, "warehouse": warehouse}
+				if source:
+					row["from_warehouse"] = source
+				doc.append("items", row)
 		else:
 			# Re-read keeping the zeros — see `_clean_lines`. A store keeper's zero
 			# means "none of this came", and it has to reach the loop below to say
