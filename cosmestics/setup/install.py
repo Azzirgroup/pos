@@ -18,6 +18,9 @@ NEIGHBOUR_GROUP = "Neighbour Shop"
 DEFAULT_NEIGHBOUR = "Neighbour Shop (Walk-in)"
 MPESA_MODE = "M-Pesa"
 
+#: Set once, when the one-shift-per-day rule is first switched on for a site.
+SHIFT_RULE_MARKER = "cosmestics_one_shift_per_day_applied"
+
 # M-Pesa reaches a Kenyan shop three ways, and each one settles differently: a
 # Send Money lands in the till's own wallet, a Paybill in the business account,
 # and an agent Withdraw takes cash *out* of the drawer. They are three Modes of
@@ -62,6 +65,7 @@ def setup_prerequisites():
 	ensure_pin_login_fields()
 	ensure_quote_conversion_fields()
 	ensure_material_request_customer_field()
+	ensure_one_shift_per_day_default()
 	ensure_print_formats()
 	ensure_notification_defaults()
 	ensure_app_icon()
@@ -219,6 +223,35 @@ def ensure_quote_conversion_fields():
 		if frappe.db.exists("Custom Field", {"dt": "Quotation", "fieldname": field["fieldname"]}):
 			continue
 		create_custom_field("Quotation", field)
+
+
+def ensure_one_shift_per_day_default():
+	"""Turn the day rule on for a shop that already had these settings.
+
+	A `default` on a new field only applies to a document that has yet to be
+	created, and this is a Single — the row exists on every site that has ever
+	opened the settings screen, so the field would land there as 0 and the rule
+	the shop asked for would silently be off.
+
+	Written only when nothing has been chosen yet, so a shop that deliberately
+	turns it back off keeps that decision through the next migrate.
+	"""
+	if not frappe.db.exists("DocType", "Cosmestics POS Settings"):
+		return
+	if not frappe.get_meta("Cosmestics POS Settings").get_field("one_shift_per_day"):
+		return
+
+	# A marker rather than "is it still unset". By the time this runs the Single
+	# has already been saved by `apply_settings_defaults`, which writes 0 into
+	# every untouched Check — so an unanswered question and a deliberate "no" are
+	# indistinguishable in the field itself. The marker records that the default
+	# was applied once, so a shop that turns the rule back off keeps it off
+	# through every later migrate.
+	if frappe.db.get_default(SHIFT_RULE_MARKER):
+		return
+
+	frappe.db.set_single_value("Cosmestics POS Settings", "one_shift_per_day", 1)
+	frappe.db.set_default(SHIFT_RULE_MARKER, "1")
 
 
 def ensure_material_request_customer_field():

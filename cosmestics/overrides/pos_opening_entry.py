@@ -68,6 +68,61 @@ class SharedShiftOpeningMixin:
 		if users != current:
 			self.set(ROSTER_FIELD, [{"user": u} for u in users])
 
+	def check_open_pos_exists(self):
+		"""One shift per till — and, when the shop says so, one per till per day.
+
+		ERPNext's own check is kept exactly as it is: a counter may not have two
+		shifts open at once, which is the constraint the roster is built on.
+
+		The day rule is this shop's, and it is about reconciliation rather than
+		concurrency. Two shifts run back to back produce two closing entries for
+		one drawer and one day's takings, and nothing downstream adds them up —
+		so the day cannot be reconciled against a single count, and a shortfall
+		in the morning is invisible beside a surplus in the afternoon.
+
+		Deliberately a setting, defaulting on, because the cost of the rule is
+		real: a shift closed by mistake at nine o'clock locks that counter until
+		midnight. The message says how to lift it, and the setting sits next to
+		the other till rules rather than being buried in code.
+		"""
+		parent_hook = getattr(super(), "check_open_pos_exists", None)
+		if parent_hook:
+			parent_hook()
+
+		if self.docstatus == 2 or not self.pos_profile:
+			return
+		if not frappe.db.get_single_value("Cosmestics POS Settings", "one_shift_per_day"):
+			return
+
+		posting_date = self.posting_date or frappe.utils.nowdate()
+		earlier = frappe.db.get_value(
+			"POS Opening Entry",
+			{
+				"pos_profile": self.pos_profile,
+				"posting_date": posting_date,
+				"docstatus": 1,
+				"name": ("!=", self.name or ""),
+			},
+			["name", "user", "status"],
+			as_dict=True,
+		)
+		if not earlier:
+			return
+
+		frappe.throw(
+			title=_("Already Opened Today"),
+			msg=_(
+				"{0} was already opened today by {1} ({2}). One shift per till per day keeps "
+				"the whole day's takings on one closing entry. Add this cashier to that shift "
+				"instead — or, if the counter really must reopen, turn off <b>One Shift Per "
+				"Till Per Day</b> in the till settings."
+			).format(
+				frappe.bold(self.pos_profile),
+				frappe.bold(earlier.user),
+				get_link_to_form("POS Opening Entry", earlier.name),
+			),
+		)
+
 	def check_user_already_assigned(self):
 		"""Nobody on this shift may already be on another open one.
 

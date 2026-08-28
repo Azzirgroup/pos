@@ -188,6 +188,22 @@ def get_open_shift():
 	}
 
 
+def _shift_on_till(pos_profile: str):
+	"""Any open shift on this counter, ignoring who may see it.
+
+	Deliberately unfiltered by roster or permission: this answers "is the drawer
+	already open", which is a fact about the till and not about the person
+	asking. `_shared_open_shift` answers the different question of which shift
+	somebody may *sell* against, and must keep hiding shifts they are not on.
+	"""
+	return frappe.db.get_value(
+		"POS Opening Entry",
+		{"pos_profile": pos_profile, "docstatus": 1, "status": "Open"},
+		["name", "user", "period_start_date"],
+		as_dict=True,
+	)
+
+
 @frappe.whitelist(methods=["POST"])
 def open_shift(
 	pos_profile: str,
@@ -206,6 +222,15 @@ def open_shift(
 	if isinstance(cashiers, str):
 		cashiers = frappe.parse_json(cashiers)
 
+	# Whatever is open on this counter, whether or not this cashier is allowed to
+	# see it. `get_open_shift` deliberately hides a shift the viewer is not
+	# rostered on, which left them looking at an empty till, pressing Open, and
+	# being told by ERPNext to "cancel the existing POS Opening Entry" — advice
+	# that destroys somebody else's shift and its takings with it. A shop that
+	# follows it, or that cancels and reopens to get selling again, ends the day
+	# with two closing entries covering one drawer. See `_shift_on_till`.
+	on_till = _shift_on_till(pos_profile)
+
 	existing = get_open_shift()
 	if existing and existing.get("shared"):
 		frappe.throw(
@@ -218,6 +243,21 @@ def open_shift(
 		frappe.throw(
 			_("You already have an open shift ({0}). Close it before starting another.").format(
 				existing["name"]
+			)
+		)
+
+	if on_till:
+		frappe.throw(
+			_(
+				"{0} already has an open shift ({1}), opened by {2} at {3}. A till has one "
+				"shift at a time so the drawer reconciles once — ask to be added to that "
+				"shift, or close it first. Do not cancel it: its sales would be left with "
+				"nothing to settle against."
+			).format(
+				pos_profile,
+				on_till["name"],
+				on_till["user"],
+				frappe.utils.format_datetime(on_till["period_start_date"], "d MMM, HH:mm"),
 			)
 		)
 

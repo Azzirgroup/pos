@@ -52,6 +52,7 @@ POS_SETTINGS_FIELDS = (
 	"default_source_warehouse",
 	"default_expense_account",
 	"require_shift_to_sell",
+	"one_shift_per_day",
 	# Whether the grid shows product photos. Shop-wide rather than per till: it
 	# is a property of how this shop's staff find things, not of one counter.
 	"show_item_images",

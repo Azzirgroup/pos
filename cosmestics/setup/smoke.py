@@ -29,13 +29,33 @@ class _Report:
 
 def run():
 	r = _Report()
+
+	# The suite opens and closes shifts several times and simulates days of
+	# trading inside one run, so "one shift per till per day" is set aside while
+	# it runs — otherwise the second run on any given day aborts on a rule that
+	# is working exactly as intended. It is a policy about how a shop
+	# reconciles, not an invariant the code has to hold.
+	#
+	# Restored explicitly rather than left to the rollback below. Something
+	# inside the run commits, so the rollback does not reach this value, and the
+	# first version of this quietly left the rule switched off on whatever site
+	# the suite had just been run against — a smoke test that changes the shop's
+	# settings is worse than no smoke test.
+	rule = frappe.db.get_single_value("Cosmestics POS Settings", "one_shift_per_day")
+
 	try:
+		frappe.db.set_single_value("Cosmestics POS Settings", "one_shift_per_day", 0)
+		frappe.clear_cache()
 		_run(r)
 	except Exception:
 		print("EXCEPTION:\n" + frappe.get_traceback())
 		r.results.append(False)
 	finally:
 		frappe.db.rollback()
+		if frappe.db.get_single_value("Cosmestics POS Settings", "one_shift_per_day") != rule:
+			frappe.db.set_single_value("Cosmestics POS Settings", "one_shift_per_day", rule)
+			frappe.db.commit()
+			frappe.clear_cache()
 		print("rolled back — nothing persisted")
 	return r.summary()
 

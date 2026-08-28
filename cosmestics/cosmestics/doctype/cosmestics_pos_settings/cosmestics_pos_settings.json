@@ -36,6 +36,7 @@
   "company_short_account",
   "column_break_till",
   "require_shift_to_sell",
+  "one_shift_per_day",
   "show_item_images"
  ],
  "fields": [
@@ -142,7 +143,7 @@
   },
   {
    "depends_on": "notify_material_request",
-   "description": "The message posted with the PDF. Jinja, rendered against the request as <b>doc</b> — {{ doc.name }}, {{ operator }}, {{ customer }}, {{ items }}, {{ link }}. Leave blank for the built-in wording.",
+   "description": "The message posted with the PDF. Jinja, rendered against the request as <b>doc</b> \u2014 {{ doc.name }}, {{ operator }}, {{ customer }}, {{ items }}, {{ link }}. Leave blank for the built-in wording.",
    "fieldname": "material_request_template",
    "fieldtype": "Code",
    "label": "Material Request Message Template",
@@ -181,7 +182,7 @@
   },
   {
    "depends_on": "notify_delivery_dispatch",
-   "description": "Dispatch message. Jinja, rendered against the delivery as <b>doc</b> — {{ doc.name }}, {{ customer }}, {{ rider }}, {{ rider_phone }}, {{ address }}. Leave blank for the built-in wording.",
+   "description": "Dispatch message. Jinja, rendered against the delivery as <b>doc</b> \u2014 {{ doc.name }}, {{ customer }}, {{ rider }}, {{ rider_phone }}, {{ address }}. Leave blank for the built-in wording.",
    "fieldname": "delivery_template",
    "fieldtype": "Code",
    "label": "Dispatch Message Template",
@@ -239,6 +240,13 @@
    "fieldname": "require_shift_to_sell",
    "fieldtype": "Check",
    "label": "Require an Open Shift to Sell"
+  },
+  {
+   "default": "1",
+   "description": "Refuse a second shift on the same till on the same day, so one day's takings reconcile against one closing entry. Turn this off if a till genuinely needs a mid-day handover \u2014 or if a shift is closed by mistake and the counter has to reopen before tomorrow.",
+   "fieldname": "one_shift_per_day",
+   "fieldtype": "Check",
+   "label": "One Shift Per Till Per Day"
   },
   {
    "default": "1",
