@@ -7,8 +7,12 @@ import StatTiles from '@/components/StatTiles.vue'
 import DataTable from '@/components/DataTable.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import { useRowActions } from '@/composables/useRowActions'
+import MoneySheet from '@/components/MoneySheet.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideSend from '~icons/lucide/send'
+import LucideArrowDownLeft from '~icons/lucide/arrow-down-left'
+import LucideArrowUpRight from '~icons/lucide/arrow-up-right'
+import LucideArrowLeftRight from '~icons/lucide/arrow-left-right'
 
 const data = ref({ balances: [], receivable: 0, payable: 0, cash_total: 0, bank_total: 0 })
 const loading = ref(false)
@@ -43,6 +47,28 @@ const stats = computed(() => [
 	},
 ])
 
+/**
+ * The three things a shop does with money, next to the balances they change.
+ *
+ * They were all reachable already — receiving through the credit screen, paying
+ * a supplier only from the desk, transferring not at all — but not from the
+ * screen that shows the balances, which is where somebody is standing when they
+ * decide to do one. See `MoneySheet` for why one dialog serves all three.
+ */
+const moneyOpen = ref(false)
+const moneyMode = ref('transfer')
+const toast = ref(null)
+
+function openMoney(mode) {
+	moneyMode.value = mode
+	moneyOpen.value = true
+}
+
+function notify({ message, tone }) {
+	toast.value = { message, tone }
+	setTimeout(() => (toast.value = null), 3500)
+}
+
 onMounted(load)
 
 async function load() {
@@ -74,6 +100,28 @@ async function load() {
 
 		<StatTiles :stats="stats" />
 
+		<!-- Directly under the figures each one moves. -->
+		<div class="grid shrink-0 grid-cols-1 gap-2 px-4 pb-3 sm:grid-cols-3">
+			<Button
+				variant="subtle"
+				:icon-left="LucideArrowDownLeft"
+				label="Receive payment"
+				@click="openMoney('receive')"
+			/>
+			<Button
+				variant="subtle"
+				:icon-left="LucideArrowUpRight"
+				label="Make payment"
+				@click="openMoney('pay-supplier')"
+			/>
+			<Button
+				variant="subtle"
+				:icon-left="LucideArrowLeftRight"
+				label="Transfer funds"
+				@click="openMoney('transfer')"
+			/>
+		</div>
+
 		<DataTable
 			:columns="COLUMNS"
 			:rows="data.balances"
@@ -88,5 +136,15 @@ async function load() {
 		</DataTable>
 
 		<ShareSheet v-model="shareOpen" :payload="sharePayload" />
+
+		<MoneySheet v-model="moneyOpen" :mode="moneyMode" @done="load" @notify="notify" />
+
+		<div
+			v-if="toast"
+			class="pos-toast pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2 rounded-lg px-4 py-2.5 text-p-sm font-medium text-ink-white shadow-lg"
+			:class="toast.tone === 'bad' ? 'bg-surface-red-5' : 'bg-surface-green-3'"
+		>
+			{{ toast.message }}
+		</div>
 	</div>
 </template>

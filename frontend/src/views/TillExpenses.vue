@@ -5,6 +5,7 @@ import { fmtMoney } from '@/utils/format'
 import {
 	getMovementOptions,
 	listMovements,
+	listExpenses,
 	recordMovement,
 	voidMovement,
 	getOpenShift,
@@ -35,6 +36,36 @@ const shift = ref(null)
 const loading = ref(false)
 const busy = ref(false)
 
+/**
+ * Recent expenses, independent of the open shift.
+ *
+ * The screen only ever showed the movements on the shift being reconciled, so
+ * with no shift open it showed nothing at all and could never show yesterday —
+ * which is the question a manager actually has. Filtered by date and by expense
+ * account, because those are the two ways "what have we been spending on" gets
+ * asked. See `shift.list_expenses`.
+ */
+const history = ref({ rows: [], total: 0, count: 0, accounts: [] })
+const historyLoading = ref(false)
+const fromDate = ref(new Date(Date.now() - 29 * 86400000).toISOString().slice(0, 10))
+const toDate = ref(new Date().toISOString().slice(0, 10))
+const filterAccount = ref('')
+
+async function loadHistory() {
+	historyLoading.value = true
+	try {
+		history.value = await listExpenses({
+			fromDate: fromDate.value,
+			toDate: toDate.value,
+			expenseAccount: filterAccount.value || null,
+		})
+	} catch (e) {
+		notify(e.message || 'Could not load expenses', 'bad')
+	} finally {
+		historyLoading.value = false
+	}
+}
+
 const amount = ref('')
 const mode = ref(null)
 const account = ref(null)
@@ -60,7 +91,10 @@ const stats = computed(() => [
 	{ label: 'Expenses', value: rows.value.length, type: 'number', icon: 'receipt' },
 ])
 
-onMounted(load)
+onMounted(() => {
+	load()
+	loadHistory()
+})
 
 async function load() {
 	loading.value = true
@@ -98,6 +132,7 @@ async function submit() {
 		reason.value = ''
 		person.value = ''
 		await load()
+		loadHistory()
 		notify(`${fmtMoney(res.amount)} out of ${res.mode_of_payment}`, 'good')
 	} catch (e) {
 		notify(e.message || 'Could not record that', 'bad')
@@ -111,6 +146,7 @@ async function voidOne(m) {
 	try {
 		await voidMovement({ name: m.name })
 		await load()
+		loadHistory()
 		notify(`${fmtMoney(m.amount)} put back`, 'good')
 	} catch (e) {
 		notify(e.message || 'Could not undo that', 'bad')
@@ -259,6 +295,79 @@ function notify(message, tone = 'good') {
 				<p v-else-if="!loading" class="px-1 text-p-sm text-ink-gray-5">
 					Nothing has come out of the drawer this shift.
 				</p>
+
+				<!-- Everything spent over a period, whatever shift it was on. -->
+				<div class="mt-2 rounded-xl border border-outline-gray-2 bg-surface-white">
+					<header class="flex flex-wrap items-center gap-2 border-b border-outline-gray-2 px-4 py-3">
+						<div class="min-w-0 flex-1">
+							<h2 class="text-p-sm font-semibold text-ink-gray-8">Recent expenses</h2>
+							<p class="text-p-xs text-ink-gray-5">
+								{{ history.count }} in this period · {{ fmtMoney(history.total) }}
+							</p>
+						</div>
+					</header>
+
+					<div class="flex flex-wrap items-end gap-2 border-b border-outline-gray-2 px-4 py-3">
+						<div class="flex flex-col gap-1">
+							<label class="text-p-xs text-ink-gray-5">From</label>
+							<input
+								v-model="fromDate"
+								type="date"
+								class="h-9 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-2 text-p-sm text-ink-gray-9"
+								@change="loadHistory"
+							/>
+						</div>
+						<div class="flex flex-col gap-1">
+							<label class="text-p-xs text-ink-gray-5">To</label>
+							<input
+								v-model="toDate"
+								type="date"
+								class="h-9 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-2 text-p-sm text-ink-gray-9"
+								@change="loadHistory"
+							/>
+						</div>
+						<div class="flex min-w-[180px] flex-1 flex-col gap-1">
+							<label class="text-p-xs text-ink-gray-5">Booked to</label>
+							<select
+								v-model="filterAccount"
+								class="h-9 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-2 text-p-sm text-ink-gray-9"
+								@change="loadHistory"
+							>
+								<option value="">Every account</option>
+								<option v-for="a in options?.expense_accounts || history.accounts" :key="a" :value="a">
+									{{ a }}
+								</option>
+							</select>
+						</div>
+					</div>
+
+					<p v-if="historyLoading" class="px-4 py-6 text-center text-p-sm text-ink-gray-5">Loading…</p>
+					<p v-else-if="!history.rows.length" class="px-4 py-6 text-center text-p-sm text-ink-gray-5">
+						Nothing was spent in this period.
+					</p>
+					<div v-else class="divide-y divide-outline-gray-1">
+						<div
+							v-for="row in history.rows"
+							:key="row.name"
+							class="flex items-start gap-3 px-4 py-2.5"
+						>
+							<div class="min-w-0 flex-1">
+								<div class="truncate text-p-sm font-medium text-ink-gray-8">
+									{{ row.reason || row.type }}
+								</div>
+								<div class="truncate text-p-xs text-ink-gray-5">
+									{{ row.date }}
+									<template v-if="row.account"> · {{ row.account }}</template>
+									<template v-if="row.mode"> · {{ row.mode }}</template>
+									<template v-if="row.person"> · {{ row.person }}</template>
+								</div>
+							</div>
+							<span class="tabular shrink-0 text-p-sm font-semibold text-ink-gray-9">
+								{{ fmtMoney(row.amount) }}
+							</span>
+						</div>
+					</div>
+				</div>
 			</div>
 		</div>
 

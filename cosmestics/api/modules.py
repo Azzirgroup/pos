@@ -29,11 +29,33 @@ def _window(days):
 
 
 @frappe.whitelist()
-def inventory(warehouse: str | None = None, search: str | None = None, limit: int = 200):
-	"""Stock on hand with value, newest movement first."""
+def inventory(warehouse: str | None = None, search: str | None = None, limit: int = 5000):
+	"""Stock on hand with value, newest movement first.
+
+	Two things this screen used to get wrong, both of which made it disagree
+	with the shop's own count:
+
+	* **Disabled items were listed.** A product taken out of the catalogue keeps
+	  its Bin, and a Bin that went negative before it was retired kept showing a
+	  negative quantity and a negative value against a product nobody sells any
+	  more. Stock value was wrong by that amount and there was nothing anyone
+	  could do about the row.
+	* **The list stopped at 200 rows.** A store with 640 items showed an
+	  arbitrary 200 of them — arbitrary because the order is by last movement —
+	  while the totals above the table were the totals of what happened to be
+	  fetched. A partial list that does not say it is partial reads as the whole
+	  stock.
+	"""
 	filters = {"actual_qty": ("!=", 0)}
 	if warehouse:
 		filters["warehouse"] = warehouse
+
+	# Excluded by naming the disabled ones rather than the enabled ones: a shop
+	# retires a handful of products and stocks thousands, so this is the short
+	# list of the two.
+	retired = frappe.get_all("Item", filters={"disabled": 1}, pluck="name", limit_page_length=0)
+	if retired:
+		filters["item_code"] = ("not in", retired)
 
 	bins = frappe.get_all(
 		"Bin",

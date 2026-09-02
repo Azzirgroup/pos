@@ -67,7 +67,18 @@ MASTERS = [
 			{"fieldname": "item_group", "label": "Group", "type": "link", "options": "Item Group", "required": True},
 			{"fieldname": "stock_uom", "label": "Unit", "type": "link", "options": "UOM"},
 			{"fieldname": "brand", "label": "Brand", "type": "link", "options": "Brand"},
-			{"fieldname": "opening_price", "label": "Selling price", "type": "currency"},
+			# Both required now. An item with no price rings up at zero at the
+			# counter, and an item with no default warehouse makes every purchase
+			# and every stock line ask again for something the shop already knows.
+			{"fieldname": "opening_price", "label": "Selling price", "type": "currency", "required": True},
+			{
+				"fieldname": "default_warehouse",
+				"label": "Warehouse",
+				"type": "link",
+				"options": "Warehouse",
+				"required": True,
+				"help": "Where this product is stocked. Used as the default on purchases and counts.",
+			},
 			# Barcode is a child table on Item, not a field, so it is handled the
 			# same way `opening_price` is: shown as one box because a shop scanning
 			# a product has exactly one number printed on it, and written to the
@@ -326,6 +337,9 @@ def create(key: str, values: dict | str) -> dict:
 	if doctype == "Item" and barcode:
 		_set_barcode(doc.name, barcode)
 
+	if doctype == "Item" and values.get("default_warehouse"):
+		_set_default_warehouse(doc.name, values["default_warehouse"])
+
 	return {
 		"key": key,
 		"doctype": doctype,
@@ -356,6 +370,7 @@ def get_record(key: str, name: str) -> dict:
 	if entry["doctype"] == "Item":
 		values["opening_price"] = _current_item_price(name)
 		values["barcode"] = _current_barcode(name)
+		values["default_warehouse"] = _current_default_warehouse(name)
 
 	return {
 		"key": key,
@@ -409,6 +424,11 @@ def update(key: str, name: str, values: dict | str) -> dict:
 		_set_opening_price(name, price)
 		changed = True
 
+	if entry["doctype"] == "Item" and values.get("default_warehouse"):
+		if values["default_warehouse"] != _current_default_warehouse(name):
+			_set_default_warehouse(name, values["default_warehouse"])
+			changed = True
+
 	if entry["doctype"] == "Item" and "barcode" in values:
 		barcode = (values.get("barcode") or "").strip()
 		if barcode != (_current_barcode(name) or ""):
@@ -444,7 +464,7 @@ def _current_item_price(item_code: str):
 #: model: the selling price is an Item Price document, and the barcode is a row
 #: in the Item's `barcodes` child table. Asking a shopkeeper to understand that
 #: distinction to add a product is the reason this form exists at all.
-VIRTUAL_FIELDS = {"opening_price", "barcode"}
+VIRTUAL_FIELDS = {"opening_price", "barcode", "default_warehouse"}
 
 
 def _current_barcode(item_code: str) -> str | None:
@@ -482,6 +502,33 @@ def _set_barcode(item_code: str, barcode: str):
 		doc.barcodes[0].barcode = barcode
 	else:
 		doc.append("barcodes", {"barcode": barcode})
+	doc.save(ignore_permissions=True)
+
+
+def _current_default_warehouse(item_code: str):
+	"""The warehouse this item defaults to, from its Item Defaults row."""
+	return frappe.db.get_value(
+		"Item Default", {"parent": item_code, "parenttype": "Item"}, "default_warehouse"
+	)
+
+
+def _set_default_warehouse(item_code: str, warehouse: str):
+	"""Where this product lives, written to the Item Defaults child table.
+
+	Not a field on Item — ERPNext keeps warehouse, price list and cost centre
+	defaults per company in `item_defaults`, so a single-company shop still has
+	to go through the child row. Handled like `opening_price`: asked for as one
+	box, written properly afterwards.
+	"""
+	doc = frappe.get_doc("Item", item_code)
+	company = frappe.defaults.get_user_default("Company") or frappe.defaults.get_global_default(
+		"company"
+	)
+	row = next((d for d in doc.item_defaults if d.company == company), None)
+	if row:
+		row.default_warehouse = warehouse
+	else:
+		doc.append("item_defaults", {"company": company, "default_warehouse": warehouse})
 	doc.save(ignore_permissions=True)
 
 

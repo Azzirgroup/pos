@@ -19,6 +19,8 @@ import { useSessionStore } from '@/stores/session'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
 import PillTabs from '@/components/PillTabs.vue'
+import MoneySheet from '@/components/MoneySheet.vue'
+import LucideBanknote from '~icons/lucide/banknote'
 import LinkField from '@/components/LinkField.vue'
 import DateField from '@/components/DateField.vue'
 import BottomSheet from '@/components/BottomSheet.vue'
@@ -62,9 +64,29 @@ const STAGE_TABS = [
 	{ label: 'All', value: '' },
 	{ label: 'To confirm', value: 'pending' },
 	{ label: 'Confirmed', value: 'confirmed' },
+	// Money, not stock. A purchase can be confirmed and unpaid, or paid before
+	// it is confirmed, so these sit in the same row of filters rather than
+	// under one of the stages — "what do we still owe on today's buying" is the
+	// question this screen was missing.
+	{ label: 'Unpaid', value: 'unpaid' },
+	{ label: 'Paid', value: 'paid' },
 ]
 
 const session = useSessionStore()
+
+/** The bill being paid, and the dialog that pays it. See `MoneySheet`. */
+const payOpen = ref(false)
+const payInvoice = ref(null)
+
+function openPay(row) {
+	payInvoice.value = {
+		name: row.name,
+		supplier_name: row.supplier_name,
+		grand_total: row.grand_total,
+		outstanding: row.outstanding,
+	}
+	payOpen.value = true
+}
 
 /** See `Deliveries.localDay` — UTC would flip the day mid-afternoon in Nairobi. */
 function localDay(date = new Date()) {
@@ -101,6 +123,10 @@ const rows = computed(() => {
 	const all = data.value?.rows || []
 	if (stage.value === 'pending') return all.filter((r) => r.docstatus === 0)
 	if (stage.value === 'confirmed') return all.filter((r) => r.docstatus === 1)
+	// A draft owes nothing yet — it is not a bill until it is confirmed — so it
+	// belongs in neither money tab.
+	if (stage.value === 'unpaid') return all.filter((r) => r.docstatus === 1 && r.outstanding > 0)
+	if (stage.value === 'paid') return all.filter((r) => r.docstatus === 1 && r.outstanding <= 0)
 	return all
 })
 
@@ -639,6 +665,17 @@ function notify(message, tone = 'good') {
 								{{ row.stage }}
 							</span>
 							<span
+								v-if="row.docstatus === 1"
+								class="shrink-0 rounded-full px-2 py-0.5 text-p-xs font-medium"
+								:class="
+									row.outstanding > 0
+										? 'bg-surface-red-2 text-ink-red-3'
+										: 'bg-surface-green-2 text-ink-green-3'
+								"
+							>
+								{{ row.outstanding > 0 ? 'Unpaid' : 'Paid' }}
+							</span>
+							<span
 								v-if="row.neighbour"
 								class="shrink-0 rounded-full bg-surface-blue-2 px-2 py-0.5 text-p-xs font-medium text-ink-blue-3"
 							>
@@ -681,6 +718,24 @@ function notify(message, tone = 'good') {
 						</span>
 
 						<div class="ml-auto flex items-center gap-1.5">
+							<!-- Paying the bill, where the bill is. It was only possible from
+							     the desk, so a shop that pays a supplier at the counter had
+							     no way to record it here and the payables figure drifted. -->
+							<button
+								v-if="row.docstatus === 1 && row.outstanding > 0"
+								class="flex items-center gap-1.5 rounded-md bg-surface-gray-7 px-2.5 py-1.5 text-p-xs font-semibold text-ink-white transition-colors hover:bg-surface-gray-6"
+								@click="openPay(row)"
+							>
+								<LucideBanknote class="h-3.5 w-3.5" />
+								Pay
+							</button>
+							<span
+								v-else-if="row.docstatus === 1"
+								class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 px-2.5 py-1.5 text-p-xs font-semibold text-ink-green-3"
+							>
+								<LucideCheck class="h-3.5 w-3.5" />
+								Paid
+							</span>
 							<button
 								class="flex items-center gap-1.5 rounded-md border border-outline-gray-2 px-2.5 py-1.5 text-p-xs font-semibold text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
 								@click="openRow(row)"
@@ -1046,6 +1101,14 @@ function notify(message, tone = 'good') {
 				</div>
 			</template>
 		</Dialog>
+
+		<MoneySheet
+			v-model="payOpen"
+			mode="pay-invoice"
+			:invoice="payInvoice"
+			@done="load"
+			@notify="notify($event.message, $event.tone)"
+		/>
 
 		<Transition
 			enter-active-class="transition-all duration-200"

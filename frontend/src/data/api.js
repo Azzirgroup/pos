@@ -874,3 +874,51 @@ export const getTillContext = () => call('cosmestics.api.session.context')
  * next person to sign in cannot be served the previous cashier's screens.
  */
 export const logout = () => call('logout')
+
+/* ---------- money: paying suppliers, moving it between accounts ---------- */
+
+/** Cash and bank accounts money can leave or land in, with balances. */
+export const getPayAccounts = () => call('cosmestics.api.money.pay_accounts')
+
+/** Move money between two of the shop's own accounts. Posts one Journal Entry. */
+export const transferFunds = ({ fromAccount, toAccount, amount, postingDate, reference }) =>
+	call('cosmestics.api.money.transfer_funds', {
+		from_account: fromAccount,
+		to_account: toAccount,
+		amount,
+		posting_date: postingDate || null,
+		reference: reference || null,
+	})
+
+/** Pay one supplier bill, in full or in part. */
+export const payPurchaseInvoice = ({ invoice, amount, paidFrom, reference, postingDate }) =>
+	call('cosmestics.api.money.pay_purchase_invoice', {
+		invoice,
+		amount,
+		paid_from: paidFrom,
+		reference: reference || null,
+		posting_date: postingDate || null,
+	})
+
+/** Pay a supplier a lump sum, spread over what they are owed, oldest first. */
+export const paySupplier = ({ supplier, amount, paidFrom, reference, postingDate }) =>
+	call('cosmestics.api.money.pay_supplier', {
+		supplier,
+		amount,
+		paid_from: paidFrom,
+		reference: reference || null,
+		posting_date: postingDate || null,
+	})
+
+/** What one supplier is owed, and on which bills. */
+export const getSupplierOwed = ({ supplier }) =>
+	call('cosmestics.api.money.supplier_owed', { supplier })
+
+/** Money out of the drawer over a period, filtered by date and expense account. */
+export const listExpenses = ({ fromDate, toDate, expenseAccount, limit } = {}) =>
+	call('cosmestics.api.shift.list_expenses', {
+		from_date: fromDate || null,
+		to_date: toDate || null,
+		expense_account: expenseAccount || null,
+		limit: limit || 200,
+	})

@@ -34,6 +34,7 @@ declare module 'vue' {
     MaterialRequestSheet: typeof import('./src/components/MaterialRequestSheet.vue')['default']
     MobileCartBar: typeof import('./src/components/MobileCartBar.vue')['default']
     ModuleTabs: typeof import('./src/components/ModuleTabs.vue')['default']
+    MoneySheet: typeof import('./src/components/MoneySheet.vue')['default']
     PageHeader: typeof import('./src/components/PageHeader.vue')['default']
     PairedBars: typeof import('./src/components/charts/PairedBars.vue')['default']
     PaymentLogo: typeof import('./src/components/PaymentLogo.vue')['default']

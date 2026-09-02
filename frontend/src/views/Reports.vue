@@ -2,11 +2,14 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { Button, FormControl } from 'frappe-ui'
 import { listReports, runReport, getWarehouses } from '@/data/api'
+import { fmtMoney } from '@/utils/format'
 import { useRoute } from 'vue-router'
 import PageHeader from '@/components/PageHeader.vue'
 import DataTable from '@/components/DataTable.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import { useRowActions } from '@/composables/useRowActions'
+import MoneySheet from '@/components/MoneySheet.vue'
+import LucideBanknote from '~icons/lucide/banknote'
 import { resolveIcon } from '@/utils/icons'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideDownload from '~icons/lucide/download'
@@ -131,6 +134,32 @@ const { shareOpen, sharePayload, shareList, actionsFor } = useRowActions({
 	columns: () => result.value.columns || [],
 	title: () => activeReport.value?.label || 'Report',
 })
+
+/**
+ * Paying a supplier from the list that says what they are owed.
+ *
+ * Only on Supplier balances. The figure and the action belong together: a
+ * manager reading who is owed what is exactly the person deciding to pay one,
+ * and sending them to another screen to do it is how the payables list and the
+ * bank end up disagreeing.
+ */
+const payOpen = ref(false)
+const paySupplierName = ref('')
+const payToast = ref(null)
+
+function openPaySupplier(row) {
+	paySupplierName.value = row.supplier
+	payOpen.value = true
+}
+
+function onPaid() {
+	load()
+}
+
+function payNotify({ message, tone }) {
+	payToast.value = { message, tone }
+	setTimeout(() => (payToast.value = null), 3500)
+}
 
 // Only stock reports vary by location; showing the picker elsewhere implies a
 // filter that does nothing.
@@ -310,9 +339,40 @@ function exportCsv() {
 				:loading="loading"
 				:actions="actionsFor"
 				empty-text="Nothing to report for this period."
-			/>
+			>
+				<!-- Supplier balances only: the amount owed, with the way to settle
+				     it beside the figure rather than a screen away. -->
+				<template v-if="active === 'payables'" #cell-outstanding="{ row, value }">
+					<div class="flex items-center justify-end gap-2">
+						<span class="tabular font-medium text-ink-red-3">{{ fmtMoney(value) }}</span>
+						<button
+							class="flex items-center gap-1 rounded-md bg-surface-gray-7 px-2 py-1 text-p-xs font-semibold text-ink-white transition-colors hover:bg-surface-gray-6"
+							@click.stop="openPaySupplier(row)"
+						>
+							<LucideBanknote class="h-3 w-3" />
+							Pay
+						</button>
+					</div>
+				</template>
+			</DataTable>
 
 			<ShareSheet v-model="shareOpen" :payload="sharePayload" />
+
+			<MoneySheet
+				v-model="payOpen"
+				mode="pay-supplier"
+				:supplier="paySupplierName"
+				@done="onPaid"
+				@notify="payNotify"
+			/>
+
+			<div
+				v-if="payToast"
+				class="pos-toast pointer-events-none absolute bottom-5 left-1/2 -translate-x-1/2 rounded-lg px-4 py-2.5 text-p-sm font-medium text-ink-white shadow-lg"
+				:class="payToast.tone === 'bad' ? 'bg-surface-red-5' : 'bg-surface-green-3'"
+			>
+				{{ payToast.message }}
+			</div>
 		</div>
 	</div>
 </template>

@@ -1558,6 +1558,86 @@ def list_movements(shift_name: str | None = None) -> dict:
 	return _movement_summary(_movements(shift_name))
 
 
+@frappe.whitelist()
+def list_expenses(
+	from_date: str | None = None,
+	to_date: str | None = None,
+	expense_account: str | None = None,
+	limit: int = 200,
+) -> dict:
+	"""Money taken out of the drawer over a period, whatever shift it was on.
+
+	`list_movements` answers a different question — what has left the drawer on
+	the shift being reconciled right now — and the Expenses screen was built on
+	it, so it showed nothing at all whenever no shift was open and could never
+	show yesterday. A shop asking "what have we been spending on transport" is
+	not asking about one shift.
+
+	Filtered by date and by expense account because those are the two ways the
+	question is actually asked: what went out this month, and what went out on
+	*this*. Shorts are excluded — a till shortfall is a discrepancy found by
+	counting, not money anybody spent, and listing it as an expense would double
+	it against the account it is already written off to.
+	"""
+	# `creation`, because a till movement has no posting date of its own — it is
+	# recorded the moment the money leaves the drawer, so when it was written is
+	# when it happened.
+	filters = {"docstatus": 1, "movement_type": ("!=", "Short")}
+	if from_date and to_date:
+		filters["creation"] = ("between", [f"{getdate(from_date)} 00:00:00", f"{getdate(to_date)} 23:59:59"])
+	elif from_date:
+		filters["creation"] = (">=", f"{getdate(from_date)} 00:00:00")
+	elif to_date:
+		filters["creation"] = ("<=", f"{getdate(to_date)} 23:59:59")
+	if expense_account:
+		filters["expense_account"] = expense_account
+
+	rows = frappe.get_all(
+		"Cosmestics Shift Movement",
+		filters=filters,
+		fields=[
+			"name",
+			"movement_type",
+			"mode_of_payment",
+			"amount",
+			"person",
+			"party",
+			"reason",
+			"expense_account",
+			"shift",
+			"owner",
+			"creation",
+		],
+		order_by="creation desc",
+		limit_page_length=int(limit),
+	)
+
+	out = [
+		{
+			"name": r.name,
+			"date": str(r.creation)[:10],
+			"type": r.movement_type,
+			"mode": r.mode_of_payment,
+			"amount": flt(r.amount),
+			"person": r.person or r.party,
+			"reason": r.reason,
+			"account": r.expense_account,
+			"shift": r.shift,
+			"by": r.owner,
+		}
+		for r in rows
+	]
+
+	return {
+		"rows": out,
+		"total": flt(sum(r["amount"] for r in out)),
+		"count": len(out),
+		# So the filter can offer only accounts money has actually gone to,
+		# rather than every expense account in the chart.
+		"accounts": sorted({r["account"] for r in out if r["account"]}),
+	}
+
+
 @frappe.whitelist(methods=["POST"])
 def record_movement(
 	movement_type: str,
