@@ -88,6 +88,29 @@ MASTERS = [
 			# special handling — the form only has to know how to upload one and
 			# hand back the URL. See `ImageField` for why the file is public.
 			{"fieldname": "image", "label": "Photo", "type": "image"},
+			# Taking a product off the till, from the app.
+			#
+			# Both of these were desk-only, so retiring a line meant leaving the
+			# app — and the till, which loads the catalogue once, went on offering
+			# it until somebody reloaded the page. Saving here refreshes the
+			# catalogue (see `MasterSheet.refreshTillCatalog`), so the grid drops
+			# it straight away.
+			#
+			# Two separate facts, deliberately: a product can still be bought and
+			# counted while no longer being sold, which is not the same as one
+			# that is finished with entirely.
+			{
+				"fieldname": "is_sales_item",
+				"label": "Sell at the till",
+				"type": "checkbox",
+				"help": "Uncheck to keep the product on file but off the till.",
+			},
+			{
+				"fieldname": "disabled",
+				"label": "Retired",
+				"type": "checkbox",
+				"help": "Hides it everywhere — the till, purchases and stock lists.",
+			},
 		],
 		"defaults": {"is_stock_item": 1, "is_sales_item": 1, "is_purchase_item": 1},
 	},
@@ -201,7 +224,17 @@ def list_records(key: str, search: str | None = None, limit: int = 100) -> dict:
 			fields.append(f["fieldname"])
 
 	filters = {}
-	if meta.has_field("disabled"):
+	# Retired records stay listed, on purpose.
+	#
+	# Hiding them made retiring a product a one-way door: the moment it was
+	# disabled it left this list, so the checkbox that would bring it back could
+	# not be reached from the app at all. They are shown with the flag as a
+	# column instead, which says the same thing and can be undone.
+	#
+	# The link picker keeps excluding them — see `link_options`. Offering a
+	# retired product as a choice on a new document is a different question, and
+	# there the answer is still no.
+	if meta.has_field("disabled") and entry["doctype"] != "Item":
 		filters["disabled"] = 0
 	if meta.has_field("company") and frappe.defaults.get_global_default("company"):
 		filters["company"] = frappe.defaults.get_global_default("company")
@@ -319,8 +352,13 @@ def create(key: str, values: dict | str) -> dict:
 		if fieldname in allowed and fieldname not in VIRTUAL_FIELDS and value not in (None, ""):
 			doc.set(fieldname, value)
 
+	# Only for fields the form did not ask about. These used to be applied after
+	# the submitted values and silently won — so unchecking "Sell at the till" on
+	# a new item was overwritten by the default and the product appeared on the
+	# grid anyway.
 	for fieldname, value in (entry.get("defaults") or {}).items():
-		doc.set(fieldname, value)
+		if fieldname not in values:
+			doc.set(fieldname, value)
 
 	if doctype == "Warehouse" and frappe.defaults.get_global_default("company"):
 		doc.company = frappe.defaults.get_global_default("company")
