@@ -56,6 +56,10 @@ def submit_sale(
 
 	_require_shift(settings)
 	_refuse_outdated_shift()
+	# Whoever is selling belongs on the shift's roster, even if somebody else
+	# opened it. Records who was actually on the counter, so the closing entry
+	# names them — see `shift.join_roster`. Never blocks the sale.
+	_record_cashier_on_shift()
 
 	# 1. Buy the neighbour-sourced lines first so the stock exists.
 	purchases = []
@@ -701,6 +705,28 @@ def _refuse_outdated_shift():
 		).format(shift["name"], str(shift["period_start_date"])[:10]),
 		title=_("Yesterday's shift is still open"),
 	)
+
+
+def _record_cashier_on_shift():
+	"""Add this cashier to the open shift's roster the first time they sell.
+
+	A second person stepping onto a counter somebody else opened is the ordinary
+	case in this shop, and until now the shift had no record of them: the roster
+	listed only whoever unlocked the drawer, so a manager reading the closing
+	entry could not tell who had been serving.
+
+	Best-effort by design. The sale is the thing that matters, and a roster row
+	that cannot be written is a worse record rather than a reason to refuse
+	money.
+	"""
+	from cosmestics.api.shift import get_open_shift, join_roster
+
+	try:
+		shift = get_open_shift()
+		if shift:
+			join_roster(shift["name"])
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Cosmetics POS")
 
 
 def _require_shift(settings):

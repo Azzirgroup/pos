@@ -175,8 +175,22 @@ def ensure_shift_cashier_field():
 					"fieldtype": "Table",
 					"options": "Cosmestics Shift Cashier",
 					"insert_after": "user",
+					# Writable after submit: a cashier who joins the counter
+					# mid-shift is added to the open shift's roster as they sell —
+					# see `shift.join_roster` — and the shift is submitted by then.
+					"allow_on_submit": 1,
 					"description": description,
 				},
+			)
+		else:
+			# Sites that got this field before it was writable after submit. Without
+			# the flag nobody can be added to a shift already under way, which is
+			# most of what the roster is for.
+			frappe.db.set_value(
+				"Custom Field",
+				{"dt": doctype, "fieldname": "cosmestics_cashiers"},
+				"allow_on_submit",
+				1,
 			)
 
 		hide_single_cashier_field(doctype)

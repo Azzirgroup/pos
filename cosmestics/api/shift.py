@@ -128,17 +128,64 @@ def _shared_open_shift():
 	if not name:
 		return None
 
-	from cosmestics.overrides.shift_roster import ROSTER_FIELD
-
-	rostered = frappe.get_all(
-		"Cosmestics Shift Cashier",
-		filters={"parent": name, "parenttype": "POS Opening Entry", "parentfield": ROSTER_FIELD},
-		pluck="user",
-	)
-	if rostered and frappe.session.user not in rostered:
-		return None
-
+	# The roster does not lock anybody out.
+	#
+	# It used to: a shift naming its cashiers refused everyone else, so the
+	# second person on the counter could neither sell nor open a shift of their
+	# own — the till simply told them the drawer was taken. That is the opposite
+	# of what a shared shift is for, and it made the roster a worse version of
+	# the profile's own list rather than an addition to it.
+	#
+	# Permission still comes from the POS Profile above (`_user_profiles`), which
+	# is the shop's actual statement about who may work this till. The roster
+	# records who *did* — see `join_roster`, which adds a cashier the first time
+	# they ring something up, so the closing entry names everyone who sold.
 	return name
+
+
+def join_roster(shift_name: str, user: str | None = None) -> bool:
+	"""Put a cashier on an open shift's roster, if they are not on it already.
+
+	Called when somebody actually sells against a shift somebody else opened.
+	The shift is submitted by then, so the row is written directly rather than
+	through a save — `cosmestics_cashiers` is `allow_on_submit`, and re-saving a
+	submitted POS Opening Entry to append one name would re-run every validation
+	on a document nobody is otherwise touching.
+
+	Never raises. Failing to record who was on the counter is a worse record, not
+	a reason to refuse a sale that has already been paid for.
+	"""
+	user = user or frappe.session.user
+	try:
+		from cosmestics.overrides.shift_roster import ROSTER_FIELD
+
+		existing = frappe.get_all(
+			"Cosmestics Shift Cashier",
+			filters={"parent": shift_name, "parenttype": "POS Opening Entry", "parentfield": ROSTER_FIELD},
+			pluck="user",
+		)
+		if user in existing:
+			return False
+
+		row = frappe.get_doc(
+			{
+				"doctype": "Cosmestics Shift Cashier",
+				"parent": shift_name,
+				"parenttype": "POS Opening Entry",
+				"parentfield": ROSTER_FIELD,
+				"user": user,
+				"idx": len(existing) + 1,
+			}
+		)
+		row.flags.ignore_permissions = True
+		row.insert(ignore_permissions=True)
+		return True
+	except Exception:
+		frappe.log_error(
+			f"Could not add {user} to the roster of {shift_name}: {frappe.get_traceback()}",
+			"Cosmetics POS",
+		)
+		return False
 
 
 @frappe.whitelist()
