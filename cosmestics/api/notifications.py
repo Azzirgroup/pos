@@ -1322,6 +1322,101 @@ def _enqueued_delivery_dispatch_notice(name: str):
 # --------------------------------------------------------------------------
 
 
+def format_shift_close(closing) -> str:
+	"""What the shop took on one shift, as a message a manager can read on a phone.
+
+	Built from the **closing entry itself** rather than recomputed from the
+	sales. That document is what the shift was reconciled against — its
+	payment rows are the opening float, what was taken, what was paid out and
+	what was actually counted — so a summary derived from anything else could
+	disagree with the paperwork the shop keeps.
+
+	The difference line is the point of the whole message: it is the one number
+	that says whether the drawer matched, and it is stated even when it is zero
+	so silence never has to be interpreted.
+	"""
+	opening = frappe.db.get_value(
+		"POS Opening Entry",
+		closing.pos_opening_entry,
+		["user", "period_start_date"],
+		as_dict=True,
+	) or frappe._dict()
+
+	from cosmestics.overrides.shift_roster import roster_users
+
+	try:
+		cashiers = sorted(roster_users(frappe.get_doc("POS Opening Entry", closing.pos_opening_entry)))
+	except Exception:
+		cashiers = [opening.user] if opening.get("user") else []
+
+	def money(value):
+		return frappe.utils.fmt_money(flt(value), currency=closing.get("currency"))
+
+	rows = []
+	difference = 0.0
+	for row in closing.payment_reconciliation:
+		difference += flt(row.difference)
+		# Modes that never moved are left out. A till accepts six tenders and
+		# most shifts use two, so listing the rest puts four rows of 0.00 between
+		# the manager and the figures — on a phone that is most of the message. A
+		# mode with a discrepancy is always shown, even at zero expected, because
+		# that is the row worth reading.
+		if not flt(row.expected_amount) and not flt(row.closing_amount) and not flt(row.difference):
+			continue
+		rows.append(
+			[
+				row.mode_of_payment,
+				money(row.expected_amount),
+				money(row.closing_amount),
+			]
+		)
+
+	lines = [
+		"*Shift closed*",
+		f"{closing.pos_profile} · {closing.name}",
+		"",
+		_table(["Mode", "Expected", "Counted"], rows),
+		f"Takings: {money(closing.grand_total)}",
+		f"Net difference: {money(difference)}",
+	]
+	if abs(difference) < 0.005:
+		lines.append("The drawer balanced.")
+	elif difference < 0:
+		lines.append("The drawer is SHORT.")
+	else:
+		lines.append("The drawer is OVER.")
+
+	lines.append("")
+	lines.append(f"Opened: {str(opening.get('period_start_date') or '')[:16]}")
+	lines.append(f"Closed: {str(closing.period_end_date or '')[:16]}")
+	if cashiers:
+		lines.append("Cashiers: " + ", ".join(frappe.utils.get_fullname(u) or u for u in cashiers))
+
+	return "\n".join(lines)
+
+
+def on_shift_close(doc, method=None):
+	"""Send the manager the shift summary when a till is closed.
+
+	Hooked on `POS Closing Entry.on_submit`, so it fires however the shift was
+	closed — from the till, or from the desk by somebody tidying up.
+
+	Best-effort, like every other notice here: a message that cannot be sent must
+	never roll back the closing entry. A shift that will not close is the worst
+	failure this app has, and it has happened before.
+	"""
+	try:
+		settings = _settings()
+		if not settings.get("notify_shift_close"):
+			return
+		manager = (settings.get("manager_whatsapp") or "").strip()
+		if not manager:
+			return
+		send_text(manager, format_shift_close(doc))
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Cosmetics POS")
+
+
 def format_sales_return(doc) -> str:
 	"""A sale has been reversed, in the customer's own terms.
 

@@ -114,6 +114,13 @@ doc_events = {
 		# `quotations.unmark_converted`.
 		"on_cancel": "cosmestics.api.quotations.on_sales_invoice_cancel",
 	},
+	"POS Closing Entry": {
+		# The manager's copy of every shift as it closes — see
+		# `notifications.on_shift_close`. On the document rather than in
+		# `shift.close_shift` so it fires however the shift was closed, including
+		# from the desk.
+		"on_submit": "cosmestics.api.notifications.on_shift_close",
+	},
 	"Material Request": {
 		# Posts the request to the staff WhatsApp group. Enqueued, best-effort:
 		# a bridge outage must never block the request itself.

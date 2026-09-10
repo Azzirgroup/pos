@@ -46,6 +46,7 @@ POS_SETTINGS_FIELDS = (
 	# changes managers changes it here.
 	"manager_whatsapp",
 	"notify_sales_return",
+	"notify_shift_close",
 	# Not `neighbour_supplier_group` any more — which shops the till offers
 	# mid-sale is now a checkbox on the Supplier itself
 	# (`cosmestics_is_neighbour_shop`), not a single shop-wide group setting.

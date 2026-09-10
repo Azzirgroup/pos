@@ -20,6 +20,7 @@
   "column_break_wa",
   "whatsapp_sender",
   "notify_sales_return",
+  "notify_shift_close",
   "material_request_template",
   "delivery_notice_section",
   "notify_delivery_dispatch",
@@ -140,6 +141,13 @@
    "fieldname": "notify_sales_return",
    "fieldtype": "Check",
    "label": "Notify Customers of Sales Reversals"
+  },
+  {
+   "default": "1",
+   "description": "Send the manager a summary of every shift as it closes \u2014 what was taken, what was counted and whether the drawer balanced. Goes to Manager WhatsApp.",
+   "fieldname": "notify_shift_close",
+   "fieldtype": "Check",
+   "label": "Notify on Shift Close"
   },
   {
    "depends_on": "notify_material_request",

@@ -251,7 +251,12 @@ const POS_GROUPS = [
 	},
 	{
 		title: 'WhatsApp',
-		fields: ['notify_material_request', 'whatsapp_group_jid', 'whatsapp_sender'],
+		// `manager_whatsapp` is on the doctype behind `depends_on:
+		// notify_delivery_dispatch`, so in the desk it only appears once dispatch
+		// notices are switched on — which is why nobody could find it. Here it is
+		// simply shown: it is the number the shop sends a manager anything on, and
+		// hiding it behind another setting is what made it invisible.
+		fields: ['notify_material_request', 'whatsapp_group_jid', 'whatsapp_sender', 'manager_whatsapp', 'notify_shift_close'],
 	},
 ]
 
