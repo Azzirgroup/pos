@@ -68,6 +68,7 @@ def setup_prerequisites():
 	ensure_one_shift_per_day_default()
 	ensure_print_formats()
 	ensure_notification_defaults()
+	ensure_sale_notice_payment_line()
 	ensure_app_icon()
 	# Must run after the field exists, and after `group` is known so a site
 	# upgrading from the group-only scheme keeps its existing neighbours.
@@ -513,6 +514,31 @@ def ensure_notification_defaults():
 
 	if changed:
 		settings.save(ignore_permissions=True)
+
+
+#: What the shop's "New Sale" template used for the payment line. It names only
+#: the first payment row, so a split sale was announced as whichever tender
+#: happened to be entered first.
+FIRST_PAYMENT_ONLY = r"\{\{\s*doc\.payments\[0\]\.mode_of_payment\s*\}\}"
+
+
+def ensure_sale_notice_payment_line():
+	"""Point Sales Invoice notifications at every tender, not just the first.
+
+	Rewrites exactly `{{ doc.payments[0].mode_of_payment }}` to
+	`{{ payment_summary(doc) }}` and nothing else in the template, so the shop's
+	own wording is kept. Idempotent — once replaced there is nothing to match.
+	"""
+	import re
+
+	for row in frappe.get_all(
+		"Notification", filters={"document_type": "Sales Invoice"}, fields=["name", "message"]
+	):
+		message = row.message or ""
+		updated = re.sub(FIRST_PAYMENT_ONLY, "{{ payment_summary(doc) }}", message)
+		if updated != message:
+			frappe.db.set_value("Notification", row.name, "message", updated, update_modified=False)
+			frappe.clear_document_cache("Notification", row.name)
 
 
 def ensure_app_icon():

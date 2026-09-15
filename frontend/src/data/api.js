@@ -115,6 +115,10 @@ export function submitSale({ items, payment, customer, discountAmount }) {
 /** Whole sellable catalog in one call; searched locally thereafter. */
 export const getCatalog = () => call('cosmestics.api.catalog.get_catalog')
 
+/** Shelf counts changed since `since` — see `catalog.stock_levels`. */
+export const getStockLevels = (since) =>
+	call('cosmestics.api.catalog.stock_levels', { since: since || null })
+
 /** Tenders this till accepts, and the M-Pesa channels behind the M-Pesa button. */
 export const getPaymentMethods = () => call('cosmestics.api.pos.get_payment_methods')
 
@@ -170,6 +174,18 @@ export const createSalesReturn = ({ invoice, lines, refundMethod, reason }) =>
 		refund_method: refundMethod || 'cash',
 		reason: reason || null,
 	})
+
+/** What can still be done to a sale — return, void, re-book its payment. */
+export const getSaleActions = ({ invoice }) =>
+	call('cosmestics.api.sale_changes.sale_actions', { invoice })
+
+/** Cancel a sale outright; stock, accounts and shift reversed. */
+export const voidSale = ({ invoice, reason }) =>
+	call('cosmestics.api.sale_changes.void_sale', { invoice, reason: reason || null })
+
+/** Re-book a sale's tenders. `payments` = [{mode_of_payment, amount, reference}]. */
+export const changeSalePayment = ({ invoice, payments }) =>
+	call('cosmestics.api.sale_changes.change_payment', { invoice, payments })
 
 export const listReturns = ({ days, limit } = {}) =>
 	call('cosmestics.api.returns.list_returns', { days: days || 30, limit: limit || 50 })

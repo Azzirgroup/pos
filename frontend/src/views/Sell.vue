@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, nextTick, onMounted, watch } from 'vue'
+import { ref, computed, nextTick, onMounted, onBeforeUnmount, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { storeToRefs } from 'pinia'
 
@@ -52,6 +52,7 @@ import ScanSheet from '@/components/ScanSheet.vue'
 import QuotationSheet from '@/components/QuotationSheet.vue'
 import TillContext from '@/components/TillContext.vue'
 import ReturnSheet from '@/components/ReturnSheet.vue'
+import SaleActionSheet from '@/components/SaleActionSheet.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import MaterialRequestSheet from '@/components/MaterialRequestSheet.vue'
 import { saleMessage } from '@/utils/salesMessage'
@@ -69,6 +70,7 @@ import LucideReceiptText from '~icons/lucide/receipt-text'
 import LucideSend from '~icons/lucide/send'
 import LucideFileText from '~icons/lucide/file-text'
 import LucideUndo from '~icons/lucide/undo-2'
+import LucideWallet from '~icons/lucide/wallet'
 import LucideClipboardList from '~icons/lucide/clipboard-list'
 
 const router = useRouter()
@@ -209,8 +211,15 @@ const lastSale = ref(null)
 const mpesaChannels = ref([])
 const paymentMethods = ref([])
 
+/** Stops the background stock sync when the till is left. */
+let stopStockSync = null
+onBeforeUnmount(() => stopStockSync?.())
+
 onMounted(async () => {
 	catalog.load()
+	// Counts on the cards follow sales made anywhere, not only at this till —
+	// see `catalog.syncStock`.
+	stopStockSync = catalog.startStockSync()
 	recoverInterruptedSale()
 
 	// All three at once. They were two awaits in sequence, which cost the till an
@@ -1025,6 +1034,31 @@ function openReturn(row) {
 	returnSheet.value = true
 }
 
+/**
+ * Void a sale, or re-book how it was paid — see `SaleActionSheet`.
+ *
+ * The undo button opens the choice between returning goods and voiding, rather
+ * than going straight to a return: a return refunds out of the drawer, and a
+ * sale that should never have been rung up is not a refund.
+ */
+const saleActionSheet = ref(false)
+const saleActionMode = ref('reverse')
+const saleActionInvoice = ref('')
+
+function openSaleAction(row, mode) {
+	saleActionInvoice.value = row.name
+	saleActionMode.value = mode
+	saleActionSheet.value = true
+}
+
+function onSaleChanged(res) {
+	notify(res.message, 'ok')
+	// Stock came back (void) and the drawer's expected tenders moved (both).
+	catalog.syncStock()
+	till.refresh()
+	loadRecent()
+}
+
 function onReturned(res) {
 	notify(
 		res.method === 'cash'
@@ -1190,6 +1224,16 @@ async function completeSale(payment) {
 	// The quote this cart came from, captured before `cart.clear()` forgets it.
 	const fromQuotation = cart.sourceQuotation
 
+	// Off the cards now, not when the invoice comes back — the next customer is
+	// already being served from this grid. Sourced lines are left alone: they
+	// were bought in for this sale and never touched the shelf count.
+	const sold = {}
+	for (const l of snapshot.items) {
+		if (l.sourced) continue
+		sold[l.item_code] = (sold[l.item_code] || 0) - Number(l.qty || 0) * Number(l.conversionFactor || 1)
+	}
+	catalog.adjustStock(sold)
+
 	cart.clear()
 	customer.value = null
 	paySheet.value = false
@@ -1285,6 +1329,8 @@ async function completeSale(payment) {
 		if (isUnloading()) return
 
 		cart.submitSettled()
+		// The counts were taken off the cards when it was charged; it did not post.
+		catalog.refresh()
 
 		// Give the basket back. Without this the commonest failure — the wifi
 		// dropping between the tap and the invoice — left the cashier re-scanning
@@ -1764,9 +1810,12 @@ useShortcuts({
 				<div
 					v-for="row in recent.rows"
 					:key="row.name"
-					class="flex items-center gap-3 rounded-xl border border-outline-gray-2 p-3 transition-colors hover:bg-surface-gray-1"
+					class="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border border-outline-gray-2 p-3 transition-colors hover:bg-surface-gray-1 sm:flex-nowrap"
 				>
-					<button class="flex min-w-0 flex-1 items-center gap-3 text-left" @click="printReceipt(row.name)">
+					<!-- Full width on a phone, with the action buttons on a line of their
+					     own beneath: four of them beside the details left the customer's
+					     name a few letters wide and pushed the chips over the amount. -->
+					<button class="flex min-w-0 flex-1 basis-full items-center gap-3 text-left sm:basis-auto" @click="printReceipt(row.name)">
 					<div class="min-w-0 flex-1">
 						<!-- Wraps rather than competing for one line. The chips beside the
 						     name never shrink, so on a narrow sheet they took their width
@@ -1829,7 +1878,7 @@ useShortcuts({
 					     again" are the same request answered two ways — and the shop
 					     posts the same summary to its own group to reconcile the day. -->
 					<button
-						class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-gray-5 transition-colors hover:bg-surface-green-2 hover:text-ink-green-3"
+						class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-gray-5 transition-colors hover:bg-surface-green-2 hover:text-ink-green-3 max-sm:ml-auto"
 						:aria-label="`Send ${row.name} on WhatsApp`"
 						title="Send on WhatsApp"
 						@click="shareSale(row)"
@@ -1841,12 +1890,23 @@ useShortcuts({
 					     Absent on a credit note — a return is not itself returnable,
 					     and the endpoint refuses one anyway, so offering the button
 					     would only promise something that cannot happen. -->
+					<!-- Re-book a tender entered wrongly. Only on sales paid at the
+					     till — a credit sale has nothing to re-book. -->
+					<button
+						v-if="!row.is_return && row.is_pos"
+						class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-gray-5 transition-colors hover:bg-surface-blue-2 hover:text-ink-blue-3"
+						:aria-label="`Change payment method on ${row.name}`"
+						title="Change payment method"
+						@click="openSaleAction(row, 'payment')"
+					>
+						<LucideWallet class="h-4 w-4" />
+					</button>
 					<button
 						v-if="!row.is_return"
 						class="grid h-9 w-9 shrink-0 place-items-center rounded-lg text-ink-gray-5 transition-colors hover:bg-surface-amber-2 hover:text-ink-amber-3"
-						:aria-label="`Return goods from ${row.name}`"
-						title="Take goods back"
-						@click="openReturn(row)"
+						:aria-label="`Return goods or void ${row.name}`"
+						title="Return goods or void sale"
+						@click="openSaleAction(row, 'reverse')"
 					>
 						<LucideUndo class="h-4 w-4" />
 					</button>
@@ -1906,6 +1966,15 @@ useShortcuts({
 		<ScanSheet v-model="scanSheet" :last-result="scanResult" @scan="onCameraScan" />
 
 		<ReturnSheet v-model="returnSheet" :invoice="returnInvoice" @returned="onReturned" />
+
+		<SaleActionSheet
+			v-model="saleActionSheet"
+			:invoice="saleActionInvoice"
+			:mode="saleActionMode"
+			:methods="paymentMethods"
+			@return="openReturn({ name: $event })"
+			@changed="onSaleChanged"
+		/>
 
 		<!-- Sends the real PDF, and offers the shop's WhatsApp groups as well as a
 		     number — the same control the back-office lists share rows through. -->

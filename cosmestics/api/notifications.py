@@ -1504,3 +1504,126 @@ def _enqueued_sales_return_notice(docname: str):
 		send_text(manager, format_sales_return(doc))
 
 	return to
+
+
+def payment_summary(doc) -> str:
+	"""How a sale was paid, in one line — every tender, not just the first.
+
+	Exposed to Jinja (see `jinja` in hooks) for the shop's own "New Sale"
+	notification. Its template read `doc.payments[0].mode_of_payment`, which
+	names only the first row: a sale split across cash and M-Pesa was announced
+	to the group as *Cash*, and the M-Pesa half vanished from the one place the
+	day is reconciled against.
+
+	* one tender, fully paid — just its name, as the template always printed
+	* a split — each tender with what it actually took, cash net of change
+	* nothing paid — says so, because on account *is* the payment information
+	* part-paid — the tenders, then what is still owed
+	"""
+	from cosmestics.api.sale_changes import _net_payments
+
+	outstanding = flt(doc.get("outstanding_amount"))
+	rows = _net_payments(doc)
+	if not rows:
+		return _("On account (credit)")
+
+	merged = {}
+	for r in rows:
+		merged[r["mode_of_payment"]] = merged.get(r["mode_of_payment"], 0) + flt(r["amount"])
+
+	def money(value):
+		return frappe.utils.fmt_money(value, precision=2)
+
+	if len(merged) == 1 and outstanding <= 0:
+		line = next(iter(merged))
+	else:
+		line = " + ".join(f"{mode} {money(amount)}" for mode, amount in merged.items())
+
+	if outstanding > 0:
+		line += " · " + _("{0} on account").format(money(outstanding))
+	return line
+
+
+def _sale_group_targets() -> list:
+	"""Where the shop's sale announcements go: [(group, sender)].
+
+	Read from its own Sales Invoice notifications on the WhatsApp Group channel
+	rather than a second setting, so a correction lands in the same group the
+	sale was announced in. The staff group from POS Settings is the fallback.
+	"""
+	targets = []
+	if frappe.get_meta("Notification").has_field("whatsapp_group_jid"):
+		for row in frappe.get_all(
+			"Notification",
+			filters={
+				"enabled": 1,
+				"document_type": "Sales Invoice",
+				"channel": "WhatsApp Group",
+			},
+			fields=["whatsapp_group_jid", "whatsapp_sender"],
+		):
+			jid = (row.whatsapp_group_jid or "").strip()
+			if jid and jid not in {t[0] for t in targets}:
+				targets.append((jid, row.whatsapp_sender or None))
+
+	if not targets:
+		try:
+			settings = _settings()
+			if settings.get("whatsapp_group_jid"):
+				targets.append((settings.whatsapp_group_jid, settings.get("whatsapp_sender") or None))
+		except Exception:
+			pass
+	return targets
+
+
+def format_payment_change(old: str, new: str, was: str, now: str, changed_by: str) -> str:
+	doc = frappe.get_doc("Sales Invoice", new)
+	return "\n".join(
+		[
+			"*Payment method changed*",
+			"",
+			f"Customer: {doc.customer_name or doc.customer}",
+			f"Invoice: {old} → {new}",
+			f"Amount: {doc.currency} {frappe.utils.fmt_money(doc.rounded_total or doc.grand_total, precision=2)}",
+			f"Was: {was}",
+			f"Now: {now}",
+			f"Changed by: {changed_by}",
+		]
+	)
+
+
+def queue_payment_change_notice(old: str, new: str, was: str, now: str, changed_by: str):
+	"""After commit and off the request, like every other notice here."""
+
+	def _enqueue():
+		try:
+			frappe.enqueue(
+				"cosmestics.api.notifications._enqueued_payment_change_notice",
+				queue="short",
+				old=old,
+				new=new,
+				was=was,
+				now=now,
+				changed_by=changed_by,
+			)
+		except Exception as e:
+			frappe.log_error(f"Could not queue the payment change notice for {new}: {e}", "Cosmetics POS")
+
+	try:
+		frappe.db.after_commit.add(_enqueue)
+	except Exception as e:
+		frappe.log_error(f"Could not schedule the payment change notice for {new}: {e}", "Cosmetics POS")
+
+
+def _enqueued_payment_change_notice(old: str, new: str, was: str, now: str, changed_by: str) -> int:
+	message = format_payment_change(old, new, was, now, changed_by)
+	sent = 0
+	for jid, sender in _sale_group_targets():
+		try:
+			from whatsapp_integration.service.groups import send_group_text
+
+			ok = send_group_text(jid, message, sender)
+		except ImportError:
+			ok = _send_to_group(jid, message) if is_group(jid) else send_text(jid, message, sender)
+		sent += 1 if ok else 0
+	return sent

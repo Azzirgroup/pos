@@ -15,6 +15,11 @@ from frappe.utils import flt
 
 @frappe.whitelist()
 def get_catalog():
+	from frappe.utils import now
+
+	# Read before any stock is, so `stock_levels(since=stock_at)` can never miss
+	# a sale that lands while this is being built.
+	stock_at = now()
 	settings = frappe.get_cached_doc("Cosmestics POS Settings")
 	# The same warehouse the sale will draw from, so a stock figure on a card is
 	# never a count of somewhere else's shelf.
@@ -83,6 +88,7 @@ def get_catalog():
 		"sourcing": _sourcing_status(),
 		"price_list": price_list,
 		"warehouse": warehouse,
+		"stock_at": stock_at,
 		"empty": False,
 	}
 
@@ -270,6 +276,43 @@ def _sellable_uoms(codes, stock_uoms, prices) -> dict:
 		)
 
 	return by_item
+
+
+@frappe.whitelist()
+def stock_levels(since: str | None = None) -> dict:
+	"""Shelf counts that have moved since `since`, for keeping cards current.
+
+	The catalogue is loaded once and searched in memory, so a count on a card is
+	only as fresh as the last full load. That is refreshed after this till's own
+	sale — but a busy shop has several tills and a back office selling the same
+	shelf, and none of their sales ever reached this screen: an item sold
+	elsewhere still read 6 here until somebody pressed refresh.
+
+	Asked every few seconds, so it is cheap by construction: `Bin.modified` moves
+	whenever ERPNext changes a quantity, and only rows changed since the last ask
+	come back — usually none. `at` is read before the query, so a sale landing
+	mid-request is picked up next time rather than missed.
+	"""
+	from frappe.utils import now
+
+	from cosmestics.api.pos import selling_warehouse
+
+	at = now()
+	warehouse = selling_warehouse()
+	if not warehouse:
+		return {"at": at, "warehouse": None, "stock": {}}
+
+	filters = {"warehouse": warehouse}
+	if since:
+		filters["modified"] = (">=", since)
+
+	rows = frappe.get_all(
+		"Bin",
+		filters=filters,
+		fields=["item_code", "actual_qty"],
+		limit_page_length=0,
+	)
+	return {"at": at, "warehouse": warehouse, "stock": {r.item_code: flt(r.actual_qty) for r in rows}}
 
 
 def _stock(codes, warehouse) -> dict:

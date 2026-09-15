@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, shallowRef } from 'vue'
 import { ITEMS, CATEGORIES, WAREHOUSES, NEIGHBOURS } from '@/data/seed'
 import { decorate } from '@/data/derive'
-import { getCatalog } from '@/data/api'
+import { getCatalog, getStockLevels } from '@/data/api'
 import { tokenise, fuzzyHit } from '@/utils/search'
 
 /**
@@ -32,12 +32,25 @@ export const useCatalogStore = defineStore('catalog', () => {
 		isDemo.value = true
 	}
 
+	/** The warehouse the counts are for, and when they were read. */
+	const warehouse = ref(null)
+	let stockAt = null
+	/**
+	 * Which load is current. Two sales in quick succession each trigger a reload,
+	 * and the first request — started before the second sale posted — can land
+	 * *after* the second one. Without this it overwrote the newer counts with
+	 * older ones, and the card went back to showing stock already sold.
+	 */
+	let loadSeq = 0
+
 	async function load() {
 		if (loaded.value) return
+		const seq = ++loadSeq
 		loading.value = true
 		error.value = null
 		try {
 			const data = await getCatalog()
+			if (seq !== loadSeq) return
 			if (data?.empty || !data?.items?.length) {
 				// A site with no sellable items yet: show the demo so the till is
 				// explorable, but flag it — these SKUs do not exist in ERPNext and
@@ -48,16 +61,101 @@ export const useCatalogStore = defineStore('catalog', () => {
 				categories.value = data.categories || []
 				warehouses.value = data.warehouses || []
 				neighbours.value = data.neighbours || []
+				warehouse.value = data.warehouse || null
+				stockAt = data.stock_at || null
 				isDemo.value = false
 			}
 			loaded.value = true
 		} catch (e) {
+			if (seq !== loadSeq) return
 			console.error('[pos] catalog load failed', e)
 			error.value = e?.message || 'Could not load catalog'
-			useDemo()
+			// A failed *reload* keeps the real catalogue it already has. Swapping a
+			// working till to demo items because one refresh dropped on the wifi
+			// would put SKUs on screen that cannot be sold.
+			if (isDemo.value || !items.value.length) useDemo()
 			loaded.value = true
 		} finally {
-			loading.value = false
+			if (seq === loadSeq) loading.value = false
+		}
+	}
+
+	/** Replace the counts that differ, as new objects so the cards re-render. */
+	function applyStock(levels) {
+		if (!levels || isDemo.value) return
+		let changed = false
+		const next = items.value.map((it) => {
+			if (!(it.item_code in levels)) return it
+			const qty = Number(levels[it.item_code]) || 0
+			if (qty === it.stock) return it
+			changed = true
+			return { ...it, stock: qty }
+		})
+		if (changed) items.value = next
+	}
+
+	/**
+	 * Take a sale off the shelf on screen the moment it is charged.
+	 *
+	 * The invoice posts in the background while the next customer is served, so
+	 * waiting for the server left the card reading the old count through the
+	 * whole of the next sale. `deltas` is {item_code: stock units}.
+	 */
+	function adjustStock(deltas) {
+		const levels = {}
+		for (const [code, delta] of Object.entries(deltas || {})) {
+			const it = byCode.value.get(code)
+			if (it) levels[code] = (Number(it.stock) || 0) + Number(delta || 0)
+		}
+		applyStock(levels)
+	}
+
+	let syncing = false
+	/**
+	 * Pick up stock moved by anyone — another till, the back office, a receipt.
+	 *
+	 * Only this till's own sales used to reach the cards. Asks for the bins
+	 * changed since the last read, which is usually nothing, so it is cheap
+	 * enough to run every few seconds.
+	 */
+	async function syncStock() {
+		if (syncing || loading.value || !loaded.value || isDemo.value) return
+		syncing = true
+		const seq = loadSeq
+		try {
+			const res = await getStockLevels(stockAt)
+			// A full reload started meanwhile and is the better answer.
+			if (seq !== loadSeq) return
+			if (res?.warehouse !== warehouse.value) {
+				// A different counter's shelf now (a shift opened on another till):
+				// every count on screen is for the wrong place.
+				await refresh()
+				return
+			}
+			applyStock(res?.stock)
+			stockAt = res?.at || stockAt
+		} catch (e) {
+			// Quiet: the next tick tries again, and a toast every few seconds on a
+			// flaky connection helps nobody.
+			console.warn('[pos] stock sync failed', e)
+		} finally {
+			syncing = false
+		}
+	}
+
+	/** Keep counts current while the till is on screen. Returns a stop function. */
+	function startStockSync(everyMs = 15000) {
+		const tick = () => {
+			if (document.visibilityState === 'visible' && navigator.onLine !== false) syncStock()
+		}
+		const timer = setInterval(tick, everyMs)
+		// Coming back to the tab is exactly when counts are most likely stale.
+		document.addEventListener('visibilitychange', tick)
+		window.addEventListener('focus', tick)
+		return () => {
+			clearInterval(timer)
+			document.removeEventListener('visibilitychange', tick)
+			window.removeEventListener('focus', tick)
 		}
 	}
 
@@ -166,8 +264,12 @@ export const useCatalogStore = defineStore('catalog', () => {
 		loaded,
 		isDemo,
 		error,
+		warehouse,
 		load,
 		refresh,
+		adjustStock,
+		syncStock,
+		startStockSync,
 		search,
 		findByBarcode,
 		byCode,

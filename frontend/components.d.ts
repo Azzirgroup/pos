@@ -44,6 +44,7 @@ declare module 'vue' {
     ReturnSheet: typeof import('./src/components/ReturnSheet.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
     RouterView: typeof import('vue-router')['RouterView']
+    SaleActionSheet: typeof import('./src/components/SaleActionSheet.vue')['default']
     ScanSheet: typeof import('./src/components/ScanSheet.vue')['default']
     ShareBar: typeof import('./src/components/charts/ShareBar.vue')['default']
     ShareSheet: typeof import('./src/components/ShareSheet.vue')['default']

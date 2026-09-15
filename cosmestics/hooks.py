@@ -162,6 +162,12 @@ doc_events = {
 # ----------
 
 # add methods and filters to jinja environment
+#
+# `payment_summary(doc)` names every tender on a sale, for the shop's own
+# notification templates — see `notifications.payment_summary`.
+jinja = {
+	"methods": ["cosmestics.api.notifications.payment_summary"],
+}
 # jinja = {
 # 	"methods": "cosmestics.utils.jinja_methods",
 # 	"filters": "cosmestics.utils.jinja_filters"
