@@ -117,15 +117,18 @@ const routes = [
 		meta: { title: 'Material requests', report: 'below_reorder' },
 		component: () => import('@/views/Reports.vue'),
 	},
+	// One screen for both, told which by `partyType`. They used to be two
+	// routes onto the report view, which kept the customer list on screen when
+	// moving to Payables — see `PartyBalances`.
 	{
 		path: '/accounts/receivables',
-		meta: { title: 'Receivables', report: 'receivables' },
-		component: () => import('@/views/Reports.vue'),
+		meta: { title: 'Receivables', partyType: 'Customer' },
+		component: () => import('@/views/PartyBalances.vue'),
 	},
 	{
 		path: '/accounts/payables',
-		meta: { title: 'Payables', report: 'payables' },
-		component: () => import('@/views/Reports.vue'),
+		meta: { title: 'Payables', partyType: 'Supplier' },
+		component: () => import('@/views/PartyBalances.vue'),
 	},
 	{
 		// The report picker. The four fixed-subject reports above — receivables,

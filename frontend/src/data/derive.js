@@ -50,6 +50,12 @@ export function decorate(row) {
 		category: row.category,
 		price: Number(row.price) || 0,
 		stock: Number(row.stock) || 0,
+		/** Held in the shop's other stores — see `stock.item_everywhere`. */
+		elsewhere: Number(row.elsewhere) || 0,
+		/** {warehouse: qty} across the stores the cards list. */
+		byStore: row.by_store || {},
+		/** Requested into this store and waiting for approval. */
+		pendingIn: Number(row.pending_in) || 0,
 		barcodes,
 		uom: row.uom || 'Nos',
 		/**

@@ -53,6 +53,14 @@ def get_catalog():
 
 	prices = _prices(codes, price_list)
 	stock = _stock(codes, warehouse)
+	from cosmestics.api.stock import elsewhere_qtys, pending_in, store_qtys
+
+	# What the other stores hold, so "Out" at the counter is not mistaken for
+	# "out everywhere" — see `stock.item_everywhere`.
+	elsewhere = elsewhere_qtys(codes, warehouse)
+	stores = _card_stores(warehouse)
+	by_store = store_qtys(codes, [w["name"] for w in stores])
+	pending = pending_in(codes, warehouse)
 	barcodes = _barcodes(codes)
 	stock_uoms = {i.item_code: i.stock_uom for i in items}
 	uoms = _sellable_uoms(codes, stock_uoms, prices)
@@ -67,6 +75,11 @@ def get_catalog():
 				"category": it.item_group,
 				"price": flt(prices.get((it.item_code, it.stock_uom)) or prices.get((it.item_code, None))),
 				"stock": flt(stock.get(it.item_code)),
+				"elsewhere": flt(elsewhere.get(it.item_code)),
+				# {warehouse: qty} across the stores in `stores` below, non-zero only.
+				"by_store": by_store.get(it.item_code) or {},
+				# Already asked for and waiting on approval.
+				"pending_in": flt(pending.get(it.item_code)),
 				"barcodes": barcodes.get(it.item_code, []),
 				# Passed through exactly as the Item carries it. See `_images`
 				# below for why this is deliberately not filtered.
@@ -88,6 +101,8 @@ def get_catalog():
 		"sourcing": _sourcing_status(),
 		"price_list": price_list,
 		"warehouse": warehouse,
+		# The stores every card lists, this till's first.
+		"stores": stores,
 		"stock_at": stock_at,
 		"empty": False,
 	}
@@ -302,6 +317,8 @@ def stock_levels(since: str | None = None) -> dict:
 	if not warehouse:
 		return {"at": at, "warehouse": None, "stock": {}}
 
+	from cosmestics.api.stock import elsewhere_qtys, pending_in, store_qtys
+
 	filters = {"warehouse": warehouse}
 	if since:
 		filters["modified"] = (">=", since)
@@ -312,7 +329,55 @@ def stock_levels(since: str | None = None) -> dict:
 		fields=["item_code", "actual_qty"],
 		limit_page_length=0,
 	)
-	return {"at": at, "warehouse": warehouse, "stock": {r.item_code: flt(r.actual_qty) for r in rows}}
+	stock = {r.item_code: flt(r.actual_qty) for r in rows}
+
+	# Anything that moved in any store changes what the card says is elsewhere.
+	moved = frappe.get_all(
+		"Bin",
+		filters={"modified": (">=", since)} if since else {},
+		pluck="item_code",
+		distinct=True,
+		limit_page_length=0,
+	)
+	moved = list(set(moved))
+	elsewhere = elsewhere_qtys(moved, warehouse) if moved else {}
+	stores = [w["name"] for w in _card_stores(warehouse)]
+	by_store = store_qtys(moved, stores) if moved else {}
+
+	# Requests approved or rejected since — the card's "Request sent" has to
+	# clear even when no stock moved into this store.
+	requested = frappe.get_all(
+		"Material Request Item",
+		filters={"warehouse": warehouse, "modified": (">=", since)} if since else {"warehouse": warehouse},
+		pluck="item_code",
+		distinct=True,
+		limit_page_length=0,
+	)
+	changed = list(set(moved) | set(requested))
+	pending = pending_in(changed, warehouse) if changed else {}
+	return {
+		"at": at,
+		"warehouse": warehouse,
+		"stock": stock,
+		"elsewhere": {code: flt(elsewhere.get(code)) for code in moved},
+		"by_store": {code: by_store.get(code) or {} for code in moved},
+		"pending_in": {code: flt(pending.get(code)) for code in changed},
+	}
+
+
+def _card_stores(warehouse) -> list:
+	"""[{name, label, is_here}] — this till's store, then the other branches."""
+	stores = []
+	if warehouse:
+		stores.append(
+			{
+				"name": warehouse,
+				"label": frappe.db.get_value("Warehouse", warehouse, "warehouse_name") or warehouse,
+				"is_here": True,
+			}
+		)
+	stores.extend({**w, "is_here": False} for w in _warehouses(warehouse))
+	return stores
 
 
 def _stock(codes, warehouse) -> dict:

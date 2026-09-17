@@ -35,6 +35,8 @@ const props = defineProps({
 	invoice: { type: Object, default: null },
 	/** For 'pay-supplier': the supplier id. */
 	supplier: { type: String, default: '' },
+	/** Preselected customer ('receive') or supplier ('pay-supplier'). */
+	party: { type: String, default: '' },
 })
 
 const emit = defineEmits(['update:modelValue', 'done', 'notify'])
@@ -106,7 +108,7 @@ watch(
 		date.value = new Date().toISOString().slice(0, 10)
 		from.value = ''
 		to.value = ''
-		party.value = props.supplier || ''
+		party.value = props.party || props.supplier || ''
 		owed.value = null
 		// Pre-filled with what is owed: the commonest payment is the whole bill,
 		// and a cashier paying it in full should not have to retype the figure.
@@ -116,7 +118,7 @@ watch(
 		} catch (e) {
 			emit('notify', { message: e.message || 'Could not load accounts', tone: 'bad' })
 		}
-		if (props.mode === 'pay-supplier' && props.supplier) await loadOwed(props.supplier)
+		if (props.mode === 'pay-supplier' && party.value) await loadOwed(party.value)
 	},
 )
 

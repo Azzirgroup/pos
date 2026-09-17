@@ -148,7 +148,7 @@ function convertToPos() {
 	emit('notify', loadSummary(result, props.name))
 }
 
-const DESTRUCTIVE = new Set(['cancel'])
+const DESTRUCTIVE = new Set(['cancel', 'reject'])
 
 async function act(action) {
 	if (DESTRUCTIVE.has(action) && confirming.value !== action) {
@@ -332,6 +332,25 @@ const printFormatOptions = computed(() =>
 					:icon-left="LucideCart"
 					label="Convert to POS"
 					@click="convertToPos"
+				/>
+				<!-- A transfer waiting for the store keeper. -->
+				<Button
+					v-if="can('approve')"
+					theme="green"
+					variant="solid"
+					:icon-left="LucideCheck"
+					label="Approve & move stock"
+					:loading="busy === 'approve'"
+					@click="act('approve')"
+				/>
+				<Button
+					v-if="can('reject')"
+					theme="red"
+					variant="subtle"
+					:icon-left="LucideBan"
+					:label="confirming === 'reject' ? 'Confirm reject' : 'Reject'"
+					:loading="busy === 'reject'"
+					@click="act('reject')"
 				/>
 				<Button
 					v-if="can('submit')"

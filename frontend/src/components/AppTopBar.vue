@@ -8,6 +8,9 @@ import LucidePlus from '~icons/lucide/plus'
 import LucideLogOut from '~icons/lucide/log-out'
 import LucideUserRound from '~icons/lucide/user-round'
 import MasterSheet from '@/components/MasterSheet.vue'
+import LucideMoon from '~icons/lucide/moon'
+import LucideSun from '~icons/lucide/sun'
+import { activeTheme, toggleTheme } from '@/utils/theme'
 
 const emit = defineEmits(['toggleRail'])
 
@@ -143,6 +146,18 @@ onMounted(async () => {
 			>
 				<LucidePlus class="h-3.5 w-3.5" />
 				<span class="hidden sm:block">New</span>
+			</button>
+
+			<!-- Dark mode, one tap from every screen — asked for because of eye
+			     strain at the counter. See `utils/theme`. -->
+			<button
+				class="grid h-7 w-7 place-items-center rounded-md text-ink-gray-7 transition-colors hover:bg-surface-gray-2"
+				:aria-label="activeTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'"
+				:title="activeTheme === 'dark' ? 'Light mode' : 'Dark mode'"
+				@click="toggleTheme"
+			>
+				<LucideSun v-if="activeTheme === 'dark'" class="h-4 w-4" />
+				<LucideMoon v-else class="h-4 w-4" />
 			</button>
 
 			<!-- Who is signed in, and the way off this machine. A till is shared:

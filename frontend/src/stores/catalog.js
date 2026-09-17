@@ -34,6 +34,8 @@ export const useCatalogStore = defineStore('catalog', () => {
 
 	/** The warehouse the counts are for, and when they were read. */
 	const warehouse = ref(null)
+	/** The stores every card lists: [{name, label, is_here}], this till's first. */
+	const stores = ref([])
 	let stockAt = null
 	/**
 	 * Which load is current. Two sales in quick succession each trigger a reload,
@@ -62,6 +64,7 @@ export const useCatalogStore = defineStore('catalog', () => {
 				warehouses.value = data.warehouses || []
 				neighbours.value = data.neighbours || []
 				warehouse.value = data.warehouse || null
+				stores.value = data.stores || []
 				stockAt = data.stock_at || null
 				isDemo.value = false
 			}
@@ -81,15 +84,32 @@ export const useCatalogStore = defineStore('catalog', () => {
 	}
 
 	/** Replace the counts that differ, as new objects so the cards re-render. */
-	function applyStock(levels) {
-		if (!levels || isDemo.value) return
+	/**
+	 * Merge fresh figures into the cards. Every argument is {item_code: value}
+	 * for the items that changed; anything absent is left as it was.
+	 */
+	function applyStock(levels, elsewhere = null, byStore = null, pendingIn = null) {
+		if (isDemo.value) return
+		const maps = { stock: levels, elsewhere, byStore, pendingIn }
+		if (!Object.values(maps).some(Boolean)) return
 		let changed = false
 		const next = items.value.map((it) => {
-			if (!(it.item_code in levels)) return it
-			const qty = Number(levels[it.item_code]) || 0
-			if (qty === it.stock) return it
+			let copy = null
+			for (const [field, map] of Object.entries(maps)) {
+				if (!map || !(it.item_code in map)) continue
+				const raw = map[it.item_code]
+				const value = field === 'byStore' ? raw || {} : Number(raw) || 0
+				const same =
+					field === 'byStore'
+						? JSON.stringify(value) === JSON.stringify(it.byStore || {})
+						: value === it[field]
+				if (same) continue
+				copy ||= { ...it }
+				copy[field] = value
+			}
+			if (!copy) return it
 			changed = true
-			return { ...it, stock: qty }
+			return copy
 		})
 		if (changed) items.value = next
 	}
@@ -103,11 +123,20 @@ export const useCatalogStore = defineStore('catalog', () => {
 	 */
 	function adjustStock(deltas) {
 		const levels = {}
+		const shelves = {}
 		for (const [code, delta] of Object.entries(deltas || {})) {
 			const it = byCode.value.get(code)
-			if (it) levels[code] = (Number(it.stock) || 0) + Number(delta || 0)
+			if (!it) continue
+			levels[code] = (Number(it.stock) || 0) + Number(delta || 0)
+			if (warehouse.value) shelves[code] = { ...(it.byStore || {}), [warehouse.value]: levels[code] }
 		}
-		applyStock(levels)
+		applyStock(levels, null, shelves)
+	}
+
+	/** Mark an item as asked for, before the next sync says so. */
+	function markRequested(code, qty) {
+		const it = byCode.value.get(code)
+		if (it) applyStock(null, null, null, { [code]: (Number(it.pendingIn) || 0) + Number(qty || 0) })
 	}
 
 	let syncing = false
@@ -132,7 +161,7 @@ export const useCatalogStore = defineStore('catalog', () => {
 				await refresh()
 				return
 			}
-			applyStock(res?.stock)
+			applyStock(res?.stock, res?.elsewhere, res?.by_store, res?.pending_in)
 			stockAt = res?.at || stockAt
 		} catch (e) {
 			// Quiet: the next tick tries again, and a toast every few seconds on a
@@ -265,6 +294,8 @@ export const useCatalogStore = defineStore('catalog', () => {
 		isDemo,
 		error,
 		warehouse,
+		stores,
+		markRequested,
 		load,
 		refresh,
 		adjustStock,

@@ -5,6 +5,7 @@ import { listReports, runReport, getWarehouses } from '@/data/api'
 import { fmtMoney } from '@/utils/format'
 import { useRoute } from 'vue-router'
 import PageHeader from '@/components/PageHeader.vue'
+import DateField from '@/components/DateField.vue'
 import DataTable from '@/components/DataTable.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import { useRowActions } from '@/composables/useRowActions'
@@ -44,6 +45,17 @@ const ALL = '__all__'
 const warehouse = ref(ALL)
 const warehouses = ref([])
 const result = ref({ columns: [], rows: [], totals: {} })
+
+/**
+ * Day pickers for the reports that are about a date — what the shelf held and
+ * what moved — instead of "last 30 days". Both start on today, so the first
+ * thing on screen is today's opening, movement and closing.
+ */
+function localDay(d = new Date()) {
+	return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+}
+const fromDate = ref(localDay())
+const toDate = ref(localDay())
 const loading = ref(false)
 
 /**
@@ -105,6 +117,7 @@ const grouped = computed(() => {
 })
 
 const activeReport = computed(() => reports.value.find((r) => r.key === active.value))
+const isDated = computed(() => !!activeReport.value?.dated)
 
 /**
  * Whether the card index is showing.
@@ -153,7 +166,7 @@ function openPaySupplier(row) {
 }
 
 function onPaid() {
-	load()
+	run()
 }
 
 function payNotify({ message, tone }) {
@@ -194,6 +207,19 @@ watch(
 )
 
 watch([active, days, warehouse], run)
+watch([fromDate, toDate], () => {
+	if (isDated.value) run()
+})
+
+// Two routes onto this view (Stock movement, the buy list) share one instance
+// when moving directly between them, so the pinned report has to follow the
+// route or the previous one stays on screen under the new heading.
+watch(
+	() => route.meta?.report,
+	(report) => {
+		if (report && !props.report) active.value = report
+	},
+)
 
 async function run() {
 	loading.value = true
@@ -202,6 +228,8 @@ async function run() {
 			report: active.value,
 			days: days.value,
 			warehouse: usesWarehouse.value && warehouse.value !== ALL ? warehouse.value : null,
+			fromDate: isDated.value ? fromDate.value : null,
+			toDate: isDated.value ? toDate.value : null,
 		})
 	} catch (e) {
 		console.error('[reports]', e)
@@ -309,7 +337,11 @@ function exportCsv() {
 					<div v-if="usesWarehouse" class="w-[180px]">
 						<FormControl type="select" v-model="warehouse" :options="warehouseOptions" />
 					</div>
-					<div class="w-[150px]">
+					<template v-if="isDated">
+						<DateField v-model="fromDate" label="From" :max="toDate" compact class="w-[200px]" />
+						<DateField v-model="toDate" label="To" :min="fromDate" compact class="w-[200px]" />
+					</template>
+					<div v-else class="w-[150px]">
 						<FormControl type="select" v-model="days" :options="PERIODS" />
 					</div>
 					<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="run" />

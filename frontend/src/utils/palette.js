@@ -1,3 +1,5 @@
+import { reactive } from 'vue'
+
 /**
  * Chart colours.
  *
@@ -18,20 +20,36 @@
  * against white, so every chart using them ships visible labels and a table
  * view — colour never carries a value on its own.
  *
- * The app has no dark theme (frappe-ui's `[data-theme="dark"]` is never set),
- * so these are the light steps only. Re-stepping for a dark surface is a change
- * to this file and nothing else.
+ * The series hues are mid-tones that hold on the dark surface as well. The
+ * chrome — grid, axis, muted text, the surface itself — does not, so it is
+ * swapped with the theme (see `setChartChrome`, called from `utils/theme`).
  */
 
 /** Fixed categorical order. Index 0 is also the single-series default. */
 export const SERIES = ['#2a78d6', '#eb6834', '#1baf7a', '#eda100']
 
-/** Everything that is context rather than subject. */
-export const CHROME = {
+const LIGHT_CHROME = {
 	grid: '#e5e5e1',
 	axis: '#c3c2b7',
 	muted: '#898781',
 	surface: '#ffffff',
+}
+
+const DARK_CHROME = {
+	grid: '#343434',
+	axis: '#4c4c4c',
+	muted: '#a3a3a3',
+	surface: '#171717',
+}
+
+/**
+ * Everything that is context rather than subject. Reactive, so a chart already
+ * on screen repaints when the theme changes.
+ */
+export const CHROME = reactive({ ...LIGHT_CHROME })
+
+export function setChartChrome(dark) {
+	Object.assign(CHROME, dark ? DARK_CHROME : LIGHT_CHROME)
 }
 
 /** Slot for the nth series, folded to the last slot rather than cycled. */

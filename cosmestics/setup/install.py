@@ -64,6 +64,8 @@ def setup_prerequisites():
 	ensure_shift_cashier_field()
 	ensure_pin_login_fields()
 	ensure_quote_conversion_fields()
+	ensure_purchase_landed_cost_fields()
+	ensure_transfer_approval_fields()
 	ensure_material_request_customer_field()
 	ensure_one_shift_per_day_default()
 	ensure_print_formats()
@@ -238,6 +240,100 @@ def ensure_quote_conversion_fields():
 		if frappe.db.exists("Custom Field", {"dt": "Quotation", "fieldname": field["fieldname"]}):
 			continue
 		create_custom_field("Quotation", field)
+
+
+def ensure_purchase_landed_cost_fields():
+	"""Where a purchase keeps its landing costs until the store confirms it.
+
+	A Landed Cost Voucher can only point at a *submitted* invoice, and a purchase
+	here stays a draft until the store keeper counts it. So the charges the
+	manager enters are held on the draft and turned into the voucher at the
+	moment of confirmation — see `buying._apply_landed_costs`. Hidden: the
+	desk has its own Landed Cost Voucher and these would only confuse it.
+	"""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	fields = [
+		{
+			"fieldname": "cosmestics_landed_costs",
+			"label": "Landing Costs (POS)",
+			"fieldtype": "Long Text",
+			"insert_after": "remarks",
+			"hidden": 1,
+			"description": "Charges to spread across the items when the purchase is confirmed.",
+		},
+		{
+			"fieldname": "cosmestics_landed_basis",
+			"label": "Spread Landing Costs By",
+			"fieldtype": "Select",
+			"options": "Qty\nAmount",
+			"default": "Qty",
+			"insert_after": "cosmestics_landed_costs",
+			"hidden": 1,
+		},
+	]
+	for field in fields:
+		if frappe.db.exists("Custom Field", {"dt": "Purchase Invoice", "fieldname": field["fieldname"]}):
+			continue
+		create_custom_field("Purchase Invoice", field)
+
+
+def ensure_transfer_approval_fields():
+	"""Approval state for a request to move stock between stores.
+
+	A transfer request is a claim on another store's shelf, so it waits for the
+	store keeper: *Approve* moves the stock, *Reject* stops the request. The
+	state is a field of its own rather than a Workflow, because the till raises
+	and submits these in one step and a workflow would take that submit away.
+	See `stock.approve_transfer`.
+	"""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	fields = [
+		{
+			"fieldname": "cosmestics_approval",
+			"label": "Approval",
+			"fieldtype": "Select",
+			"options": "\nPending\nApproved\nRejected",
+			"insert_after": "material_request_type",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"in_list_view": 1,
+			"in_standard_filter": 1,
+			"description": "Transfers wait for the store keeper. Approve moves the stock; reject stops the request.",
+		},
+		{
+			"fieldname": "cosmestics_approved_by",
+			"label": "Approved / Rejected By",
+			"fieldtype": "Link",
+			"options": "User",
+			"insert_after": "cosmestics_approval",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"no_copy": 1,
+		},
+		{
+			# Data, not Link: a Link here would stop anyone cancelling the Stock
+			# Entry — Frappe refuses to cancel a document a submitted one points at.
+			"fieldname": "cosmestics_moved_by",
+			"label": "Moved By",
+			"fieldtype": "Data",
+			"insert_after": "cosmestics_approved_by",
+			"read_only": 1,
+			"allow_on_submit": 1,
+			"no_copy": 1,
+		},
+	]
+	# An earlier build made this a Link, which blocked cancelling the Stock Entry.
+	old = frappe.db.get_value("Custom Field", {"dt": "Material Request", "fieldname": "cosmestics_stock_entry"})
+	if old:
+		frappe.delete_doc("Custom Field", old, ignore_permissions=True)
+
+	for field in fields:
+		if frappe.db.exists("Custom Field", {"dt": "Material Request", "fieldname": field["fieldname"]}):
+			continue
+		create_custom_field("Material Request", field)
 
 
 def ensure_one_shift_per_day_default():

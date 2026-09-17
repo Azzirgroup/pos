@@ -59,6 +59,8 @@ after_migrate = "cosmestics.setup.install.after_migrate"
 doctype_js = {
 	"POS Opening Entry": "public/js/pos_shift_cashiers.js",
 	"POS Closing Entry": "public/js/pos_shift_cashiers.js",
+	# Approve / Reject for a stock transfer waiting on the store keeper.
+	"Material Request": "public/js/material_request_approval.js",
 }
 
 # include js in doctype views
@@ -122,6 +124,8 @@ doc_events = {
 		"on_submit": "cosmestics.api.notifications.on_shift_close",
 	},
 	"Material Request": {
+		# A stock transfer waits for the store keeper — see `stock.approve_transfer`.
+		"before_submit": "cosmestics.api.stock.mark_transfer_pending",
 		# Posts the request to the staff WhatsApp group. Enqueued, best-effort:
 		# a bridge outage must never block the request itself.
 		"on_submit": "cosmestics.api.notifications.on_material_request_submit",

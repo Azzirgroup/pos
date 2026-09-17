@@ -11,6 +11,9 @@ import LucidePill from '~icons/lucide/pill'
 import LucideShirt from '~icons/lucide/shirt'
 import LucideCookie from '~icons/lucide/cookie'
 import LucidePackage from '~icons/lucide/package'
+import LucideEllipsisVertical from '~icons/lucide/ellipsis-vertical'
+import LucideArrowRightLeft from '~icons/lucide/arrow-right-left'
+import LucideCheck from '~icons/lucide/check'
 
 const props = defineProps({
 	item: { type: Object, required: true },
@@ -25,9 +28,11 @@ const props = defineProps({
 	 * fewer products on screen. See `show_item_images` in the till settings.
 	 */
 	showImage: { type: Boolean, default: false },
+	/** The stores to list on the card, this till's first — `catalog.stores`. */
+	stores: { type: Array, default: () => [] },
 })
 
-const emit = defineEmits(['add', 'setQty', 'remove'])
+const emit = defineEmits(['add', 'setQty', 'remove', 'more', 'move'])
 
 const out = computed(() => props.item.stock <= 0)
 const low = computed(() => props.item.stock > 0 && props.item.stock <= 5)
@@ -50,6 +55,28 @@ const dot = computed(() => {
  * Just the number otherwise: in a column headed by a price, beside a coloured
  * pill, "left" is the one part a cashier never reads.
  */
+/**
+ * Every store's balance, on the card.
+ *
+ * "Out" at the counter used to be the whole story, so a product with a carton
+ * in the back store was turned away — the blind spot the shop asked to close.
+ * This till's own figure is the card's stock (kept current by the sync); the
+ * others come from `byStore`. Only drawn when there is more than one store.
+ */
+const storeChips = computed(() => {
+	if (props.stores.length < 2) return []
+	return props.stores.map((s) => ({
+		key: s.name,
+		label: s.label,
+		here: s.is_here,
+		qty: Math.floor(s.is_here ? Number(props.item.stock) || 0 : Number(props.item.byStore?.[s.name]) || 0),
+	}))
+})
+
+/** Somewhere else holds some, so moving it here is worth offering. */
+const canMove = computed(() => storeChips.value.some((c) => !c.here && c.qty > 0))
+const requested = computed(() => Number(props.item.pendingIn) > 0)
+
 const stockLabel = computed(() => {
 	const qty = Number(props.item.stock) || 0
 	if (qty <= 0) return 'Out'
@@ -199,12 +226,26 @@ const fallbackIcon = computed(() => {
 						<component :is="fallbackIcon" class="h-4 w-4" aria-hidden="true" />
 					</span>
 					<span
-						class="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-white"
+						class="absolute -right-0.5 -top-0.5 h-2 w-2 rounded-full ring-2 ring-[var(--surface-white)]"
 						:class="dot"
 					/>
 				</span>
-				<span class="line-clamp-2 min-w-0 text-p-sm font-medium leading-snug text-ink-gray-8">
+				<span class="line-clamp-2 min-w-0 flex-1 text-p-sm font-medium leading-snug text-ink-gray-8">
 					{{ item.item_name }}
+				</span>
+				<!-- Quick actions: stock in every store, request it, count it. A span,
+				     not a button — the whole cell is already one, and the tap must not
+				     also add the item. -->
+				<span
+					role="button"
+					tabindex="0"
+					class="-mr-1 -mt-0.5 grid h-7 w-6 shrink-0 cursor-pointer place-items-center rounded text-ink-gray-4 hover:bg-surface-gray-3 hover:text-ink-gray-8"
+					:aria-label="`More for ${item.item_name}`"
+					title="Stock in all stores, request, reconcile"
+					@click.stop="emit('more', item)"
+					@keydown.enter.stop.prevent="emit('more', item)"
+				>
+					<LucideEllipsisVertical class="h-4 w-4" />
 				</span>
 			</div>
 			<!-- Price and stock on one line. The dot alone said "low" but never how
@@ -221,6 +262,45 @@ const fallbackIcon = computed(() => {
 					{{ stockLabel }}
 				</span>
 			</div>
+			<!-- Stock standing in every store. This till's chip is outlined. -->
+			<div v-if="storeChips.length" class="mt-1 flex flex-wrap gap-1">
+				<span
+					v-for="c in storeChips"
+					:key="c.key"
+					class="tabular flex max-w-full items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] leading-tight"
+					:class="
+						c.here
+							? 'border-violet-400 text-ink-gray-8'
+							: 'border-outline-gray-2 text-ink-gray-6'
+					"
+					:title="`${c.label}: ${c.qty}`"
+				>
+					<span class="max-w-[5.5rem] truncate">{{ c.label }}</span>
+					<span class="font-semibold" :class="c.qty > 0 ? 'text-ink-gray-9' : 'text-ink-gray-4'">{{ c.qty }}</span>
+				</span>
+			</div>
+
+			<!-- Out here but held elsewhere: ask for it to be moved. Once asked,
+			     the card says so until the store keeper acts on it. -->
+			<span
+				v-if="requested && out"
+				class="mt-1.5 flex items-center justify-center gap-1 rounded-md bg-surface-green-2 py-1.5 text-p-xs font-semibold text-ink-green-3"
+				@click.stop
+			>
+				<LucideCheck class="h-3.5 w-3.5" />
+				Request sent · {{ item.pendingIn }}
+			</span>
+			<span
+				v-else-if="out && canMove"
+				role="button"
+				tabindex="0"
+				class="mt-1.5 flex cursor-pointer items-center justify-center gap-1 rounded-md bg-surface-violet-1 py-1.5 text-p-xs font-semibold text-violet-600 transition-colors hover:bg-violet-200"
+				@click.stop="emit('move', item)"
+				@keydown.enter.stop.prevent="emit('move', item)"
+			>
+				<LucideArrowRightLeft class="h-3.5 w-3.5" />
+				Move stock here
+			</span>
 		</div>
 
 		<!-- Quantity controls only once the item is in the cart, mirroring the

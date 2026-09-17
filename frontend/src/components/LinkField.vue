@@ -32,6 +32,12 @@ const props = defineProps({
 	onCreate: { type: Function, default: null },
 	label: { type: String, default: '' },
 	required: { type: Boolean, default: false },
+	/**
+	 * Offer creation even before anything is typed, under this wording — e.g.
+	 * "Create a new item". For records that need a form of their own rather
+	 * than just a name, where `onCreate` opens that form.
+	 */
+	createLabel: { type: String, default: '' },
 })
 
 /**
@@ -93,12 +99,23 @@ function pick(option) {
 /** Offered only when typing has not already landed on a real match. */
 const showCreate = () =>
 	props.onCreate &&
-	query.value.trim() &&
+	(query.value.trim() || props.createLabel) &&
 	!results.value.some((r) => r.label.toLowerCase() === query.value.trim().toLowerCase())
 
-async function createNew() {
+/** Typed text that is not already the field's value — worth carrying into a new record. */
+const typedNew = () => {
 	const typed = query.value.trim()
-	if (!typed || !props.onCreate) return
+	return typed && typed !== (props.modelValue || '') ? typed : ''
+}
+
+const createText = () => {
+	if (!props.createLabel) return `Create "${query.value.trim()}"`
+	return typedNew() ? `${props.createLabel} "${typedNew()}"` : props.createLabel
+}
+
+async function createNew() {
+	const typed = props.createLabel ? typedNew() : query.value.trim()
+	if ((!typed && !props.createLabel) || !props.onCreate) return
 	creating.value = true
 	try {
 		const option = await props.onCreate(typed)
@@ -184,11 +201,11 @@ function onBlur() {
 					v-if="showCreate()"
 					type="button"
 					:disabled="creating"
-					class="flex w-full items-center gap-1.5 rounded-md border-t border-outline-gray-1 px-2 py-1.5 text-left text-p-sm font-medium text-ink-blue-3 hover:bg-surface-blue-1 disabled:opacity-50"
+					class="sticky -bottom-1 flex w-full items-center gap-1.5 rounded-md border-t border-outline-gray-1 bg-surface-white px-2 py-2 text-left text-p-sm font-medium text-ink-blue-3 hover:bg-surface-blue-1 disabled:opacity-50"
 					@mousedown.prevent="createNew"
 				>
 					<LucidePlus class="h-3.5 w-3.5 shrink-0" />
-					{{ creating ? 'Creating…' : `Create "${query.trim()}"` }}
+					{{ creating ? 'Creating…' : createText() }}
 				</button>
 			</template>
 		</div>

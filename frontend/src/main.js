@@ -6,6 +6,10 @@ import { FrappeUI, setConfig, frappeRequest } from 'frappe-ui'
 
 import App from './App.vue'
 import router from './router'
+import { initTheme } from './utils/theme'
+
+// Before anything paints — see `utils/theme`.
+initTheme()
 
 const app = createApp(App)
 

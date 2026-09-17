@@ -27,6 +27,12 @@ const props = defineProps({
 	 * by sending someone to the desk to find the record again.
 	 */
 	editName: { type: String, default: null },
+	/** Hide the type picker — the caller already knows what it is adding. */
+	lockType: { type: Boolean, default: false },
+	/** Values to start a new record with, e.g. the name typed into a search. */
+	initialValues: { type: Object, default: null },
+	/** Close after one record is created, for a caller waiting on that record. */
+	closeOnCreate: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:open', 'created', 'notify'])
@@ -56,6 +62,7 @@ watch(
 			if (!types.value.length) types.value = await listMasterTypes()
 			await pick(props.initialKey || activeKey.value || types.value[0]?.key)
 			if (props.editName) await loadRecord()
+			else if (props.initialValues) values.value = { ...props.initialValues }
 		} catch (e) {
 			emit('notify', { message: e.message || 'Could not load the form', tone: 'bad' })
 		} finally {
@@ -127,6 +134,7 @@ async function save() {
 		emit('created', res)
 		emit('notify', { message: res.message, tone: 'good' })
 		refreshTillCatalog()
+		if (props.closeOnCreate) emit('update:open', false)
 	} catch (e) {
 		emit('notify', { message: e.message || 'Could not save', tone: 'bad' })
 	} finally {
@@ -142,7 +150,10 @@ function optionsFor(field) {
 <template>
 	<Dialog
 		:model-value="open"
-		:options="{ title: editing ? `Edit ${editing.title}` : 'Add a record', size: '2xl' }"
+		:options="{
+			title: editing ? `Edit ${editing.title}` : lockType && active ? `New ${active.label.toLowerCase()}` : 'Add a record',
+			size: '2xl',
+		}"
 		@update:model-value="emit('update:open', $event)"
 	>
 		<template #body-content>
@@ -158,7 +169,7 @@ function optionsFor(field) {
 
 			<div v-else class="flex flex-col gap-4">
 				<!-- Type picker. Icons repeat the label rather than replacing it. -->
-				<div v-if="!editing" class="flex flex-wrap gap-2">
+				<div v-if="!editing && !lockType" class="flex flex-wrap gap-2">
 					<button
 						v-for="t in types"
 						:key="t.key"

@@ -139,6 +139,8 @@ const CONFIRM = {
 	submit: (name) => `Submit ${name}? It cannot be edited afterwards.`,
 	cancel: (name) => `Cancel ${name}? This cannot be undone — you would have to amend it.`,
 	amend: (name) => `Amend ${name}? A new draft is created from it.`,
+	approve: (name) => `Approve ${name}? The stock moves between the stores now.`,
+	reject: (name) => `Reject ${name}? The request is stopped and nothing moves.`,
 }
 
 async function act(row, action) {
@@ -148,6 +150,8 @@ async function act(row, action) {
 		const res = await runDocumentAction({ key: 'material-request', name: row.name, action })
 		emit('notify', { message: res.message || `${row.name} ${action}ed`, tone: 'good' })
 		await load()
+		// An approval moved stock; the cards should show it now, not next sync.
+		if (action === 'approve') catalog.syncStock()
 	} catch (e) {
 		emit('notify', { message: e.message || `Could not ${action} that request`, tone: 'bad' })
 	} finally {
@@ -231,6 +235,18 @@ function onCreated() {
 								>
 									{{ row.docstatus === 0 ? 'Draft' : row.docstatus === 2 ? 'Cancelled' : row.status }}
 								</span>
+								<!-- A transfer waits for the store keeper; say where it stands. -->
+								<span
+									v-if="row.cosmestics_approval"
+									class="shrink-0 rounded-full px-2 py-0.5 text-p-xs font-medium"
+									:class="{
+										'bg-surface-amber-2 text-ink-amber-3': row.cosmestics_approval === 'Pending',
+										'bg-surface-green-2 text-ink-green-3': row.cosmestics_approval === 'Approved',
+										'bg-surface-red-2 text-ink-red-3': row.cosmestics_approval === 'Rejected',
+									}"
+								>
+									{{ row.cosmestics_approval === 'Pending' ? 'Awaiting approval' : row.cosmestics_approval }}
+								</span>
 							</div>
 							<div class="truncate text-p-xs text-ink-gray-5">
 								{{ row.material_request_type }} · {{ row.transaction_date }}
@@ -259,6 +275,26 @@ function onCreated() {
 						>
 							<LucideCheck class="h-3.5 w-3.5" />
 							{{ busyOne === row.name ? 'Working…' : 'Submit' }}
+						</button>
+						<!-- The store keeper's decision on a transfer. Offered only to them
+						     (the server decides), and only while it is waiting. -->
+						<button
+							v-if="allows(row, 'approve')"
+							class="flex items-center gap-1.5 rounded-md bg-surface-green-3 px-2.5 py-1.5 text-p-xs font-semibold text-ink-white transition-colors disabled:opacity-50"
+							:disabled="busyOne === row.name"
+							@click="act(row, 'approve')"
+						>
+							<LucideCheck class="h-3.5 w-3.5" />
+							{{ busyOne === row.name ? 'Working…' : 'Approve & move' }}
+						</button>
+						<button
+							v-if="allows(row, 'reject')"
+							class="flex items-center gap-1.5 rounded-md border border-outline-red-2 bg-surface-white px-2.5 py-1.5 text-p-xs font-semibold text-ink-red-3 transition-colors hover:bg-surface-red-1 disabled:opacity-50"
+							:disabled="busyOne === row.name"
+							@click="act(row, 'reject')"
+						>
+							<LucideBan class="h-3.5 w-3.5" />
+							Reject
 						</button>
 						<!-- Outlined, not filled: undoing a request is a real action but
 						     never the one to reach for first. -->

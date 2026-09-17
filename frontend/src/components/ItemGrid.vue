@@ -8,9 +8,11 @@ defineProps({
 	query: { type: String, default: '' },
 	/** Draw product photos, per the shop's setting. See `ItemCell`. */
 	showImages: { type: Boolean, default: false },
+	/** Stores to list on each card — see `ItemCell`. */
+	stores: { type: Array, default: () => [] },
 })
 
-defineEmits(['add', 'setQty', 'remove'])
+defineEmits(['add', 'setQty', 'remove', 'more', 'move'])
 </script>
 
 <template>
@@ -38,9 +40,12 @@ defineEmits(['add', 'setQty', 'remove'])
 					:item="item"
 					:in-cart="cartQtys[item.item_code] || 0"
 					:show-image="showImages"
+					:stores="stores"
 					@add="$emit('add', $event)"
 					@set-qty="$emit('setQty', $event)"
 					@remove="$emit('remove', $event)"
+					@more="$emit('more', $event)"
+					@move="$emit('move', $event)"
 				/>
 			</div>
 		</div>

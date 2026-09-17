@@ -405,7 +405,7 @@ DOCUMENTS = [
 		"group": "Purchasing",
 		"icon": "clipboard",
 		"date_field": "transaction_date",
-		"columns": ["name", "transaction_date", "material_request_type", "status", "per_ordered", "per_received"],
+		"columns": ["name", "transaction_date", "material_request_type", "cosmestics_approval", "status", "per_ordered", "per_received"],
 		"detail": ["schedule_date", "set_from_warehouse", "set_warehouse", "cosmestics_for_customer", "company"],
 		"tables": [
 			("items", ["item_code", "item_name", "schedule_date", "qty", "ordered_qty", "uom", "warehouse"]),
@@ -1075,6 +1075,16 @@ def _actions_for(doctype: str, docstatus: int, perms: dict, row=None) -> list:
 		)
 	if perms["create"]:
 		actions.append("duplicate")
+	if doctype == "Material Request" and docstatus == 1 and row is not None:
+		approval = row.get("cosmestics_approval") if hasattr(row, "get") else None
+		if approval in ("Pending", "Rejected"):
+			# Nothing moves before the store keeper says so.
+			actions = [a for a in actions if a != "stock_entry"]
+		if approval == "Pending":
+			from cosmestics.api.stock import can_approve_transfers
+
+			if can_approve_transfers():
+				actions.extend(["approve", "reject"])
 	if submittable:
 		if docstatus == 0 and perms["submit"]:
 			actions.append("submit")
@@ -1799,6 +1809,11 @@ def run_action(key: str, name: str, action: str) -> dict:
 	if action == "submit":
 		doc.submit()
 		return {"name": doc.name, "docstatus": doc.docstatus, "message": _("{0} submitted").format(doc.name)}
+
+	if action in ("approve", "reject") and doctype == "Material Request":
+		from cosmestics.api.stock import approve_transfer, reject_transfer
+
+		return (approve_transfer if action == "approve" else reject_transfer)(doc.name)
 
 	if action == "cancel":
 		doc.cancel()

@@ -339,6 +339,9 @@ def get_purchase(name: str) -> dict:
 		"grand_total": flt(doc.grand_total),
 		"outstanding": flt(doc.outstanding_amount),
 		"posted_by": doc.owner,
+		"landed_costs": _landed_costs_of(doc),
+		"landed_basis": doc.get("cosmestics_landed_basis") or "Qty",
+		"landed_vouchers": _landed_vouchers(doc.name) if doc.docstatus == 1 else [],
 		"items": [
 			{
 				"item_code": row.item_code,
@@ -419,6 +422,8 @@ def create_purchase(
 	remarks: str | None = None,
 	from_warehouse: str | None = None,
 	to_warehouse: str | None = None,
+	landed_costs: list | str | None = None,
+	landed_basis: str | None = None,
 ) -> dict:
 	"""Post a purchase, as a draft, for the store keeper to check against.
 
@@ -459,6 +464,7 @@ def create_purchase(
 			row["from_warehouse"] = source
 		doc.append("items", row)
 
+	_set_landed_costs(doc, landed_costs, landed_basis)
 	doc.insert()
 
 	return get_purchase(doc.name) | {
@@ -507,6 +513,12 @@ def update_purchase(name: str, values: dict | str) -> dict:
 		for field in ("bill_no", "remarks"):
 			if field in values:
 				doc.set(field, values[field])
+		if "landed_costs" in values or "landed_basis" in values:
+			_set_landed_costs(
+				doc,
+				values.get("landed_costs", _landed_costs_of(doc)),
+				values.get("landed_basis", doc.get("cosmestics_landed_basis")),
+			)
 		if "set_from_warehouse" in values or "set_warehouse" in values:
 			source, warehouse = _resolve_warehouses(
 				values.get("set_from_warehouse", doc.set_from_warehouse),
@@ -596,6 +608,10 @@ def confirm_purchase(name: str, items: list | str | None = None, remarks: str | 
 	# quantities.
 	doc.save()
 	doc.submit()
+	# In the same transaction: a purchase confirmed without the landing costs the
+	# manager entered would put the stock on the books at the wrong value, and
+	# nobody would notice until the margins came out wrong.
+	_apply_landed_costs(doc)
 
 	return get_purchase(doc.name) | {
 		"message": _("{0} confirmed — {1} received").format(
@@ -630,6 +646,17 @@ def reopen_purchase(name: str) -> dict:
 				"paid for. Raise a return against it instead."
 			).format(name)
 		)
+
+	# The landing costs were applied by a voucher that points at this invoice,
+	# and ERPNext will not cancel an invoice something still depends on. The
+	# charges themselves stay on the document, so confirming the amendment
+	# applies them again.
+	for lcv in _landed_vouchers(doc.name):
+		voucher = frappe.get_doc("Landed Cost Voucher", lcv)
+		voucher.flags.ignore_permissions = True
+		voucher.cancel()
+	# Cancelling a voucher rewrites the invoice's item valuations underneath us.
+	doc.reload()
 
 	doc.cancel()
 
@@ -756,3 +783,144 @@ def _last_purchase_rates(codes: list) -> dict:
 	for row in rows:
 		out.setdefault(row.item_code, flt(row.rate))
 	return out
+
+
+# --------------------------------------------------------------------------
+# Landing costs
+# --------------------------------------------------------------------------
+
+LANDED_BASES = ("Qty", "Amount")
+
+
+def _default_landed_account(company: str) -> str | None:
+	"""Where a landing charge is credited until its own bill is booked.
+
+	ERPNext's "Expenses Included In Valuation" is made for exactly this: the
+	charge goes into the stock value, and the account carries it until the
+	freight or customs bill is entered against it.
+	"""
+	account = frappe.get_cached_value("Company", company, "expenses_included_in_valuation")
+	if account:
+		return account
+	# Not every company has it set, though setup normally creates the account.
+	account = frappe.db.get_value(
+		"Account",
+		{"company": company, "is_group": 0, "disabled": 0, "account_name": ("like", "Expenses Included In Valuation%")},
+		"name",
+	)
+	return account or frappe.get_cached_value("Company", company, "stock_adjustment_account")
+
+
+def _landed_costs_of(doc) -> list:
+	raw = doc.get("cosmestics_landed_costs")
+	if not raw:
+		return []
+	try:
+		rows = frappe.parse_json(raw) or []
+	except Exception:
+		return []
+	return [
+		{
+			"description": r.get("description") or "",
+			"amount": flt(r.get("amount")),
+			"expense_account": r.get("expense_account") or "",
+		}
+		for r in rows
+		if isinstance(r, dict)
+	]
+
+
+def _set_landed_costs(doc, charges, basis):
+	if isinstance(charges, str):
+		charges = frappe.parse_json(charges) if charges.strip() else []
+
+	cleaned = []
+	for c in charges or []:
+		amount = flt(c.get("amount"))
+		if amount <= 0:
+			continue
+		account = (c.get("expense_account") or "").strip() or _default_landed_account(doc.company)
+		if not account:
+			frappe.throw(
+				_(
+					"Choose an account for the landing cost — the company has no "
+					"'Expenses Included In Valuation' account set."
+				)
+			)
+		cleaned.append(
+			{
+				"description": (c.get("description") or "").strip() or _("Landing cost"),
+				"amount": amount,
+				"expense_account": account,
+			}
+		)
+
+	basis = basis if basis in LANDED_BASES else "Qty"
+	doc.cosmestics_landed_costs = frappe.as_json(cleaned) if cleaned else None
+	doc.cosmestics_landed_basis = basis
+
+
+def _landed_vouchers(invoice: str) -> list:
+	return frappe.get_all(
+		"Landed Cost Purchase Receipt",
+		filters={
+			"receipt_document_type": "Purchase Invoice",
+			"receipt_document": invoice,
+			"docstatus": 1,
+		},
+		pluck="parent",
+		distinct=True,
+	)
+
+
+def _apply_landed_costs(doc):
+	"""Spread the draft's landing costs across what was actually received.
+
+	Run after the count, so a short delivery carries the whole charge on the
+	cartons that did arrive — which is what the shop paid to bring in.
+	Permission is the confirmation itself: the store keeper confirming is not
+	also expected to hold rights on the desk's Landed Cost Voucher.
+	"""
+	charges = _landed_costs_of(doc)
+	if not charges:
+		return None
+
+	lcv = frappe.new_doc("Landed Cost Voucher")
+	lcv.company = doc.company
+	lcv.posting_date = doc.posting_date
+	lcv.distribute_charges_based_on = doc.get("cosmestics_landed_basis") or "Qty"
+	lcv.append(
+		"purchase_receipts",
+		{
+			"receipt_document_type": "Purchase Invoice",
+			"receipt_document": doc.name,
+			"supplier": doc.supplier,
+			"posting_date": doc.posting_date,
+			"grand_total": doc.grand_total,
+		},
+	)
+	for c in charges:
+		lcv.append("taxes", c)
+
+	lcv.flags.ignore_permissions = True
+	lcv.insert()
+	lcv.submit()
+	return lcv.name
+
+
+@frappe.whitelist()
+def landed_cost_accounts(search: str | None = None, limit: int = 20) -> dict:
+	"""Accounts a landing charge may book to, with the one to use by default."""
+	company = _company()
+	filters = {"is_group": 0, "disabled": 0, "company": company}
+	if search:
+		filters["name"] = ("like", f"%{search}%")
+	return {
+		"default": _default_landed_account(company),
+		"options": [
+			{"label": r, "value": r}
+			for r in frappe.get_all(
+				"Account", filters=filters, pluck="name", order_by="name asc", limit_page_length=cint(limit)
+			)
+		],
+	}

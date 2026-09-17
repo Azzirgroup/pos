@@ -642,6 +642,8 @@ export const createPurchase = ({
 	remarks,
 	fromWarehouse,
 	toWarehouse,
+	landedCosts,
+	landedBasis,
 }) =>
 	call('cosmestics.api.buying.create_purchase', {
 		supplier,
@@ -651,6 +653,8 @@ export const createPurchase = ({
 		remarks: remarks || null,
 		from_warehouse: fromWarehouse || null,
 		to_warehouse: toWarehouse || null,
+		landed_costs: landedCosts || [],
+		landed_basis: landedBasis || 'Qty',
 	})
 
 export const updatePurchase = ({ name, values }) =>
@@ -682,8 +686,64 @@ export const getAccounts = (params = {}) => call('cosmestics.api.modules.account
 /* ---------- reports ---------- */
 
 export const listReports = () => call('cosmestics.api.reports.list_reports')
-export const runReport = ({ report, days, warehouse }) =>
-	call('cosmestics.api.reports.run', { report, days, warehouse: warehouse || null })
+export const runReport = ({ report, days, warehouse, fromDate, toDate }) =>
+	call('cosmestics.api.reports.run', {
+		report,
+		days,
+		warehouse: warehouse || null,
+		from_date: fromDate || null,
+		to_date: toDate || null,
+	})
+
+/* ---------- receivables & payables ---------- */
+
+/** One page of customers or suppliers with their balances — see `parties.list_parties`. */
+export const listParties = ({ partyType, search, owingOnly, start, pageLength }) =>
+	call('cosmestics.api.parties.list_parties', {
+		party_type: partyType,
+		search: search || null,
+		owing_only: owingOnly ? 1 : 0,
+		start: start || 0,
+		page_length: pageLength || 20,
+	})
+
+export const getPartyStatement = ({ partyType, party, fromDate, toDate }) =>
+	call('cosmestics.api.parties.statement', {
+		party_type: partyType,
+		party,
+		from_date: fromDate || null,
+		to_date: toDate || null,
+	})
+
+export const setCreditLimit = ({ customer, creditLimit }) =>
+	call('cosmestics.api.parties.set_credit_limit', { customer, credit_limit: creditLimit || 0 })
+
+/* ---------- item card ---------- */
+
+/** One item's balance in every store. */
+export const getItemEverywhere = ({ itemCode }) =>
+	call('cosmestics.api.stock.item_everywhere', { item_code: itemCode })
+
+/** Store keeper: set a store's balance to what was counted. */
+export const reconcileStock = ({ itemCode, qty, warehouse, reason }) =>
+	call('cosmestics.api.stock.reconcile_stock', {
+		item_code: itemCode,
+		qty,
+		warehouse: warehouse || null,
+		reason: reason || null,
+	})
+
+/** The card's "Move stock here" — a transfer request waiting for approval. */
+export const moveStockHere = ({ itemCode, fromWarehouse, qty }) =>
+	call('cosmestics.api.stock.move_stock_here', {
+		item_code: itemCode,
+		from_warehouse: fromWarehouse,
+		qty,
+	})
+
+/** Accounts a landing charge may book to, and the default. */
+export const getLandedCostAccounts = (search) =>
+	call('cosmestics.api.buying.landed_cost_accounts', { search: search || null })
 
 /* ---------- bulk pricing ---------- */
 

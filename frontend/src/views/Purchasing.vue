@@ -14,6 +14,7 @@ import {
 	searchPurchaseItems,
 	searchPurchaseWarehouses,
 	getItemStock,
+	getLandedCostAccounts,
 } from '@/data/api'
 import { useSessionStore } from '@/stores/session'
 import PageHeader from '@/components/PageHeader.vue'
@@ -24,6 +25,7 @@ import LucideBanknote from '~icons/lucide/banknote'
 import LinkField from '@/components/LinkField.vue'
 import DateField from '@/components/DateField.vue'
 import BottomSheet from '@/components/BottomSheet.vue'
+import MasterSheet from '@/components/MasterSheet.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucidePlus from '~icons/lucide/plus'
 import LucideSearch from '~icons/lucide/search'
@@ -219,6 +221,10 @@ function blank() {
 		fromWarehouse: '',
 		toWarehouse: '',
 		items: [],
+		// Freight, clearing, transport — spread over the lines when the store
+		// confirms, by quantity or by value. See `buying._apply_landed_costs`.
+		landedCosts: [],
+		landedBasis: 'Qty',
 	}
 }
 
@@ -236,6 +242,107 @@ const formTitle = computed(
 const total = computed(() =>
 	filledLines.value.reduce((sum, line) => sum + Number(line.qty || 0) * Number(line.rate || 0), 0),
 )
+
+/* ---------- landing costs ---------- */
+
+const LANDED_BASES = [
+	{ value: 'Qty', label: 'Per quantity', hint: 'Every unit carries the same share' },
+	{ value: 'Amount', label: 'Per amount', hint: 'Dearer lines carry more' },
+]
+
+const landedTotal = computed(() =>
+	draft.value.landedCosts.reduce((sum, c) => sum + (Number(c.amount) || 0), 0),
+)
+
+const landedDefaultAccount = ref('')
+const landedAccountFetcher = async (term) => {
+	const res = await getLandedCostAccounts(term)
+	if (res?.default) landedDefaultAccount.value = res.default
+	return res?.options || []
+}
+
+// Known before the first charge is added, so the row starts on the right account.
+watch(formOpen, (open) => {
+	if (open && !landedDefaultAccount.value) landedAccountFetcher('').catch(() => {})
+})
+
+function addLandedCost() {
+	draft.value.landedCosts.push({ description: '', amount: '', expense_account: landedDefaultAccount.value || '' })
+}
+
+function removeLandedCost(i) {
+	draft.value.landedCosts.splice(i, 1)
+}
+
+/**
+ * What each line's units will cost once the landing costs are spread over them
+ * — the same split the voucher will make on confirmation, shown before it is.
+ */
+function landedPerUnit(line) {
+	const qty = Number(line.qty) || 0
+	if (!landedTotal.value || qty <= 0) return 0
+	const lines = filledLines.value
+	if (draft.value.landedBasis === 'Amount') {
+		const base = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.rate) || 0), 0)
+		if (!base) return 0
+		return (landedTotal.value * ((qty * (Number(line.rate) || 0)) / base)) / qty
+	}
+	const units = lines.reduce((s, l) => s + (Number(l.qty) || 0), 0)
+	return units ? landedTotal.value / units : 0
+}
+
+const landedPayload = () =>
+	draft.value.landedCosts
+		.filter((c) => Number(c.amount) > 0)
+		.map((c) => ({
+			description: c.description || '',
+			amount: Number(c.amount),
+			expense_account: c.expense_account || null,
+		}))
+
+/* ---------- new item / supplier, without leaving the purchase ---------- */
+
+const masterOpen = ref(false)
+const masterKey = ref('item')
+const masterInitial = ref(null)
+let masterResolve = null
+
+/**
+ * Open the record form and wait for it. Resolves with an option the picker can
+ * select, or null if the form was closed without creating anything.
+ */
+function createRecord(key, initial) {
+	masterResolve?.(null)
+	masterKey.value = key
+	masterInitial.value = initial
+	masterOpen.value = true
+	return new Promise((resolve) => {
+		masterResolve = resolve
+	})
+}
+
+function onMasterCreated(res) {
+	const resolve = masterResolve
+	masterResolve = null
+	resolve?.({
+		value: res.name,
+		label: res.title || res.name,
+		item_code: res.name,
+		item_name: res.title || res.name,
+		uom: masterInitial.value?.stock_uom || '',
+	})
+}
+
+watch(masterOpen, (open) => {
+	if (!open && masterResolve) {
+		masterResolve(null)
+		masterResolve = null
+	}
+})
+
+const createItem = (typed) =>
+	createRecord('item', typed ? { item_name: typed, item_code: typed } : {})
+const createSupplier = (typed) => createRecord('supplier', typed ? { supplier_name: typed } : {})
 
 const blocker = computed(() => {
 	const d = draft.value
@@ -270,6 +377,8 @@ async function openFor(row, next) {
 			fromWarehouse: doc.from_warehouse || '',
 			toWarehouse: doc.warehouse || '',
 			items: doc.items.map((l) => ({ ...l, _id: ++nextLineId })),
+			landedCosts: (doc.landed_costs || []).map((c) => ({ ...c })),
+			landedBasis: doc.landed_basis || 'Qty',
 		}
 		formOpen.value = true
 	} catch (e) {
@@ -454,6 +563,8 @@ async function save() {
 				remarks: draft.value.remarks,
 				fromWarehouse: draft.value.fromWarehouse,
 				toWarehouse: draft.value.toWarehouse,
+				landedCosts: landedPayload(),
+				landedBasis: draft.value.landedBasis,
 			})
 		} else if (mode.value === 'edit') {
 			res = await updatePurchase({
@@ -466,6 +577,8 @@ async function save() {
 					set_from_warehouse: draft.value.fromWarehouse || null,
 					set_warehouse: draft.value.toWarehouse || null,
 					items: payload,
+					landed_costs: landedPayload(),
+					landed_basis: draft.value.landedBasis,
 				},
 			})
 		} else {
@@ -795,6 +908,8 @@ function notify(message, tone = 'good') {
 					v-else
 					v-model="draft.supplier"
 					:fetcher="supplierFetcher"
+					:on-create="createSupplier"
+					create-label="Add a new supplier"
 					label="Supplier"
 					required
 				/>
@@ -867,6 +982,8 @@ function notify(message, tone = 'good') {
 									v-if="!readOnlyLines"
 									v-model="line.item_code"
 									:fetcher="itemFetcher"
+									:on-create="createItem"
+									create-label="Create a new item"
 									label="Item"
 									@picked="(option) => onItemPicked(line, option)"
 								/>
@@ -937,6 +1054,13 @@ function notify(message, tone = 'good') {
 							<span v-if="draft.toWarehouse" class="truncate text-p-xs text-ink-gray-5">
 								at {{ draft.toWarehouse }}
 							</span>
+							<span
+								v-if="landedPerUnit(line) > 0"
+								class="tabular rounded-full bg-surface-blue-1 px-2 py-0.5 text-p-xs font-medium text-ink-blue-3"
+								:title="`${fmtMoney(line.rate)} + ${fmtMoney(landedPerUnit(line))} landing cost`"
+							>
+								Landed {{ fmtMoney(Number(line.rate || 0) + landedPerUnit(line)) }} each
+							</span>
 						</div>
 					</div>
 
@@ -956,6 +1080,107 @@ function notify(message, tone = 'good') {
 					<span class="tabular text-p-lg font-semibold text-ink-gray-9">
 						{{ fmtMoney(total) }}
 					</span>
+				</div>
+
+				<!-- Landing costs: what it took to get the goods here, spread over
+				     the lines so each item's cost includes it. Applied when the store
+				     confirms, over what actually arrived. -->
+				<div class="flex flex-col gap-2 rounded-lg border border-outline-gray-2 p-3">
+					<div class="flex flex-wrap items-center gap-2">
+						<div class="mr-auto">
+							<div class="text-p-base font-medium text-ink-gray-9">Landing cost</div>
+							<div class="text-p-xs text-ink-gray-5">
+								Freight, clearing, transport — added to the items' cost, not to what the supplier is owed
+							</div>
+						</div>
+						<div class="flex rounded-lg bg-surface-gray-2 p-0.5">
+							<button
+								v-for="b in LANDED_BASES"
+								:key="b.value"
+								type="button"
+								class="rounded-md px-3 py-1.5 text-p-sm transition-colors"
+								:class="
+									draft.landedBasis === b.value
+										? 'bg-surface-white font-medium text-ink-gray-9 shadow-sm'
+										: 'text-ink-gray-6 hover:text-ink-gray-8'
+								"
+								:title="b.hint"
+								:disabled="readOnlyLines"
+								@click="draft.landedBasis = b.value"
+							>
+								{{ b.label }}
+							</button>
+						</div>
+					</div>
+
+					<p v-if="readOnlyLines && !draft.landedCosts.length" class="text-p-xs text-ink-gray-5">
+						None on this purchase.
+					</p>
+
+					<div
+						v-for="(c, i) in draft.landedCosts"
+						:key="i"
+						class="flex flex-wrap items-end gap-2"
+					>
+						<div class="min-w-[160px] flex-1">
+							<label class="mb-1.5 block text-p-sm text-ink-gray-6">Charge</label>
+							<input
+								v-model="c.description"
+								type="text"
+								placeholder="Freight, clearing…"
+								:disabled="readOnlyLines"
+								class="h-8 w-full rounded border border-outline-gray-3 bg-surface-white px-2 text-p-sm text-ink-gray-8 focus:border-outline-gray-5 focus:outline-none disabled:bg-surface-gray-2"
+							/>
+						</div>
+						<div class="w-[130px]">
+							<label class="mb-1.5 block text-p-sm text-ink-gray-6">Amount</label>
+							<input
+								v-model.number="c.amount"
+								type="number"
+								min="0"
+								step="any"
+								inputmode="decimal"
+								:disabled="readOnlyLines"
+								class="h-8 w-full rounded border border-outline-gray-3 bg-surface-white px-2 text-right text-p-sm text-ink-gray-8 focus:border-outline-gray-5 focus:outline-none disabled:bg-surface-gray-2"
+							/>
+						</div>
+						<div class="min-w-[200px] flex-1">
+							<LinkField
+								v-if="!readOnlyLines"
+								v-model="c.expense_account"
+								:fetcher="landedAccountFetcher"
+								label="Account"
+							/>
+							<template v-else>
+								<label class="mb-1.5 block text-p-sm text-ink-gray-6">Account</label>
+								<div class="flex h-8 items-center truncate rounded border border-outline-gray-3 bg-surface-gray-1 px-2 text-p-sm text-ink-gray-7">
+									{{ c.expense_account || 'Default' }}
+								</div>
+							</template>
+						</div>
+						<button
+							v-if="!readOnlyLines"
+							class="grid h-8 w-8 shrink-0 place-items-center rounded-md text-ink-gray-5 transition-colors hover:bg-surface-gray-2 hover:text-ink-red-3"
+							:aria-label="`Remove charge ${i + 1}`"
+							@click="removeLandedCost(i)"
+						>
+							<LucideX class="h-4 w-4" />
+						</button>
+					</div>
+
+					<div class="flex items-center gap-2">
+						<Button
+							v-if="!readOnlyLines"
+							variant="subtle"
+							:icon-left="LucidePlus"
+							label="Add landing cost"
+							@click="addLandedCost"
+						/>
+						<span v-if="landedTotal > 0" class="tabular ml-auto text-p-sm text-ink-gray-7">
+							{{ fmtMoney(landedTotal) }} landing ·
+							<span class="font-semibold text-ink-gray-9">{{ fmtMoney(total + landedTotal) }} landed</span>
+						</span>
+					</div>
 				</div>
 
 				<input
@@ -980,6 +1205,16 @@ function notify(message, tone = 'good') {
 				</button>
 			</div>
 		</BottomSheet>
+
+		<MasterSheet
+			v-model:open="masterOpen"
+			:initial-key="masterKey"
+			:initial-values="masterInitial"
+			lock-type
+			close-on-create
+			@created="onMasterCreated"
+			@notify="notify($event.message, $event.tone)"
+		/>
 
 		<BottomSheet v-model="detailOpen" :title="detail?.name || 'Purchase'" tall wide>
 			<div v-if="detail" class="flex flex-col gap-3 px-4 pb-5">

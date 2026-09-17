@@ -222,6 +222,8 @@ const ACTION_LABELS = {
 	// words rather than the doctype's — "Pay this bill" is what somebody is
 	// actually doing, "Create Payment Entry" is what ERPNext calls it.
 	stock_entry: { label: 'Move the stock', icon: LucideTruck },
+	approve: { label: 'Approve & move stock', icon: LucideCheck },
+	reject: { label: 'Reject', icon: LucideBan, theme: 'red' },
 	payment: { label: 'Record payment', icon: LucideBanknote },
 	invoice: { label: 'Raise the invoice', icon: LucideReceipt },
 	deliver: { label: 'Deliver the goods', icon: LucideTruck },

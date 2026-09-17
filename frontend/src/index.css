@@ -109,3 +109,50 @@
 		transition-duration: 0.01ms !important;
 	}
 }
+
+/*
+ * Dark mode for the few colours that are not theme tokens.
+ *
+ * Almost everything here is a frappe-ui token and flips on its own. These are
+ * raw palette steps (the violet accents) and a handful of literal hex values,
+ * which would stay light-mode colours on a dark surface — pale chips glaring,
+ * or dark text vanishing. Overridden here, once, rather than a `dark:` twin on
+ * every element that uses them.
+ */
+[data-theme='dark'] .text-violet-600,
+[data-theme='dark'] .text-\[\#6D28D9\] {
+	color: #c4b5fd;
+}
+[data-theme='dark'] .bg-violet-200,
+[data-theme='dark'] .bg-\[\#EDE9FE\] {
+	background-color: rgba(139, 92, 246, 0.22);
+}
+[data-theme='dark'] .border-violet-200,
+[data-theme='dark'] .ring-violet-200 {
+	border-color: rgba(139, 92, 246, 0.35);
+	--tw-ring-color: rgba(139, 92, 246, 0.35);
+}
+[data-theme='dark'] .hover\:bg-violet-200:hover {
+	background-color: rgba(139, 92, 246, 0.3);
+}
+[data-theme='dark'] .bg-violet-600 {
+	background-color: #7c3aed;
+}
+/* Payment logos are brand artwork drawn on white cards; keep them as they are. */
+[data-theme='dark'] img[src$='logo.svg'] {
+	filter: invert(1) brightness(1.4);
+}
+[data-theme='dark'] .\!bg-teal-100 {
+	background-color: rgba(20, 184, 166, 0.18) !important;
+}
+[data-theme='dark'] .hover\:\!bg-teal-200:hover,
+[data-theme='dark'] .active\:\!bg-teal-300:active {
+	background-color: rgba(20, 184, 166, 0.28) !important;
+}
+[data-theme='dark'] .\!text-teal-700 {
+	color: #5eead4 !important;
+}
+[data-theme='dark'] .hover\:\!bg-amber-200:hover,
+[data-theme='dark'] .active\:\!bg-amber-300:active {
+	background-color: rgba(245, 158, 11, 0.28) !important;
+}

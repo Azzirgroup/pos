@@ -49,7 +49,10 @@ REPORTS = [
 		"key": "stock_balance",
 		"label": "Stock balance",
 		"group": "Inventory",
-		"hint": "What is on hand and what it is worth",
+		"hint": "Opening, what moved, and what remains — for the days you pick",
+		# Picked by day rather than "last 30 days": the question is what the
+		# shelf held on a date and what happened to it since.
+		"dated": True,
 	},
 	{
 		"key": "below_reorder",
@@ -68,6 +71,7 @@ REPORTS = [
 		"label": "Stock movement",
 		"group": "Inventory",
 		"hint": "What came in and what went out, and on which document",
+		"dated": True,
 	},
 	{
 		"key": "receivables",
@@ -160,7 +164,13 @@ def _window(days):
 
 
 @frappe.whitelist()
-def run(report: str, days: int = 30, warehouse: str | None = None):
+def run(
+	report: str,
+	days: int = 30,
+	warehouse: str | None = None,
+	from_date: str | None = None,
+	to_date: str | None = None,
+):
 	from cosmestics.permissions import ANALYTICS, require
 
 	if report not in OPERATIONAL_REPORTS:
@@ -193,7 +203,23 @@ def run(report: str, days: int = 30, warehouse: str | None = None):
 	if not fn:
 		frappe.throw(frappe._("Unknown report: {0}").format(report))
 
+	if fn in DATED:
+		start, end = _dates(days, from_date, to_date)
+		return DATED[fn](start, end, warehouse)
 	return fn(days, warehouse)
+
+
+def _dates(days, from_date, to_date):
+	"""A day range, from explicit dates when given, else the rolling window."""
+	from frappe.utils import getdate
+
+	if from_date or to_date:
+		end = getdate(to_date or from_date or nowdate())
+		start = getdate(from_date or to_date)
+		if start > end:
+			start, end = end, start
+		return start, end
+	return _window(days)
 
 
 def _money(label, key):
@@ -353,28 +379,101 @@ def _cashier_sales(days, _wh):
 # ---------------- Inventory ----------------
 
 
+#: Stock Entry purposes that move stock between the shop's own stores rather
+#: than into or out of the business.
+TRANSFER_PURPOSES = ("Material Transfer", "Material Transfer for Manufacture", "Send to Subcontractor")
+
+
 def _stock_balance(_days, warehouse):
-	cond = "and b.warehouse = %(wh)s" if warehouse else ""
+	# Reached only through `run`, which routes dated reports to `_stock_balance_dated`.
+	start, end = _window(0)
+	return _stock_balance_dated(start, end, warehouse)
+
+
+def _stock_balance_dated(start, end, warehouse):
+	"""Per item and store: what was there, what moved, and what is left.
+
+	Built from the stock ledger rather than from Bin, which only knows *now*.
+	Transfers between the shop's own stores are kept apart from purchases and
+	sales, because "it went to the other branch" and "it was sold" are the two
+	answers a stock count has to tell apart.
+	"""
+	cond = "and sle.warehouse = %(wh)s" if warehouse else ""
+	values = {"wh": warehouse, "start": start, "end": end, "transfers": TRANSFER_PURPOSES}
+
+	# Each ledger row's effect is read as the change in the running balance, not
+	# `actual_qty`: a Stock Reconciliation posts `actual_qty = 0` and only states
+	# the new balance, so summing `actual_qty` silently drops every stock count.
 	rows = frappe.db.sql(
-		f"""select b.item_code, i.item_name, b.warehouse,
-		           b.actual_qty, b.valuation_rate,
-		           b.actual_qty * b.valuation_rate as value
-		    from tabBin b join tabItem i on i.name = b.item_code
-		    where b.actual_qty != 0 {cond}
-		    order by value desc limit 500""",
-		{"wh": warehouse},
+		f"""with moves as (
+		        select sle.item_code, sle.warehouse, sle.posting_date, sle.voucher_type, sle.voucher_no,
+		               sle.qty_after_transaction - coalesce(lag(sle.qty_after_transaction) over (
+		                   partition by sle.item_code, sle.warehouse
+		                   order by sle.posting_date, sle.posting_time, sle.creation), 0) as delta
+		        from `tabStock Ledger Entry` sle
+		        where sle.is_cancelled = 0 and sle.posting_date <= %(end)s {cond}
+		    )
+		    select m.item_code, i.item_name, m.warehouse,
+		       sum(case when m.posting_date < %(start)s then m.delta else 0 end) as opening,
+		       sum(case when m.posting_date >= %(start)s and m.delta > 0
+		                 and m.voucher_type != 'Stock Reconciliation'
+		                 and ifnull(se.purpose, '') not in %(transfers)s
+		                then m.delta else 0 end) as received,
+		       sum(case when m.posting_date >= %(start)s and m.delta > 0 and se.purpose in %(transfers)s
+		                then m.delta else 0 end) as transferred_in,
+		       sum(case when m.posting_date >= %(start)s and m.delta < 0 and se.purpose in %(transfers)s
+		                then -m.delta else 0 end) as transferred_out,
+		       sum(case when m.posting_date >= %(start)s and m.delta < 0
+		                 and m.voucher_type != 'Stock Reconciliation'
+		                 and ifnull(se.purpose, '') not in %(transfers)s
+		                then -m.delta else 0 end) as issued,
+		       sum(case when m.posting_date >= %(start)s and m.voucher_type = 'Stock Reconciliation'
+		                then m.delta else 0 end) as adjusted,
+		       sum(m.delta) as remaining
+		    from moves m
+		    join tabItem i on i.name = m.item_code
+		    left join `tabStock Entry` se
+		      on m.voucher_type = 'Stock Entry' and se.name = m.voucher_no
+		    group by m.item_code, i.item_name, m.warehouse
+		    having opening != 0 or received != 0 or transferred_in != 0
+		        or transferred_out != 0 or issued != 0 or adjusted != 0 or remaining != 0""",
+		values,
 		as_dict=True,
 	)
+
+	rates = {
+		(b.item_code, b.warehouse): flt(b.valuation_rate)
+		for b in frappe.get_all(
+			"Bin",
+			filters={"warehouse": warehouse} if warehouse else {},
+			fields=["item_code", "warehouse", "valuation_rate"],
+			limit_page_length=0,
+		)
+	}
+	for r in rows:
+		r.valuation_rate = rates.get((r.item_code, r.warehouse), 0)
+		r.value = flt(r.remaining) * r.valuation_rate
+
+	rows.sort(key=lambda r: -flt(r.value))
+	rows = rows[:1000]
+
 	return {
 		"columns": [
 			_text("Item", "item_name"),
 			_text("Warehouse", "warehouse"),
-			_num("Qty", "actual_qty"),
+			_num("Opening", "opening"),
+			_num("Received", "received"),
+			_num("Transferred in", "transferred_in"),
+			_num("Transferred out", "transferred_out"),
+			_num("Sold / used", "issued"),
+			_num("Count adjusted", "adjusted"),
+			_num("Remaining", "remaining"),
 			_money("Rate", "valuation_rate"),
 			_money("Value", "value"),
 		],
 		"rows": rows,
 		"totals": {"value": sum(flt(r.value) for r in rows)},
+		"period": {"from": str(start), "to": str(end)},
 	}
 
 
@@ -711,6 +810,10 @@ def _cancelled_docs(days, _wh):
 
 def _stock_movement(days, warehouse):
 	start, end = _window(days)
+	return _stock_movement_dated(start, end, warehouse)
+
+
+def _stock_movement_dated(start, end, warehouse):
 	cond = "and sle.warehouse = %(wh)s" if warehouse else ""
 	rows = frappe.db.sql(
 		f"""select sle.item_code, i.item_name, sle.warehouse,
@@ -736,3 +839,10 @@ def _stock_movement(days, warehouse):
 		"rows": rows,
 		"totals": {"issued": sum(flt(r.issued) for r in rows)},
 	}
+
+
+#: Reports that take a date range, keyed by their `run` entry.
+DATED = {
+	_stock_balance: _stock_balance_dated,
+	_stock_movement: _stock_movement_dated,
+}

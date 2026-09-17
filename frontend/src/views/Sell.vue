@@ -53,6 +53,8 @@ import QuotationSheet from '@/components/QuotationSheet.vue'
 import TillContext from '@/components/TillContext.vue'
 import ReturnSheet from '@/components/ReturnSheet.vue'
 import SaleActionSheet from '@/components/SaleActionSheet.vue'
+import ItemQuickSheet from '@/components/ItemQuickSheet.vue'
+import MoveStockSheet from '@/components/MoveStockSheet.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import MaterialRequestSheet from '@/components/MaterialRequestSheet.vue'
 import { saleMessage } from '@/utils/salesMessage'
@@ -808,6 +810,22 @@ function sourceFromNeighbour({ item, qty, buyQty, supplier, buyRate, paidNow }) 
 			(paidNow ? ` · ${fmtMoney(buying * buyRate)} out of the drawer` : ''),
 		'ok',
 	)
+}
+
+/** The ⋮ on an item card — see `ItemQuickSheet`. */
+const quickItem = ref(null)
+const quickOpen = ref(false)
+function openItemQuick(item) {
+	quickItem.value = item
+	quickOpen.value = true
+}
+
+/** "Move stock here" on a card — see `MoveStockSheet`. */
+const moveItem = ref(null)
+const moveOpen = ref(false)
+function openMoveStock(item) {
+	moveItem.value = item
+	moveOpen.value = true
 }
 
 async function requestTransfer({ items, warehouse }) {
@@ -1568,9 +1586,12 @@ useShortcuts({
 					:cart-qtys="cartQtys"
 					:query="query"
 					:show-images="!!till.context?.show_item_images"
+					:stores="catalog.stores"
 					@add="addItem"
 					@set-qty="setItemQty"
 					@remove="removeItem"
+					@more="openItemQuick"
+					@move="openMoveStock"
 				/>
 			</div>
 
@@ -1966,6 +1987,20 @@ useShortcuts({
 		<ScanSheet v-model="scanSheet" :last-result="scanResult" @scan="onCameraScan" />
 
 		<ReturnSheet v-model="returnSheet" :invoice="returnInvoice" @returned="onReturned" />
+
+		<MoveStockSheet
+			v-model="moveOpen"
+			:item="moveItem"
+			@notify="notify($event.message, $event.tone === 'bad' ? 'warn' : 'ok')"
+		/>
+
+		<ItemQuickSheet
+			v-model="quickOpen"
+			:item="quickItem"
+			@request="requestTransfer"
+			@reconciled="catalog.syncStock()"
+			@notify="notify($event.message, $event.tone === 'bad' ? 'warn' : 'ok')"
+		/>
 
 		<SaleActionSheet
 			v-model="saleActionSheet"

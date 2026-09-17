@@ -28,6 +28,8 @@ const props = defineProps({
 	max: { type: String, default: '' },
 	min: { type: String, default: '' },
 	disabled: { type: Boolean, default: false },
+	/** Toolbar size: the label sits inside the control and it matches an 8-high button. */
+	compact: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue'])
@@ -79,16 +81,20 @@ function open() {
 
 <template>
 	<div class="flex flex-col">
-		<label v-if="label" class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
+		<label v-if="label && !compact" class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">
 			{{ label }}
 		</label>
 		<div
-			class="relative flex h-11 items-center gap-2 rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 transition-colors focus-within:border-outline-gray-4 focus-within:bg-surface-white"
-			:class="disabled ? 'opacity-60' : 'cursor-pointer hover:bg-surface-gray-3'"
+			class="relative flex items-center gap-2 rounded-lg border border-outline-gray-2 bg-surface-gray-2 transition-colors focus-within:border-outline-gray-4 focus-within:bg-surface-white"
+			:class="[
+				disabled ? 'opacity-60' : 'cursor-pointer hover:bg-surface-gray-3',
+				compact ? 'h-8 px-2' : 'h-11 px-3',
+			]"
 			@click="open"
 		>
 			<LucideCalendarDays class="h-4 w-4 shrink-0 text-ink-gray-5" />
-			<span class="min-w-0 flex-1 truncate text-p-base text-ink-gray-9">{{ spoken }}</span>
+			<span v-if="compact && label" class="shrink-0 text-p-sm text-ink-gray-5">{{ label }}</span>
+			<span class="min-w-0 flex-1 truncate text-ink-gray-9" :class="compact ? 'text-p-sm' : 'text-p-base'">{{ spoken }}</span>
 			<!-- The real control, stretched over the whole row so a tap anywhere
 			     lands on it. Kept at `opacity-0` rather than hidden — see the note
 			     at the top of this file. -->

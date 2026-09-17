@@ -196,3 +196,318 @@ def _default_warehouse(company):
 			)
 		)
 	return warehouse
+
+
+def _other_stores(exclude: str | None) -> list:
+	"""The shop's other stores: [{name, label}].
+
+	The same rule the till uses for branches (`catalog._warehouses`): a
+	warehouse that holds stock of anything. That keeps out the empty
+	Work-In-Progress and Finished-Goods places ERPNext creates, while still
+	listing a branch that happens to have none of *this* item — "none there
+	either" is an answer the counter needs too.
+	"""
+	from cosmestics.api.catalog import _warehouses
+
+	return _warehouses(exclude)
+
+
+def elsewhere_qtys(item_codes: list, here: str | None) -> dict:
+	"""{item_code: qty held in every other store}. Positive balances only —
+	a negative bin somewhere is a counting problem, not stock to offer."""
+	stores = [w["name"] for w in _other_stores(here)]
+	if not stores or not item_codes:
+		return {}
+	rows = frappe.db.sql(
+		"""select item_code, sum(actual_qty) as qty
+		   from tabBin
+		   where warehouse in %(stores)s and item_code in %(codes)s and actual_qty > 0
+		   group by item_code""",
+		{"stores": stores, "codes": item_codes},
+		as_dict=True,
+	)
+	return {r.item_code: flt(r.qty) for r in rows}
+
+
+@frappe.whitelist()
+def item_everywhere(item_code: str) -> dict:
+	"""One item's balance in every store, for the card's quick view.
+
+	The till only ever showed its own shelf, so a product that was out at the
+	counter read "Out" even with a carton of it in the back store — and the
+	sale was lost to a blind spot, not to a shortage.
+	"""
+	from cosmestics.api.pos import selling_warehouse
+	from cosmestics.permissions import is_store_keeper
+
+	item = frappe.db.get_value("Item", item_code, ["name", "item_name", "stock_uom"], as_dict=True)
+	if not item:
+		frappe.throw(_("{0} not found").format(item_code), frappe.DoesNotExistError)
+
+	here = selling_warehouse()
+	bins = dict(
+		frappe.get_all(
+			"Bin", filters={"item_code": item_code}, fields=["warehouse", "actual_qty"], as_list=True
+		)
+	)
+
+	stores = []
+	if here:
+		label = frappe.db.get_value("Warehouse", here, "warehouse_name") or here
+		stores.append({"warehouse": here, "label": label, "qty": flt(bins.get(here)), "is_here": True})
+	others = [
+		{"warehouse": w["name"], "label": w["label"], "qty": flt(bins.get(w["name"])), "is_here": False}
+		for w in _other_stores(here)
+	]
+	# Stores that hold some first — they are the ones worth asking.
+	others.sort(key=lambda r: (-r["qty"], r["label"]))
+	stores.extend(others)
+
+	return {
+		"item_code": item.name,
+		"item_name": item.item_name,
+		"uom": item.stock_uom,
+		"here": here,
+		"stores": stores,
+		"total": sum(r["qty"] for r in stores if r["qty"] > 0),
+		"elsewhere": sum(r["qty"] for r in others if r["qty"] > 0),
+		"can_reconcile": is_store_keeper(),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def reconcile_stock(item_code: str, qty: float, warehouse: str | None = None, reason: str | None = None) -> dict:
+	"""Set a store's balance to what was actually counted.
+
+	A Stock Reconciliation, which is ERPNext's own document for "the shelf says
+	X": it posts the difference, not the figure, and keeps the valuation rate the
+	stock already carries. Limited to the store keeper — a count is a claim about
+	the shop's assets, and the person who counts deliveries is the one trusted to
+	make it. The document permission is the role check; a store keeper is not
+	also expected to hold stock rights on the desk.
+	"""
+	from cosmestics.api.pos import selling_warehouse
+	from cosmestics.permissions import STORE_KEEPER, require
+
+	require(STORE_KEEPER, _("Only a store keeper can reconcile stock."))
+
+	qty = flt(qty)
+	if qty < 0:
+		frappe.throw(_("A counted quantity cannot be negative"))
+	warehouse = warehouse or selling_warehouse()
+	if not warehouse:
+		frappe.throw(_("Choose which store was counted"))
+	if not frappe.db.exists("Item", item_code):
+		frappe.throw(_("{0} not found").format(item_code))
+
+	company = frappe.db.get_value("Warehouse", warehouse, "company")
+	before = flt(frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "actual_qty"))
+	if abs(before - qty) < 1e-9:
+		frappe.throw(_("{0} already shows {1} — nothing to reconcile.").format(warehouse, qty))
+
+	rate = flt(frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": warehouse}, "valuation_rate"))
+	if not rate:
+		rate = flt(frappe.db.get_value("Item", item_code, "valuation_rate"))
+	if not rate:
+		rate = flt(
+			frappe.db.get_value(
+				"Stock Ledger Entry",
+				{"item_code": item_code, "is_cancelled": 0, "valuation_rate": (">", 0)},
+				"valuation_rate",
+				order_by="posting_date desc, posting_time desc, creation desc",
+			)
+		)
+
+	doc = frappe.new_doc("Stock Reconciliation")
+	doc.company = company
+	doc.purpose = "Stock Reconciliation"
+	doc.posting_date = nowdate()
+	doc.set_posting_time = 0
+	row = {"item_code": item_code, "warehouse": warehouse, "qty": qty}
+	if rate:
+		row["valuation_rate"] = rate
+	else:
+		# Nothing has ever given this item a value; count it without inventing one.
+		row["allow_zero_valuation_rate"] = 1
+	doc.append("items", row)
+	if reason:
+		doc.remarks = reason
+	doc.flags.ignore_permissions = True
+	doc.insert()
+	doc.submit()
+
+	return {
+		"name": doc.name,
+		"item_code": item_code,
+		"warehouse": warehouse,
+		"before": before,
+		"qty": qty,
+		"message": _("{0}: {1} → {2} at {3} ({4})").format(item_code, before, qty, warehouse, doc.name),
+	}
+
+
+
+# --------------------------------------------------------------------------
+# Transfer approval
+# --------------------------------------------------------------------------
+
+PENDING, APPROVED, REJECTED = "Pending", "Approved", "Rejected"
+
+
+def mark_transfer_pending(doc, method=None):
+	"""Hooked on Material Request `before_submit`: a transfer waits for approval.
+
+	On the document rather than in `request_transfer`, so a request raised from
+	the form, the Documents screen or the desk waits exactly the same way.
+	"""
+	if doc.material_request_type == "Material Transfer" and not doc.get("cosmestics_approval"):
+		doc.cosmestics_approval = PENDING
+
+
+def _pending_transfer(name):
+	doc = frappe.get_doc("Material Request", name)
+	if doc.docstatus != 1:
+		frappe.throw(_("{0} is not a submitted request").format(name))
+	if doc.material_request_type != "Material Transfer":
+		frappe.throw(_("{0} is not a request to move stock").format(name))
+	if doc.get("cosmestics_approval") != PENDING:
+		frappe.throw(
+			_("{0} is not waiting for approval ({1})").format(name, doc.get("cosmestics_approval") or _("no approval needed"))
+		)
+	return doc
+
+
+def can_approve_transfers(user=None) -> bool:
+	from cosmestics.permissions import is_store_keeper
+
+	return is_store_keeper(user)
+
+
+@frappe.whitelist(methods=["POST"])
+def approve_transfer(name: str) -> dict:
+	"""Approve a transfer request and move the stock, in one step.
+
+	The Stock Entry comes from ERPNext's own mapper, so each line leaves the
+	store the request named and lands where it asked; it is submitted at once,
+	because approving *is* the decision to move. If the source store does not
+	have the stock, the submit refuses and nothing is approved.
+	"""
+	from erpnext.stock.doctype.material_request.material_request import make_stock_entry
+	from cosmestics.permissions import STORE_KEEPER, require
+
+	require(STORE_KEEPER, _("Only a store keeper can approve a stock transfer."))
+	doc = _pending_transfer(name)
+
+	entry = make_stock_entry(doc.name)
+	for row in entry.items:
+		row.s_warehouse = row.s_warehouse or doc.get("set_from_warehouse")
+		if not row.s_warehouse:
+			frappe.throw(_("{0} does not say which store {1} comes from").format(doc.name, row.item_code))
+	if not entry.items:
+		frappe.throw(_("Nothing is left to move on {0}").format(doc.name))
+	entry.flags.ignore_permissions = True
+	entry.insert()
+	entry.submit()
+
+	doc.db_set(
+		{
+			"cosmestics_approval": APPROVED,
+			"cosmestics_approved_by": frappe.session.user,
+			"cosmestics_moved_by": entry.name,
+		}
+	)
+	doc.add_comment("Comment", _("Approved by {0}; stock moved on {1}").format(frappe.utils.get_fullname(), entry.name))
+	return {
+		"name": doc.name,
+		"stock_entry": entry.name,
+		"approval": APPROVED,
+		"message": _("{0} approved — stock moved ({1})").format(doc.name, entry.name),
+	}
+
+
+@frappe.whitelist(methods=["POST"])
+def reject_transfer(name: str, reason: str | None = None) -> dict:
+	"""Turn a transfer request down. The request is stopped, not cancelled, so
+	it stays on record with who refused it and why."""
+	from cosmestics.permissions import STORE_KEEPER, require
+
+	require(STORE_KEEPER, _("Only a store keeper can reject a stock transfer."))
+	doc = _pending_transfer(name)
+
+	doc.db_set({"cosmestics_approval": REJECTED, "cosmestics_approved_by": frappe.session.user})
+	doc.reload()
+	doc.flags.ignore_permissions = True
+	doc.update_status("Stopped")
+	doc.add_comment(
+		"Comment",
+		_("Rejected by {0}{1}").format(frappe.utils.get_fullname(), f": {reason.strip()}" if (reason or "").strip() else ""),
+	)
+	return {"name": doc.name, "approval": REJECTED, "message": _("{0} rejected").format(doc.name)}
+
+
+def pending_in(item_codes: list, warehouse: str | None) -> dict:
+	"""{item_code: qty} already requested into `warehouse` and awaiting approval."""
+	if not warehouse or not item_codes:
+		return {}
+	rows = frappe.db.sql(
+		"""select mri.item_code, sum(mri.stock_qty) as qty
+		   from `tabMaterial Request Item` mri
+		   join `tabMaterial Request` mr on mr.name = mri.parent
+		   where mr.docstatus = 1 and mr.material_request_type = 'Material Transfer'
+		     and mr.cosmestics_approval = 'Pending'
+		     and mri.warehouse = %(wh)s and mri.item_code in %(codes)s
+		   group by mri.item_code""",
+		{"wh": warehouse, "codes": item_codes},
+		as_dict=True,
+	)
+	return {r.item_code: flt(r.qty) for r in rows}
+
+
+def store_qtys(item_codes: list, warehouses: list) -> dict:
+	"""{item_code: {warehouse: qty}} for the given stores, non-zero only."""
+	if not item_codes or not warehouses:
+		return {}
+	out = {}
+	for r in frappe.get_all(
+		"Bin",
+		filters={"item_code": ("in", item_codes), "warehouse": ("in", warehouses), "actual_qty": ("!=", 0)},
+		fields=["item_code", "warehouse", "actual_qty"],
+		limit_page_length=0,
+	):
+		out.setdefault(r.item_code, {})[r.warehouse] = flt(r.actual_qty)
+	return out
+
+
+@frappe.whitelist(methods=["POST"])
+def move_stock_here(item_code: str, from_warehouse: str, qty: float) -> dict:
+	"""The card's "Move stock here": ask another store to send stock to this till.
+
+	A Material Transfer request, submitted and waiting for the store keeper —
+	nothing leaves the source store until it is approved.
+	"""
+	from cosmestics.api.pos import selling_warehouse
+
+	here = selling_warehouse()
+	if not here:
+		frappe.throw(_("This till has no store of its own to move stock into"))
+	qty = flt(qty)
+	if qty <= 0:
+		frappe.throw(_("Choose how many to move"))
+	available = flt(frappe.db.get_value("Bin", {"item_code": item_code, "warehouse": from_warehouse}, "actual_qty"))
+	if qty > available:
+		frappe.throw(_("{0} only has {1} of this").format(from_warehouse, available))
+
+	res = request_transfer(
+		items=[{"item_code": item_code, "qty": qty, "from_warehouse": from_warehouse}],
+		to_warehouse=here,
+		company=frappe.db.get_value("Warehouse", here, "company"),
+	)
+	return res | {
+		"item_code": item_code,
+		"qty": qty,
+		"from_warehouse": from_warehouse,
+		"to_warehouse": here,
+		"message": _("{0} raised — {1} × {2} from {3}, waiting for approval").format(
+			res["name"], qty, item_code, from_warehouse
+		),
+	}
