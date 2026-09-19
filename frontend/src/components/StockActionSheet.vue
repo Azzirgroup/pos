@@ -20,6 +20,11 @@ const props = defineProps({
 	neighbours: { type: Array, default: () => [] },
 	/** How many units the cart is short by. Seeds the quantity fields. */
 	suggestedQty: { type: Number, default: 1 },
+	/**
+	 * Whether the site lets stock go negative. When it does not, "Sell anyway"
+	 * can only end in a refused sale, so it is not offered.
+	 */
+	allowNegativeStock: { type: Boolean, default: false },
 })
 
 const emit = defineEmits(['update:modelValue', 'request-transfer', 'source', 'sell-anyway'])
@@ -322,7 +327,15 @@ function submitSource() {
 					</div>
 				</button>
 
+				<p
+					v-if="!allowNegativeStock"
+					class="rounded-lg bg-surface-gray-2 px-3 py-2 text-p-xs text-ink-gray-6"
+				>
+					Selling it without stock is switched off (negative stock is not allowed), so the
+					sale would be refused. Buy it from a neighbour or request it instead.
+				</p>
 				<button
+					v-else
 					class="flex items-center gap-3 rounded-xl border border-outline-gray-2 bg-surface-white p-3.5 text-left transition-colors hover:bg-surface-gray-2"
 					@click="submitSellAnyway"
 				>

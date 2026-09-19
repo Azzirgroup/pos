@@ -315,8 +315,16 @@ export const useCartStore = defineStore('cart', () => {
 		const merged = []
 		for (const ticket of chosen) {
 			for (const line of ticket.lines) {
+				// A neighbour-bought line never folds into a shelf line (or another
+				// shop's): the purchase it carries would be lost or mis-sized.
 				const same = merged.find(
-					(l) => l.item_code === line.item_code && l.rate === line.rate && l.uom === line.uom,
+					(l) =>
+						l.item_code === line.item_code &&
+						l.rate === line.rate &&
+						l.uom === line.uom &&
+						(l.sourced?.supplier || null) === (line.sourced?.supplier || null) &&
+						!l.sourced &&
+						!line.sourced,
 				)
 				if (same) same.qty = round2(same.qty + line.qty)
 				// Re-numbered, not copied across: two tickets number their lines

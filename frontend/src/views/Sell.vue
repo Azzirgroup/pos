@@ -788,13 +788,19 @@ function sellAnyway({ item }) {
 	// item yet. Once some is already on the line, `cart.add` would stack the
 	// shortfall on top of it instead of reaching the total actually wanted —
 	// see `stockWantQty`.
+	// The total wanted includes anything already bought from a neighbour on its
+	// own line; only the rest belongs on the shelf line.
+	const sourcedQty = lines.value
+		.filter((l) => l.item_code === item.item_code && l.sourced)
+		.reduce((n, l) => n + l.qty, 0)
+	const shelfQty = Math.max(1, stockWantQty.value - sourcedQty)
 	const line = lines.value.find((l) => l.item_code === item.item_code && !l.sourced)
 	if (line) {
-		cart.setQty(line.id, stockWantQty.value)
+		cart.setQty(line.id, shelfQty)
 		// Marks the line so future `+` taps skip the sheet — see `promptIfShort`.
 		line.negativeStockOk = true
 	} else {
-		cart.add(item, stockWantQty.value, { negativeStockOk: true })
+		cart.add(item, shelfQty, { negativeStockOk: true })
 	}
 	notify(`${item.item_name} added — stock will go negative`, 'warn')
 }
@@ -2049,6 +2055,7 @@ useShortcuts({
 			:warehouses="catalog.warehouses"
 			:neighbours="catalog.neighbours"
 			:suggested-qty="stockShortfall"
+			:allow-negative-stock="!!till.context?.allow_negative_stock"
 			@source="sourceFromNeighbour"
 			@request-transfer="requestTransfer"
 			@sell-anyway="sellAnyway"

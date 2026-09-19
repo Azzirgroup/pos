@@ -61,6 +61,12 @@ def submit_sale(
 	# names them — see `shift.join_roster`. Never blocks the sale.
 	_record_cashier_on_shift()
 
+	# 0. Refuse a sale the shelf cannot cover, before anything is bought from a
+	# neighbour. Otherwise the purchase posts, its notes ("Item Price added…")
+	# lead the error, and the real reason — some *other* line has no stock —
+	# reads as if the neighbour purchase had failed.
+	_refuse_short_lines(items)
+
 	# 1. Buy the neighbour-sourced lines first so the stock exists.
 	purchases = []
 	sourced = [i for i in items if i.get("sourced")]
@@ -95,6 +101,11 @@ def submit_sale(
 			)
 			purchases.extend(result.get("invoices", []))
 
+	# The purchases' own notes are bookkeeping, not news for the cashier — and
+	# left in the log they are prepended to any error the sale raises next.
+	if purchases:
+		frappe.clear_messages()
+
 	# 2. The sale itself.
 	invoice = _build_invoice(items, payment, customer, company, settings, discount_amount)
 
@@ -106,6 +117,50 @@ def submit_sale(
 		"outstanding": flt(invoice.outstanding_amount),
 		"purchases": purchases,
 	}
+
+
+def _refuse_short_lines(items):
+	"""Name every line the shelf cannot cover, in the cashier's words.
+
+	Only when negative stock is off — with it on, ERPNext lets the sale through
+	and so does this. Stock bought from a neighbour for this sale counts as on
+	the shelf, since it is received before the invoice posts.
+	"""
+	if frappe.db.get_single_value("Stock Settings", "allow_negative_stock"):
+		return
+	warehouse = selling_warehouse()
+	if not warehouse:
+		return
+
+	wanted, bought = {}, {}
+	for row in items:
+		code = row.get("item_code")
+		if not code or not frappe.get_cached_value("Item", code, "is_stock_item"):
+			continue
+		units = flt(row.get("qty")) * (flt(row.get("conversion_factor")) or 1)
+		wanted[code] = wanted.get(code, 0) + units
+		if row.get("sourced"):
+			buy = max(flt(row["sourced"].get("buy_qty")), flt(row.get("qty")))
+			bought[code] = bought.get(code, 0) + buy
+
+	short = []
+	for code, need in wanted.items():
+		have = flt(frappe.db.get_value("Bin", {"item_code": code, "warehouse": warehouse}, "actual_qty"))
+		if need > have + bought.get(code, 0) + 1e-9:
+			name = frappe.get_cached_value("Item", code, "item_name") or code
+			note = _("selling {0}, {1} has {2}").format(flt(need), warehouse, flt(have))
+			if bought.get(code):
+				note += _(", buying {0} from a neighbour").format(flt(bought[code]))
+			short.append(f"{name} ({note})")
+
+	if short:
+		frappe.throw(
+			_(
+				"Not enough stock for: {0}. Tap the item and buy it from a neighbour, "
+				"request it from another store, or remove it from the cart."
+			).format("; ".join(short)),
+			title=_("Out of stock"),
+		)
 
 
 def _build_invoice(items, payment, customer, company, settings, discount_amount=0):

@@ -109,6 +109,10 @@ def context():
 		# Gate the checkout cart's rate/discount editing controls. `pos.submit_sale`
 		# does not enforce these — see the note there — so keeping the sale itself
 		# safe from a client that ignores this flag is out of scope here.
+		# Whether "Sell anyway" can work at all. With negative stock off, ERPNext
+		# refuses any sale of stock the shelf does not hold, so offering it only
+		# produces a failed sale after the customer has paid.
+		"allow_negative_stock": bool(frappe.db.get_single_value("Stock Settings", "allow_negative_stock")),
 		"allow_rate_change": bool(profile_flags and profile_flags.allow_rate_change),
 		"allow_discount_change": bool(profile_flags and profile_flags.allow_discount_change),
 	}
