@@ -67,6 +67,10 @@ def submit_sale(
 	# reads as if the neighbour purchase had failed.
 	_refuse_short_lines(items)
 
+	# 0b. A shelf below zero cannot be refilled by a purchase of what is being
+	# sold — see `_clear_negative_shelves`.
+	_clear_negative_shelves(items, company)
+
 	# 1. Buy the neighbour-sourced lines first so the stock exists.
 	purchases = []
 	sourced = [i for i in items if i.get("sourced")]
@@ -90,7 +94,11 @@ def submit_sale(
 						# surplus is received into stock like any other purchase, and
 						# earns its margin when it sells. Falls back to the line
 						# quantity, which is what every existing caller sends.
-						"qty": max(flt(i["sourced"].get("buy_qty")), flt(i["qty"])),
+						# In the unit the line is sold in, with its factor, so a dozen
+						# bought at 100 is billed 100 — not twelve at 8.33.
+						"qty": sourced_units(i) / (flt(i.get("conversion_factor")) or 1),
+						"uom": i.get("uom"),
+						"conversion_factor": flt(i.get("conversion_factor")) or 1,
 						"buy_rate": flt(i["sourced"]["buy_rate"]),
 						"supplier": i["sourced"]["supplier"],
 					}
@@ -137,15 +145,16 @@ def _refuse_short_lines(items):
 		code = row.get("item_code")
 		if not code or not frappe.get_cached_value("Item", code, "is_stock_item"):
 			continue
-		units = flt(row.get("qty")) * (flt(row.get("conversion_factor")) or 1)
-		wanted[code] = wanted.get(code, 0) + units
+		wanted[code] = wanted.get(code, 0) + stock_units(row)
 		if row.get("sourced"):
-			buy = max(flt(row["sourced"].get("buy_qty")), flt(row.get("qty")))
-			bought[code] = bought.get(code, 0) + buy
+			bought[code] = bought.get(code, 0) + sourced_units(row)
 
 	short = []
 	for code, need in wanted.items():
 		have = flt(frappe.db.get_value("Bin", {"item_code": code, "warehouse": warehouse}, "actual_qty"))
+		# Bought from a neighbour: a negative shelf is reset to 0 first.
+		if bought.get(code) and have < 0:
+			have = 0
 		if need > have + bought.get(code, 0) + 1e-9:
 			name = frappe.get_cached_value("Item", code, "item_name") or code
 			note = _("selling {0}, {1} has {2}").format(flt(need), warehouse, flt(have))
@@ -161,6 +170,74 @@ def _refuse_short_lines(items):
 			).format("; ".join(short)),
 			title=_("Out of stock"),
 		)
+
+
+def stock_units(row) -> float:
+	"""A cart line's quantity in stock units — a dozen is twelve."""
+	return flt(row.get("qty")) * (flt(row.get("conversion_factor")) or 1)
+
+
+def sourced_units(row) -> float:
+	"""How many stock units a neighbour-sourced line buys: at least what it sells."""
+	factor = flt(row.get("conversion_factor")) or 1
+	return max(flt((row.get("sourced") or {}).get("buy_qty")), flt(row.get("qty"))) * factor
+
+
+def _clear_negative_shelves(items, company):
+	"""Reset a shelf that shows less than nothing, before buying into it.
+
+	A balance of -96 means the system recorded selling 96 it never received —
+	from a time when selling without stock was allowed. It is not stock anyone
+	can sell, and it swallows a neighbour purchase whole: buy 96 to sell 96 and
+	the shelf only reaches 0, so the sale is refused as 96 short.
+
+	Buying from a neighbour is the cashier saying there is none here, so the
+	shelf is set to 0 first with a Stock Reconciliation — ERPNext's own record
+	of a count, remarked with who and why, so the correction is visible rather
+	than silent. Only for items being bought from a neighbour on this sale.
+	"""
+	warehouse = selling_warehouse()
+	if not warehouse:
+		return
+	codes = {r["item_code"] for r in items if r.get("sourced") and r.get("item_code")}
+	negative = [
+		b
+		for b in frappe.get_all(
+			"Bin",
+			filters={"warehouse": warehouse, "item_code": ("in", list(codes)), "actual_qty": ("<", 0)},
+			fields=["item_code", "actual_qty"],
+		)
+	] if codes else []
+	if not negative:
+		return
+
+	doc = frappe.new_doc("Stock Reconciliation")
+	doc.company = company
+	doc.purpose = "Stock Reconciliation"
+	for b in negative:
+		doc.append(
+			"items",
+			{
+				"item_code": b.item_code,
+				"warehouse": warehouse,
+				"qty": 0,
+				"valuation_rate": 0,
+				"allow_zero_valuation_rate": 1,
+			},
+		)
+	note = _(
+		"Shelf reset to 0 at the till by {0} before buying from a neighbour — the system "
+		"showed {1}, more sold than ever received."
+	).format(
+		frappe.utils.get_fullname(frappe.session.user),
+		", ".join(f"{b.item_code} {flt(b.actual_qty):g}" for b in negative),
+	)
+	# ERPNext refuses to post a count while the shelf it corrects is below zero
+	# — the very state this exists to fix. Allowed for this one document only:
+	# it lifts the shelf *to* 0, so it can never leave stock negative.
+	from cosmestics.api.stock import submit_stock_count
+
+	submit_stock_count(doc, allow_negative=True, note=note)
 
 
 def _build_invoice(items, payment, customer, company, settings, discount_amount=0):

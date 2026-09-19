@@ -715,7 +715,9 @@ function promptIfShort(item, wantQty) {
 	stockItem.value = item
 	// Pre-filled with the gap rather than 1: the cashier is short by a specific
 	// number and should not have to work it out under a queue.
-	stockShortfall.value = Math.max(1, Math.ceil(wantQty - sourcedQty - stock))
+	// A negative shelf is a stale number, not a debt the customer is buying
+	// into: counting it here pre-filled "sell 97" for a customer who wanted one.
+	stockShortfall.value = Math.max(1, Math.ceil(wantQty - sourcedQty - Math.max(stock, 0)))
 	stockWantQty.value = Math.max(1, Math.ceil(wantQty))
 	stockSheet.value = true
 	return true

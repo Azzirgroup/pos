@@ -284,6 +284,15 @@ function submitSource() {
 						</span>
 						<span class="tabular text-ink-gray-5">{{ fmtMoney(item.price) }}</span>
 					</div>
+					<!-- The shelf count is below zero: more was sold than ever arrived. -->
+					<p
+						v-if="item.stock < 0"
+						class="mt-2 rounded-lg bg-surface-amber-1 px-2.5 py-1.5 text-p-xs text-ink-amber-3"
+					>
+						The system shows {{ Math.round(item.stock * 100) / 100 }} here — more was sold than was
+						ever received. Buying from a neighbour resets this shelf to 0 first (recorded as a stock
+						count), then sells what you buy.
+					</p>
 				</div>
 			</div>
 

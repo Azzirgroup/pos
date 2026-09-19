@@ -330,11 +330,13 @@ def reconcile_stock(item_code: str, qty: float, warehouse: str | None = None, re
 		# Nothing has ever given this item a value; count it without inventing one.
 		row["allow_zero_valuation_rate"] = 1
 	doc.append("items", row)
-	if reason:
-		doc.remarks = reason
-	doc.flags.ignore_permissions = True
-	doc.insert()
-	doc.submit()
+	submit_stock_count(
+		doc,
+		allow_negative=before < 0,
+		note=_("Counted from the till by {0}: {1} → {2}{3}").format(
+			frappe.utils.get_fullname(frappe.session.user), before, qty, f" — {reason}" if reason else ""
+		),
+	)
 
 	return {
 		"name": doc.name,
@@ -511,3 +513,35 @@ def move_stock_here(item_code: str, from_warehouse: str, qty: float) -> dict:
 			res["name"], qty, item_code, from_warehouse
 		),
 	}
+
+
+def submit_stock_count(doc, allow_negative: bool = False, note: str | None = None):
+	"""Insert and submit a Stock Reconciliation the app has already authorised.
+
+	ERPNext's reconciliation reads balances through a whitelisted helper that
+	checks the *session user's* desk permissions, whatever flags the document
+	carries — so a cashier or store keeper without desk stock rights is refused
+	halfway through a count the app has already decided they may make. It runs
+	as the system user; the document's remarks name the person it is for.
+
+	`allow_negative` lets a count lift a shelf that is below zero, which ERPNext
+	otherwise refuses — the one case where the count can only end at or above 0.
+	"""
+	from erpnext.stock.doctype.stock_reconciliation.stock_reconciliation import StockReconciliation
+
+	user = frappe.session.user
+	frappe.set_user("Administrator")
+	try:
+		doc.flags.ignore_permissions = True
+		doc.insert()
+		if allow_negative:
+			doc.update_stock_ledger = lambda allow_negative_stock=False: StockReconciliation.update_stock_ledger(
+				doc, allow_negative_stock=True
+			)
+		doc.submit()
+	finally:
+		frappe.set_user(user)
+	# Stock Reconciliation has no remarks field, so the who-and-why is a comment.
+	if note:
+		doc.add_comment("Comment", note)
+	return doc

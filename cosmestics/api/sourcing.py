@@ -617,10 +617,17 @@ def _make_purchase_invoice(supplier, rows, company, warehouse, paid):
 		rate = flt(row.get("buy_rate"))
 		if qty <= 0:
 			continue
+		stock_uom = frappe.get_cached_value("Item", row.get("item_code"), "stock_uom")
+		uom = row.get("uom") or stock_uom
 		pi.append(
 			"items",
 			{
 				"item_code": row.get("item_code"),
+				# The unit is always stated. Left blank, ERPNext uses the item's
+				# purchase unit — an item bought by the Box of 12 turned "buy 2"
+				# into 24 on the shelf and 24 on the neighbour's bill.
+				"uom": uom,
+				"conversion_factor": flt(row.get("conversion_factor")) or 1 if uom != stock_uom else 1,
 				"qty": qty,
 				"rate": rate,
 				"warehouse": warehouse,
