@@ -519,18 +519,29 @@ def submit_stock_count(doc, allow_negative: bool = False, note: str | None = Non
 	"""Insert and submit a Stock Reconciliation the app has already authorised.
 
 	ERPNext's reconciliation reads balances through a whitelisted helper that
-	checks the *session user's* desk permissions, whatever flags the document
-	carries — so a cashier or store keeper without desk stock rights is refused
-	halfway through a count the app has already decided they may make. It runs
-	as the system user; the document's remarks name the person it is for.
+	checks the *session user's* desk permissions (`get_stock_balance_for`),
+	whatever flags the document carries — so a cashier or store keeper without
+	desk stock rights is refused halfway through a count the app has already
+	decided they may make.
+
+	That one check is answered "yes" for the length of this call, and nothing
+	else: **not** by switching the session user, which was the first version of
+	this and a bad bug — `frappe.set_user` rewrites `session.sid`, so the till
+	lost its login and every request after a count came back "not permitted".
 
 	`allow_negative` lets a count lift a shelf that is below zero, which ERPNext
 	otherwise refuses — the one case where the count can only end at or above 0.
 	"""
 	from erpnext.stock.doctype.stock_reconciliation.stock_reconciliation import StockReconciliation
 
-	user = frappe.session.user
-	frappe.set_user("Administrator")
+	real_has_permission = frappe.has_permission
+
+	def allow_stock_count(doctype=None, *args, **kwargs):
+		if doctype == "Stock Reconciliation":
+			return True
+		return real_has_permission(doctype, *args, **kwargs)
+
+	frappe.has_permission = allow_stock_count
 	try:
 		doc.flags.ignore_permissions = True
 		doc.insert()
@@ -540,7 +551,7 @@ def submit_stock_count(doc, allow_negative: bool = False, note: str | None = Non
 			)
 		doc.submit()
 	finally:
-		frappe.set_user(user)
+		frappe.has_permission = real_has_permission
 	# Stock Reconciliation has no remarks field, so the who-and-why is a comment.
 	if note:
 		doc.add_comment("Comment", note)

@@ -1371,11 +1371,15 @@ def format_shift_close(closing) -> str:
 			]
 		)
 
+	# A shift that took nothing has no table worth drawing — an empty code block
+	# reads as a broken message.
+	table = _table(["Mode", "Expected", "Counted"], rows) if rows else _("Nothing was taken this shift.")
+
 	lines = [
 		"*Shift closed*",
 		f"{closing.pos_profile} · {closing.name}",
 		"",
-		_table(["Mode", "Expected", "Counted"], rows),
+		table,
 		f"Takings: {money(closing.grand_total)}",
 		f"Net difference: {money(difference)}",
 	]
@@ -1484,24 +1488,21 @@ def on_sales_invoice_submit(doc, method=None):
 def _enqueued_sales_return_notice(docname: str):
 	doc = frappe.get_doc("Sales Invoice", docname)
 
+	message = format_sales_return(doc)
 	numbers = contact_numbers(doctype="Sales Invoice", name=docname).get("numbers") or []
-	if not numbers:
-		# Nothing to do and nothing wrong: a walk-in has no number on file, and
-		# most returns are walk-ins.
-		return None
+	# A walk-in has no number on file, and most returns are walk-ins — so the
+	# customer's copy is skipped, not the manager's. Money going back across the
+	# counter is exactly what a manager wants told, whoever it went to.
+	to = numbers[0]["number"] if numbers else None
+	if to and not send_text(to, message):
+		to = None
 
-	to = numbers[0]["number"]
-	if not send_text(to, format_sales_return(doc)):
-		return None
-
-	# The manager's copy, so a reversal is visible to somebody other than the
-	# person who made it.
 	try:
 		manager = (_settings().get("manager_whatsapp") or "").strip()
 	except Exception:
 		manager = None
 	if manager and manager != to:
-		send_text(manager, format_sales_return(doc))
+		send_text(manager, message)
 
 	return to
 
@@ -1576,7 +1577,7 @@ def _sale_group_targets() -> list:
 	return targets
 
 
-def format_payment_change(old: str, new: str, was: str, now: str, changed_by: str) -> str:
+def format_payment_change(old: str, new: str, was: str, became: str, changed_by: str) -> str:
 	doc = frappe.get_doc("Sales Invoice", new)
 	return "\n".join(
 		[
@@ -1586,14 +1587,19 @@ def format_payment_change(old: str, new: str, was: str, now: str, changed_by: st
 			f"Invoice: {old} → {new}",
 			f"Amount: {doc.currency} {frappe.utils.fmt_money(doc.rounded_total or doc.grand_total, precision=2)}",
 			f"Was: {was}",
-			f"Now: {now}",
+			f"Now: {became}",
 			f"Changed by: {changed_by}",
 		]
 	)
 
 
-def queue_payment_change_notice(old: str, new: str, was: str, now: str, changed_by: str):
-	"""After commit and off the request, like every other notice here."""
+def queue_payment_change_notice(old: str, new: str, was: str, became: str, changed_by: str):
+	"""After commit and off the request, like every other notice here.
+
+	`became`, not `now`: `frappe.enqueue` takes a `now` of its own (run inline),
+	so a keyword of that name never reaches the job — the notice was logged as
+	"missing 1 required positional argument" and never sent.
+	"""
 
 	def _enqueue():
 		try:
@@ -1603,7 +1609,7 @@ def queue_payment_change_notice(old: str, new: str, was: str, now: str, changed_
 				old=old,
 				new=new,
 				was=was,
-				now=now,
+				became=became,
 				changed_by=changed_by,
 			)
 		except Exception as e:
@@ -1615,8 +1621,8 @@ def queue_payment_change_notice(old: str, new: str, was: str, now: str, changed_
 		frappe.log_error(f"Could not schedule the payment change notice for {new}: {e}", "Cosmetics POS")
 
 
-def _enqueued_payment_change_notice(old: str, new: str, was: str, now: str, changed_by: str) -> int:
-	message = format_payment_change(old, new, was, now, changed_by)
+def _enqueued_payment_change_notice(old: str, new: str, was: str, became: str, changed_by: str) -> int:
+	message = format_payment_change(old, new, was, became, changed_by)
 	sent = 0
 	for jid, sender in _sale_group_targets():
 		try:
