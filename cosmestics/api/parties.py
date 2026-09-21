@@ -332,3 +332,189 @@ def set_credit_limit(customer: str, credit_limit: float) -> dict:
 			frappe.format_value(limit, {"fieldtype": "Currency"}) if limit else _("none"),
 		),
 	}
+
+
+# --------------------------------------------------------------------------
+# The printed statement
+# --------------------------------------------------------------------------
+
+
+def _letter_head(company: str | None) -> dict:
+	"""The shop's own letterhead, the one its invoices already carry.
+
+	Read from ERPNext rather than drawn here: a statement that does not look
+	like the shop's other paperwork is one a customer has to be told is genuine.
+	Falls back to the company's name, so a site with no letterhead set up still
+	sends something headed.
+	"""
+	name = None
+	if company:
+		name = frappe.db.get_value("Company", company, "default_letter_head")
+	name = name or frappe.db.get_value("Letter Head", {"is_default": 1, "disabled": 0}, "name")
+	if not name:
+		return {"header": f"<h2 style='margin:0'>{frappe.utils.escape_html(company or '')}</h2>", "footer": ""}
+	row = frappe.db.get_value("Letter Head", name, ["content", "footer"], as_dict=True) or {}
+	return {"header": row.get("content") or "", "footer": row.get("footer") or ""}
+
+
+def statement_html(
+	party_type: str, party: str, from_date: str | None = None, to_date: str | None = None
+) -> str:
+	"""The statement as a printable page, headed like the shop's invoices."""
+	data = statement(party_type, party, from_date, to_date)
+	head = _letter_head(data.get("company"))
+
+	def money(value):
+		return frappe.utils.fmt_money(flt(value), currency=data.get("currency"))
+
+	rows = "".join(
+		f"<tr><td>{r['posting_date']}</td><td>{frappe.utils.escape_html(r['voucher_type'])}</td>"
+		f"<td>{frappe.utils.escape_html(r['voucher_no'])}</td>"
+		f"<td class='n'>{money(r['charged']) if r['charged'] else ''}</td>"
+		f"<td class='n'>{money(r['settled']) if r['settled'] else ''}</td>"
+		f"<td class='n'>{money(r['balance'])}</td></tr>"
+		for r in data["rows"]
+	)
+	contact = " · ".join(x for x in (data.get("mobile_no"), data.get("email_id"), data.get("location")) if x)
+	charged_label = _("Billed") if party_type == "Customer" else _("Billed to us")
+
+	return f"""<!doctype html><html><head><meta charset="utf-8">
+<title>{_("Statement")} — {frappe.utils.escape_html(data['title'])}</title>
+<style>
+  body {{ font-family: system-ui, "Helvetica Neue", Arial, sans-serif; font-size: 12px; color: #1a1a1a; margin: 28px; }}
+  .head {{ border-bottom: 2px solid #1a1a1a; padding-bottom: 8px; margin-bottom: 14px; }}
+  h1 {{ font-size: 17px; margin: 14px 0 2px; }}
+  .muted {{ color: #666; }}
+  .sum {{ display: flex; gap: 28px; margin: 12px 0; }}
+  .sum b {{ display: block; font-size: 14px; }}
+  table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+  th, td {{ padding: 5px 6px; border-bottom: 1px solid #e0e0e0; text-align: left; }}
+  th {{ background: #f4f4f4; }}
+  .n {{ text-align: right; font-variant-numeric: tabular-nums; }}
+  tfoot td {{ font-weight: 600; border-top: 2px solid #1a1a1a; }}
+  .foot {{ margin-top: 18px; color: #666; font-size: 11px; }}
+</style></head><body>
+  <div class="head">{head['header']}</div>
+  <h1>{frappe.utils.escape_html(data['title'])}</h1>
+  <div class="muted">{_("Statement of account")} · {data['from_date']} {_("to")} {data['to_date']}</div>
+  <div class="muted">{frappe.utils.escape_html(contact)}</div>
+  <div class="sum">
+    <div>{_("Opening")}<b>{money(data['opening'])}</b></div>
+    <div>{_("Closing")}<b>{money(data['closing'])}</b></div>
+    {f"<div>{_('Credit limit')}<b>{money(data['credit_limit'])}</b></div>" if data.get("credit_limit") else ""}
+  </div>
+  <table>
+    <thead><tr><th>{_("Date")}</th><th>{_("Type")}</th><th>{_("Document")}</th>
+      <th class="n">{charged_label}</th><th class="n">{_("Paid")}</th><th class="n">{_("Balance")}</th></tr></thead>
+    <tbody>
+      <tr><td colspan="5">{_("Balance brought forward")}</td><td class="n">{money(data['opening'])}</td></tr>
+      {rows}
+    </tbody>
+    <tfoot><tr><td colspan="5">{_("Balance due")}</td><td class="n">{money(data['closing'])}</td></tr></tfoot>
+  </table>
+  <div class="foot">{head['footer']}</div>
+</body></html>"""
+
+
+@frappe.whitelist()
+def statement_print(
+    party_type: str, party: str, from_date: str | None = None, to_date: str | None = None
+) -> dict:
+	"""The printable statement, rendered on the server so print and WhatsApp
+	send exactly the same page."""
+	return {"html": statement_html(party_type, party, from_date, to_date)}
+
+
+#: What a customer reads when the statement arrives. Their own wording.
+STATEMENT_MESSAGE = (
+	"Please find your attached running statement. Thank you for doing business with us"
+)
+
+
+@frappe.whitelist(methods=["POST"])
+def send_statement(
+	party_type: str,
+	party: str,
+	from_date: str | None = None,
+	to_date: str | None = None,
+	to: str | None = None,
+	message: str | None = None,
+) -> dict:
+	"""WhatsApp the statement as a PDF, to the number on the record."""
+	from cosmestics.api.notifications import send_file, send_text
+
+	data = statement(party_type, party, from_date, to_date)
+	number = (to or data.get("mobile_no") or "").strip()
+	if not number:
+		frappe.throw(
+			_("{0} has no phone number on file — add one first.").format(data["title"])
+		)
+
+	body = (message or "").strip() or _(STATEMENT_MESSAGE)
+	html = statement_html(party_type, party, from_date, to_date)
+	url = _publish_statement_pdf(html, f"Statement-{party}-{data['to_date']}")
+
+	if not url:
+		# The figures still reach them, which beats silence.
+		sent = send_text(number, f"{body}\n\n{data['title']}: {frappe.utils.fmt_money(flt(data['closing']), currency=data.get('currency'))}")
+		return {"sent": bool(sent), "attached": False, "to": number,
+			"message": _("Statement could not be rendered; the balance was sent as a message instead.")}
+
+	sent = send_file(number, body, url, f"statement-{frappe.scrub(party)}.pdf")
+	return {
+		"sent": bool(sent),
+		"attached": True,
+		"to": number,
+		"message": _("Statement sent to {0}").format(number)
+		if sent
+		else _("WhatsApp would not take the statement — check the Error Log"),
+	}
+
+
+def _publish_statement_pdf(html: str, title: str) -> str | None:
+	"""Render the statement and expose it for the bridge to fetch.
+
+	Public, like every other file the bridge collects: waclient pulls it over
+	plain HTTP with no session, so a private file would come back as a login
+	page. Unguessable, and deleted is not attempted — a statement is the
+	customer's own figures, and the link is what they are being sent.
+	"""
+	content = _render_pdf(html)
+	if content is None:
+		return None
+	try:
+		doc = frappe.get_doc(
+			{
+				"doctype": "File",
+				"file_name": f"{frappe.scrub(title)}.pdf",
+				"content": content,
+				"is_private": 0,
+			}
+		).insert(ignore_permissions=True)
+		return frappe.utils.get_url(doc.file_url)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Cosmetics POS")
+		return None
+
+
+def _render_pdf(html: str):
+	"""HTML to PDF, by whichever renderer this site actually has.
+
+	Frappe v16 ships two: wkhtmltopdf and a headless-Chrome generator. Which one
+	is present depends on the host — Frappe Cloud has both, a laptop often has
+	neither — so both are tried rather than assuming, and the caller falls back
+	to sending the figures as text if neither answers.
+	"""
+	from frappe.utils.pdf import get_pdf
+
+	try:
+		return get_pdf(html)
+	except Exception:
+		pass
+	try:
+		from frappe.utils.pdf import get_chrome_pdf
+
+		return get_chrome_pdf(None, html, {}, None, pdf_generator="chrome")
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Cosmetics POS")
+		return None

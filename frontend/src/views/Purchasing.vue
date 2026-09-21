@@ -376,7 +376,12 @@ async function openFor(row, next) {
 			remarks: doc.remarks || '',
 			fromWarehouse: doc.from_warehouse || '',
 			toWarehouse: doc.warehouse || '',
-			items: doc.items.map((l) => ({ ...l, _id: ++nextLineId })),
+			items: doc.items.map((l) => ({
+				...l,
+				rate: l.rate || '',
+				selling_rate: l.selling_rate || '',
+				_id: ++nextLineId,
+			})),
 			landedCosts: (doc.landed_costs || []).map((c) => ({ ...c })),
 			landedBasis: doc.landed_basis || 'Qty',
 		}
@@ -412,7 +417,10 @@ const warehouseFetcher = (term) => searchPurchaseWarehouses(term)
 let nextLineId = 0
 
 function blankLine() {
-	return { _id: ++nextLineId, item_code: '', item_name: '', uom: '', qty: 1, rate: 0 }
+	// `rate` is what the supplier charges and may be left blank — the person
+	// unpacking a delivery often does not know it yet. `selling_rate` is the
+	// shelf price, which is exactly what they *do* know.
+	return { _id: ++nextLineId, item_code: '', item_name: '', uom: '', qty: 1, rate: '', selling_rate: '', last_rate: 0 }
 }
 
 function addLine() {
@@ -441,10 +449,12 @@ function onItemPicked(line, option) {
 	line.item_code = code
 	line.item_name = option.item_name || option.label || code
 	line.uom = option.uom || ''
-	// Only as a starting point, and only into a blank: the last price paid is a
-	// good guess and never the answer, and a rate already typed is what the
-	// supplier actually charged this time.
-	if (!Number(line.rate)) line.rate = Number(option.rate || 0)
+	// The shelf price is filled in, because that is what this form is for. The
+	// buying price is deliberately left empty: filling it with the last price
+	// paid is how a stale figure becomes this delivery's cost without anybody
+	// deciding it. What was paid last time is shown beside the line instead.
+	line.last_rate = Number(option.rate || 0)
+	if (!Number(line.selling_rate) && Number(option.selling_rate)) line.selling_rate = Number(option.selling_rate)
 }
 
 /** Rows that name a product. The rest are lines somebody has not filled in yet. */
@@ -551,6 +561,7 @@ async function save() {
 			item_code: l.item_code,
 			qty: Number(l.qty || 0),
 			rate: Number(l.rate || 0),
+			selling_rate: Number(l.selling_rate || 0),
 		}))
 
 		let res
@@ -1007,16 +1018,35 @@ function notify(message, tone = 'good') {
 									class="h-8 w-full rounded border border-outline-gray-3 bg-surface-white px-2 text-right text-p-sm text-ink-gray-8 focus:border-outline-gray-5 focus:outline-none focus:ring-1 focus:ring-outline-gray-3"
 								/>
 							</div>
-							<div class="w-[120px]">
-								<label class="mb-1.5 block text-p-sm text-ink-gray-6">Rate</label>
+							<!-- What the shop will charge. Set here because unpacking a
+							     delivery is when somebody knows it, and it is written to the
+							     till's price list rather than to this invoice. -->
+							<div class="w-[130px]">
+								<label class="mb-1.5 block text-p-sm text-ink-gray-6">Selling price</label>
 								<input
-									v-model.number="line.rate"
+									v-model="line.selling_rate"
 									type="number"
 									min="0"
 									step="any"
 									inputmode="decimal"
+									placeholder="—"
 									:disabled="readOnlyLines"
-									class="h-8 w-full rounded border border-outline-gray-3 bg-surface-white px-2 text-right text-p-sm text-ink-gray-8 focus:border-outline-gray-5 focus:outline-none focus:ring-1 focus:ring-outline-gray-3 disabled:bg-surface-gray-2 disabled:text-ink-gray-5"
+									class="h-8 w-full rounded border border-outline-gray-3 bg-surface-white px-2 text-right text-p-sm text-ink-gray-8 placeholder-ink-gray-4 focus:border-outline-gray-5 focus:outline-none focus:ring-1 focus:ring-outline-gray-3 disabled:bg-surface-gray-2 disabled:text-ink-gray-5"
+								/>
+							</div>
+							<!-- What the supplier charges. May be left blank now and filled
+							     by the owner when the bill arrives — see `_add_lines`. -->
+							<div class="w-[130px]">
+								<label class="mb-1.5 block text-p-sm text-ink-gray-6">Buying price</label>
+								<input
+									v-model="line.rate"
+									type="number"
+									min="0"
+									step="any"
+									inputmode="decimal"
+									placeholder="Later"
+									:disabled="readOnlyLines"
+									class="h-8 w-full rounded border border-outline-gray-3 bg-surface-white px-2 text-right text-p-sm text-ink-gray-8 placeholder-ink-gray-4 focus:border-outline-gray-5 focus:outline-none focus:ring-1 focus:ring-outline-gray-3 disabled:bg-surface-gray-2 disabled:text-ink-gray-5"
 								/>
 							</div>
 							<div class="w-[120px]">
@@ -1053,6 +1083,10 @@ function notify(message, tone = 'good') {
 							</span>
 							<span v-if="draft.toWarehouse" class="truncate text-p-xs text-ink-gray-5">
 								at {{ draft.toWarehouse }}
+							</span>
+							<!-- Shown, never filled in: see `onItemPicked`. -->
+							<span v-if="line.last_rate" class="tabular truncate text-p-xs text-ink-gray-5">
+								last paid {{ fmtMoney(line.last_rate) }}
 							</span>
 							<span
 								v-if="landedPerUnit(line) > 0"

@@ -68,7 +68,7 @@ function readable(error) {
 	return error
 }
 
-function call(method, args) {
+function call(method, args, options) {
 	return withCache(method, args, () =>
 		frappeRequest({
 			url: `/api/method/${method}`,
@@ -77,6 +77,7 @@ function call(method, args) {
 		}).catch((e) => {
 			throw readable(e)
 		}),
+		options,
 	)
 }
 
@@ -101,7 +102,9 @@ export function submitSale({ items, payment, customer, discountAmount }) {
 						// How many to buy, which can exceed how many are being sold —
 						// the shop next door sells a carton. Defaults to the line
 						// quantity on the server if absent.
-						buy_qty: l.sourced.buyQty || l.qty,
+						// Exactly the units fetched from next door: the rest of the
+						// line is coming off this shop's own shelf.
+						buy_qty: l.sourced.buyQty ?? l.qty,
 					}
 				: null,
 		})),
@@ -715,6 +718,26 @@ export const getPartyStatement = ({ partyType, party, fromDate, toDate }) =>
 		to_date: toDate || null,
 	})
 
+/** The statement as a printable page, headed with the shop's letterhead. */
+export const getStatementPrint = ({ partyType, party, fromDate, toDate }) =>
+	call('cosmestics.api.parties.statement_print', {
+		party_type: partyType,
+		party,
+		from_date: fromDate || null,
+		to_date: toDate || null,
+	})
+
+/** WhatsApp the statement as a PDF to the number on the record. */
+export const sendStatement = ({ partyType, party, fromDate, toDate, to, message }) =>
+	call('cosmestics.api.parties.send_statement', {
+		party_type: partyType,
+		party,
+		from_date: fromDate || null,
+		to_date: toDate || null,
+		to: to || null,
+		message: message || null,
+	})
+
 export const setCreditLimit = ({ customer, creditLimit }) =>
 	call('cosmestics.api.parties.set_credit_limit', { customer, credit_limit: creditLimit || 0 })
 
@@ -749,6 +772,9 @@ export const getLandedCostAccounts = (search) =>
 
 export const getPriceListOptions = () => call('cosmestics.api.pricing.get_price_list_options')
 export const getPriceFilters = () => call('cosmestics.api.pricing.get_filters')
+
+/** Set the cost price the shop maintains — see `pricing.set_costs`. */
+export const setItemCosts = (changes) => call('cosmestics.api.pricing.set_costs', { changes })
 
 export const getPrices = ({ priceList, search, itemGroup, brand }) =>
 	call('cosmestics.api.pricing.get_prices', {
@@ -876,8 +902,19 @@ export const generateBarcodes = ({ itemCodes, skipExisting } = {}) =>
 
 /* ---------- dashboard ---------- */
 
-export const getDashboard = ({ days } = {}) =>
-	call('cosmestics.api.dashboard.overview', { days: days || 30 })
+/**
+ * `days` is always a number on the wire. The screen's period control can hold
+ * "custom", which is a *UI* state meaning "use the dates" — sent as-is the
+ * endpoint rejects it as not-an-integer and the whole dashboard 500s.
+ */
+const dayCount = (days) => Number(days) || 30
+
+export const getDashboard = ({ days, fromDate, toDate, force } = {}) =>
+	call(
+		'cosmestics.api.dashboard.overview',
+		{ days: dayCount(days), from_date: fromDate || null, to_date: toDate || null },
+		{ force },
+	)
 
 export const getDashboardFilters = () => call('cosmestics.api.dashboard.filters')
 
@@ -885,12 +922,18 @@ export const getDashboardFilters = () => call('cosmestics.api.dashboard.filters'
  * The tabbed dashboards. All five return {stats, sections}, so one component
  * renders them all — the tab only decides which endpoint and which filter.
  */
-export const getDashboardTab = ({ tab, days, branch, warehouse }) =>
-	call(`cosmestics.api.dashboard.${tab}`, {
-		days: days || 30,
-		...(branch ? { branch } : {}),
-		...(warehouse ? { warehouse } : {}),
-	})
+export const getDashboardTab = ({ tab, days, branch, warehouse, fromDate, toDate, force }) =>
+	call(
+		`cosmestics.api.dashboard.${tab}`,
+		{
+			days: dayCount(days),
+			from_date: fromDate || null,
+			to_date: toDate || null,
+			...(branch ? { branch } : {}),
+			...(warehouse ? { warehouse } : {}),
+		},
+		{ force },
+	)
 
 /* ---------- master data ---------- */
 

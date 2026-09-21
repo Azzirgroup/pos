@@ -605,6 +605,13 @@ def _make_purchase_invoice(supplier, rows, company, warehouse, paid):
 	pi = frappe.new_doc("Purchase Invoice")
 	pi.supplier = supplier
 	pi.company = company
+	# Its own price list, so ERPNext's "remember what this cost" does not write
+	# a neighbour's afternoon price over the cost the shop maintains. See
+	# `pricing.COST_PRICE_LIST`: that one is the shop's own figure.
+	price_list = _neighbour_price_list()
+	if price_list:
+		pi.buying_price_list = price_list
+		pi.price_list_currency = frappe.db.get_value("Price List", price_list, "currency")
 	pi.posting_date = nowdate()
 	pi.set_posting_time = 1
 	# Receives stock and books the payable in a single submit.
@@ -660,6 +667,34 @@ def _make_purchase_invoice(supplier, rows, company, warehouse, paid):
 	pi.submit()
 
 	return {"name": pi.name, "supplier": supplier, "total": flt(pi.grand_total)}
+
+
+#: Prices paid next door are volatile and item-specific; they are kept apart
+#: from `Standard Buying`, which is the cost the shop maintains.
+NEIGHBOUR_PRICE_LIST = "Neighbour Prices"
+
+
+def _neighbour_price_list() -> str | None:
+	"""The buying price list neighbour purchases quote against, made on demand."""
+	if frappe.db.exists("Price List", NEIGHBOUR_PRICE_LIST):
+		return NEIGHBOUR_PRICE_LIST
+	currency = frappe.defaults.get_global_default("currency") or frappe.db.get_value(
+		"Company", frappe.defaults.get_global_default("company"), "default_currency"
+	)
+	try:
+		doc = frappe.new_doc("Price List")
+		doc.price_list_name = NEIGHBOUR_PRICE_LIST
+		doc.buying = 1
+		doc.selling = 0
+		doc.enabled = 1
+		doc.currency = currency
+		doc.insert(ignore_permissions=True)
+		return doc.name
+	except Exception:
+		# Not worth failing a sale over: without it the purchase simply quotes
+		# against the default list, exactly as it used to.
+		frappe.log_error(frappe.get_traceback(), "Cosmetics POS")
+		return None
 
 
 def _ensure_supplier(supplier):

@@ -1,5 +1,5 @@
 <script setup>
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { fmtMoneyShort, fmtQty } from '@/utils/format'
 import LucideMinus from '~icons/lucide/minus'
 import LucidePlus from '~icons/lucide/plus'
@@ -13,6 +13,19 @@ const props = defineProps({
 })
 
 const emit = defineEmits(['inc', 'dec', 'remove', 'setQty', 'setUom', 'setRate'])
+
+/**
+ * How this line is being filled. A line can be part shelf and part neighbour —
+ * "6 of 7 from Zara @ 380" — and saying only the shop's name would hide which
+ * units carry that cost.
+ */
+const sourcedNote = computed(() => {
+	const s = props.line.sourced
+	if (!s) return ''
+	const bought = Number(s.buyQty ?? props.line.qty) || 0
+	const part = bought >= props.line.qty ? `${fmtQty(bought)}` : `${fmtQty(bought)} of ${fmtQty(props.line.qty)}`
+	return `${part} from ${s.supplier} @ ${fmtMoneyShort(s.buyRate)}`
+})
 
 function onRateChange(event) {
 	emit('setRate', props.line.id, event.target.value)
@@ -93,13 +106,13 @@ watch(
 				>
 					−{{ line.discountPct }}%
 				</span>
-				<!-- Sourced lines look different because they behave differently:
-				     they carry a cost and generate a purchase on checkout. -->
+				<!-- What part of this line came from next door, and at what cost.
+				     One product stays one line; this says how it is being filled. -->
 				<span
 					v-if="line.sourced"
 					class="rounded bg-surface-green-2 px-1 font-medium text-ink-green-3"
 				>
-					{{ line.sourced.supplier }} @ {{ fmtMoneyShort(line.sourced.buyRate) }}
+					{{ sourcedNote }}
 				</span>
 			</div>
 		</div>

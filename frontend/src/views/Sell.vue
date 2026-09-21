@@ -706,9 +706,11 @@ function promptIfShort(item, wantQty) {
 	}
 
 	const stock = Number(item.stock) || 0
+	// Only the units coming from next door: the rest of a part-sourced line is
+	// still coming off this shelf and has to be counted against it.
 	const sourcedQty = lines.value
 		.filter((l) => l.item_code === item.item_code && l.sourced)
-		.reduce((n, l) => n + l.qty * (l.conversionFactor || 1), 0)
+		.reduce((n, l) => n + (Number(l.sourced.buyQty) || 0) * (l.conversionFactor || 1), 0)
 
 	if (wantQty - sourcedQty <= stock) return false
 
@@ -764,19 +766,18 @@ function removeItem(item) {
 function cartInc(id, step = 1) {
 	const line = lines.value.find((l) => l.id === id)
 	if (!line) return
-	// A line already bought from a neighbour has no shelf to run out of.
-	if (!line.sourced) {
-		const item = catalog.byCode.get(line.item_code)
-		const inCart = cartQtys.value[line.item_code] || 0
-		if (item && promptIfShort(item, inCart + step)) return
-	}
+	// Checked even on a line that is part neighbour-bought: the extra unit has
+	// to come from somewhere, and only what was actually fetched is covered.
+	const item = catalog.byCode.get(line.item_code)
+	const inCart = cartQtys.value[line.item_code] || 0
+	if (item && promptIfShort(item, inCart + step)) return
 	cart.inc(id, step)
 }
 
 function cartSetQty(id, qty) {
 	const line = lines.value.find((l) => l.id === id)
 	if (!line) return
-	if (qty > line.qty && !line.sourced) {
+	if (qty > line.qty) {
 		const item = catalog.byCode.get(line.item_code)
 		const inCart = (cartQtys.value[line.item_code] || 0) - line.qty + qty
 		if (item && promptIfShort(item, inCart)) return
@@ -794,11 +795,11 @@ function sellAnyway({ item }) {
 	// own line; only the rest belongs on the shelf line.
 	const sourcedQty = lines.value
 		.filter((l) => l.item_code === item.item_code && l.sourced)
-		.reduce((n, l) => n + l.qty, 0)
+		.reduce((n, l) => n + (Number(l.sourced.buyQty) || 0), 0)
 	const shelfQty = Math.max(1, stockWantQty.value - sourcedQty)
-	const line = lines.value.find((l) => l.item_code === item.item_code && !l.sourced)
+	const line = lines.value.find((l) => l.item_code === item.item_code)
 	if (line) {
-		cart.setQty(line.id, shelfQty)
+		cart.setQty(line.id, line.sourced ? line.qty + shelfQty : shelfQty)
 		// Marks the line so future `+` taps skip the sheet — see `promptIfShort`.
 		line.negativeStockOk = true
 	} else {

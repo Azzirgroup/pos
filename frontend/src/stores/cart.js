@@ -92,10 +92,14 @@ export const useCartStore = defineStore('cart', () => {
 	let ticketSeq = restored?.ticketSeq || 0
 
 	/**
-	 * `sourced` marks a line bought from a neighbouring shop for this sale:
-	 * { supplier, buyRate }. Such a line is kept separate from an identical
-	 * in-stock line — they have different costs, and merging them would hide
-	 * the margin and produce a wrong Purchase Receipt.
+	 * `sourced` marks stock fetched from a neighbouring shop for this sale:
+	 * { supplier, buyRate, buyQty }. `buyQty` is how many of the line come from
+	 * next door, which is not always the whole line — one on the shelf and six
+	 * fetched is a single line of seven that buys six.
+	 *
+	 * One product is one line. Splitting the shelf's units from the neighbour's
+	 * put the same product on the receipt twice, which is not how anyone reads
+	 * a bill; the neighbour's share is written under the line instead.
 	 */
 	function add(item, qty = 1, { sourced = null, uom = null, negativeStockOk = false } = {}) {
 		// The unit being sold, and what one of it costs. `uoms[0]` is always the
@@ -104,22 +108,30 @@ export const useCartStore = defineStore('cart', () => {
 		const units = item.uoms?.length ? item.uoms : [{ uom: item.uom || 'Nos', factor: 1, rate: item.price }]
 		const unit = units.find((u) => u.uom === uom) || units[0]
 
-		if (!sourced) {
-			// Merged only when it is the *same unit*. A dozen and a single are
-			// different lines with different rates — adding them together would
-			// silently reprice one of them.
-			const existing = lines.value.find(
-				(l) => l.item_code === item.item_code && l.uom === unit.uom && !l.sourced,
-			)
-			if (existing) {
-				existing.qty = round2(existing.qty + qty)
-				// Sticky once granted: a line already sold past the shelf count has
-				// already had that conversation, and re-asking on every `+` tap is
-				// the bug this flag exists to fix.
-				if (negativeStockOk) existing.negativeStockOk = true
-				lastTouched.value = existing.id
-				return existing
+		// Merged only when it is the *same unit*. A dozen and a single are
+		// different lines with different rates — adding them together would
+		// silently reprice one of them. A second neighbour is also its own line:
+		// two shops mean two purchases at two costs.
+		const existing = lines.value.find(
+			(l) =>
+				l.item_code === item.item_code &&
+				l.uom === unit.uom &&
+				(!sourced || !l.sourced || l.sourced.supplier === sourced.supplier),
+		)
+		if (existing) {
+			existing.qty = round2(existing.qty + qty)
+			if (sourced) {
+				const buying = Number(sourced.buyQty ?? qty) || 0
+				existing.sourced = existing.sourced
+					? { ...existing.sourced, buyQty: round2((Number(existing.sourced.buyQty) || 0) + buying) }
+					: { ...sourced, buyQty: buying }
 			}
+			// Sticky once granted: a line already sold past the shelf count has
+			// already had that conversation, and re-asking on every `+` tap is
+			// the bug this flag exists to fix.
+			if (negativeStockOk) existing.negativeStockOk = true
+			lastTouched.value = existing.id
+			return existing
 		}
 		const line = {
 			id: ++lineSeq,
@@ -139,7 +151,7 @@ export const useCartStore = defineStore('cart', () => {
 			listRate: unit.rate,
 			qty,
 			discountPct: 0,
-			sourced,
+			sourced: sourced ? { ...sourced, buyQty: Number(sourced.buyQty ?? qty) || 0 } : null,
 			// Once a cashier has agreed to sell this line past the shelf count, the
 			// question is answered — every `+` after that should just increment,
 			// not ask again for the same line.
@@ -245,13 +257,22 @@ export const useCartStore = defineStore('cart', () => {
 	/** Lines bought from a neighbour — drive the Purchase Receipt on checkout. */
 	const sourcedLines = computed(() => lines.value.filter((l) => l.sourced))
 
-	/** What we owe neighbours for this sale, and what we make on top. */
+	/** What we owe neighbours for this sale, and what we make on top.
+	 *  Only the units actually fetched from next door are bought. */
 	const sourcedCost = computed(() =>
-		round2(sourcedLines.value.reduce((s, l) => s + l.qty * l.sourced.buyRate, 0)),
+		round2(
+			sourcedLines.value.reduce(
+				(s, l) => s + (Number(l.sourced.buyQty) || l.qty) * l.sourced.buyRate,
+				0,
+			),
+		),
 	)
 
 	const sourcedMargin = computed(() =>
-		round2(sourcedLines.value.reduce((s, l) => s + lineTotal(l), 0) - sourcedCost.value),
+		round2(
+			sourcedLines.value.reduce((s, l) => s + lineTotal(l) * ((Number(l.sourced.buyQty) || l.qty) / (l.qty || 1)), 0) -
+				sourcedCost.value,
+		),
 	)
 
 	/** Park the current sale so the next customer can be served immediately. */
@@ -317,16 +338,24 @@ export const useCartStore = defineStore('cart', () => {
 			for (const line of ticket.lines) {
 				// A neighbour-bought line never folds into a shelf line (or another
 				// shop's): the purchase it carries would be lost or mis-sized.
+				// A neighbour's line folds only into one from the same shop: the
+				// purchase it carries would otherwise be lost or mis-sized.
 				const same = merged.find(
 					(l) =>
 						l.item_code === line.item_code &&
 						l.rate === line.rate &&
 						l.uom === line.uom &&
-						(l.sourced?.supplier || null) === (line.sourced?.supplier || null) &&
-						!l.sourced &&
-						!line.sourced,
+						(l.sourced?.supplier || null) === (line.sourced?.supplier || null),
 				)
-				if (same) same.qty = round2(same.qty + line.qty)
+				if (same) {
+					same.qty = round2(same.qty + line.qty)
+					if (same.sourced && line.sourced) {
+						same.sourced = {
+							...same.sourced,
+							buyQty: round2((Number(same.sourced.buyQty) || 0) + (Number(line.sourced.buyQty) || 0)),
+						}
+					}
+				}
 				// Re-numbered, not copied across: two tickets number their lines
 				// independently, so both can hold a line 3. Merged as-is, the
 				// combined ticket carries two lines with one id and every lookup

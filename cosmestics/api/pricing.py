@@ -91,21 +91,15 @@ def get_prices(
 	codes = [i.item_code for i in items]
 	prices = _current_price_rows(price_list, codes)
 
-	# Last purchase cost, so a margin can be judged while editing.
-	costs = {}
-	for v in frappe.get_all(
-		"Item",
-		filters={"name": ("in", codes)},
-		fields=["name", "last_purchase_rate", "valuation_rate"],
-		limit_page_length=0,
-	):
-		costs[v.name] = flt(v.last_purchase_rate) or flt(v.valuation_rate)
+	costs = _costs(codes)
+	kept_costs = _kept_costs(codes)
 
 	rows = []
 	for it in items:
 		p = prices.get(it.item_code)
 		rate = flt(p.price_list_rate) if p else None
 		cost = flt(costs.get(it.item_code))
+		kept = it.item_code in kept_costs
 		rows.append(
 			{
 				"item_code": it.item_code,
@@ -115,6 +109,10 @@ def get_prices(
 				"uom": it.stock_uom,
 				"price": rate,
 				"cost": cost,
+				# Whether that cost is the one the shop maintains, or merely the
+				# last thing paid for it — the two behave differently and a
+				# manager deciding a price needs to know which they are reading.
+				"cost_kept": kept,
 				"margin_pct": round((rate - cost) / rate * 100, 1) if rate and cost else None,
 				"price_doc": p.name if p else None,
 			}
@@ -122,6 +120,98 @@ def get_prices(
 
 	currency = frappe.db.get_value("Price List", price_list, "currency")
 	return {"rows": rows, "currency": currency}
+
+
+#: Where a maintained cost price lives. ERPNext's own buying price list, so a
+#: cost typed here is the cost every purchase form and report already reads.
+COST_PRICE_LIST = "Standard Buying"
+
+
+def _kept_costs(codes: list) -> dict:
+	"""{item_code: cost} the shop maintains itself, from `COST_PRICE_LIST`."""
+	if not codes:
+		return {}
+	rows = frappe.get_all(
+		"Item Price",
+		filters={"price_list": COST_PRICE_LIST, "item_code": ("in", codes), "selling": 0},
+		fields=["item_code", "price_list_rate", "name"],
+		order_by="valid_from desc, modified desc",
+		limit_page_length=0,
+	)
+	out = {}
+	for r in rows:
+		out.setdefault(r.item_code, flt(r.price_list_rate))
+	return out
+
+
+def _costs(codes: list) -> dict:
+	"""What each item costs, the maintained figure first.
+
+	A neighbour shop's price is what one shop charged on one afternoon, and it
+	lands on `last_purchase_rate` the moment the purchase posts. Reading that as
+	*the* cost made every margin on this screen swing with whatever was paid
+	next door last, which is the complaint this answers: a cost the shop has
+	set itself wins, and the last price paid is only the fallback for items
+	nobody has costed yet.
+	"""
+	kept = _kept_costs(codes)
+	fallback = {
+		v.name: flt(v.last_purchase_rate) or flt(v.valuation_rate)
+		for v in frappe.get_all(
+			"Item",
+			filters={"name": ("in", codes)},
+			fields=["name", "last_purchase_rate", "valuation_rate"],
+			limit_page_length=0,
+		)
+	}
+	return {code: kept.get(code) or fallback.get(code, 0) for code in codes}
+
+
+@frappe.whitelist(methods=["POST"])
+def set_costs(changes: list | str) -> dict:
+	"""Set the cost price the shop maintains. `changes` is [{item_code, cost}].
+
+	Written to the buying price list rather than onto the Item, so ERPNext's own
+	purchase forms and reports read the same figure — and so a neighbour
+	purchase, which only moves `last_purchase_rate`, can never overwrite it.
+	"""
+	if isinstance(changes, str):
+		changes = frappe.parse_json(changes)
+	changes = [c for c in (changes or []) if c.get("item_code")]
+	if not changes:
+		frappe.throw(_("Nothing to apply"))
+
+	written, cleared = 0, 0
+	for c in changes:
+		code = c["item_code"]
+		cost = flt(c.get("cost"))
+		if cost < 0:
+			frappe.throw(_("{0}: a cost cannot be negative").format(code))
+
+		existing = frappe.db.get_value(
+			"Item Price", {"price_list": COST_PRICE_LIST, "item_code": code, "selling": 0}, "name"
+		)
+		if not cost:
+			# Cleared: back to whatever was last paid for it.
+			if existing:
+				frappe.delete_doc("Item Price", existing, ignore_permissions=True)
+				cleared += 1
+			continue
+		if existing:
+			_write_price(existing, cost)
+		else:
+			doc = frappe.new_doc("Item Price")
+			doc.item_code = code
+			doc.price_list = COST_PRICE_LIST
+			doc.price_list_rate = cost
+			doc.insert(ignore_permissions=True)
+		written += 1
+
+	return {
+		"written": written,
+		"cleared": cleared,
+		"message": _("{0} cost price(s) set{1}").format(written, _(", {0} cleared").format(cleared) if cleared else ""),
+	}
 
 
 @frappe.whitelist()

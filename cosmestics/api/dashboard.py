@@ -31,7 +31,21 @@ def _company():
 	return frappe.defaults.get_global_default("company")
 
 
-def _window(days: int):
+def _window(days: int, from_date: str | None = None, to_date: str | None = None):
+	"""The period every figure on this screen is measured over.
+
+	Two dates win over a day count when they are given: "today only" and "the
+	week of the sale" are questions a rolling window cannot answer, and the
+	comparison against the preceding window of equal length still works because
+	the length is derived from the dates.
+	"""
+	if from_date or to_date:
+		end = getdate(to_date or from_date)
+		start = getdate(from_date or to_date)
+		if start > end:
+			start, end = end, start
+		return start, end, (end - start).days + 1
+
 	days = cint(days) or DEFAULT_DAYS
 	end = getdate(nowdate())
 	start = add_days(end, -(days - 1))
@@ -67,7 +81,7 @@ def _delta(current, previous):
 
 
 @frappe.whitelist()
-def overview(days: int = DEFAULT_DAYS) -> dict:
+def overview(days: int = DEFAULT_DAYS, from_date: str | None = None, to_date: str | None = None) -> dict:
 	"""The shop's numbers, for the accounts that are allowed to read them.
 
 	Gated on the server as well as hidden in the rail: a whitelisted method is
@@ -80,7 +94,7 @@ def overview(days: int = DEFAULT_DAYS) -> dict:
 		frappe._("The dashboard is limited to the accounts that hold Cosmestics Analytics."),
 	)
 
-	start, end, days = _window(days)
+	start, end, days = _window(days, from_date, to_date)
 	prev_end = add_days(start, -1)
 	prev_start = add_days(prev_end, -(days - 1))
 
@@ -786,9 +800,9 @@ def today() -> dict:
 
 
 @frappe.whitelist()
-def sales(days: int = DEFAULT_DAYS, branch: str | None = None) -> dict:
+def sales(days: int = DEFAULT_DAYS, branch: str | None = None, from_date: str | None = None, to_date: str | None = None) -> dict:
 	"""Sales, optionally narrowed to one till."""
-	start, end, days = _window(days)
+	start, end, days = _window(days, from_date, to_date)
 	branch_cond = " and si.pos_profile = %(branch)s" if branch else ""
 	args = _args({"start": start, "end": end, "branch": branch, "limit": SHORTLIST})
 
@@ -931,14 +945,14 @@ def sales(days: int = DEFAULT_DAYS, branch: str | None = None) -> dict:
 
 
 @frappe.whitelist()
-def branches(days: int = DEFAULT_DAYS) -> dict:
+def branches(days: int = DEFAULT_DAYS, from_date: str | None = None, to_date: str | None = None) -> dict:
 	"""Every till side by side.
 
 	Sales with no `pos_profile` are reported under their own heading rather than
 	dropped — off-till invoices are real revenue, and silently excluding them
 	would make the branch totals disagree with the sales tab.
 	"""
-	start, end, days = _window(days)
+	start, end, days = _window(days, from_date, to_date)
 	args = _args({"start": start, "end": end})
 
 	rows = frappe.db.sql(
@@ -1049,9 +1063,9 @@ def branches(days: int = DEFAULT_DAYS) -> dict:
 
 
 @frappe.whitelist()
-def warehouses(days: int = DEFAULT_DAYS, warehouse: str | None = None) -> dict:
+def warehouses(days: int = DEFAULT_DAYS, warehouse: str | None = None, from_date: str | None = None, to_date: str | None = None) -> dict:
 	"""Stock by location, optionally narrowed to one."""
-	start, end, days = _window(days)
+	start, end, days = _window(days, from_date, to_date)
 	bin_cond = " and b.warehouse = %(warehouse)s" if warehouse else ""
 	sle_cond = " and sle.warehouse = %(warehouse)s" if warehouse else ""
 	args = {"start": start, "end": end, "warehouse": warehouse, "limit": SHORTLIST}
@@ -1179,9 +1193,9 @@ def warehouses(days: int = DEFAULT_DAYS, warehouse: str | None = None) -> dict:
 
 
 @frappe.whitelist()
-def procurement(days: int = DEFAULT_DAYS) -> dict:
+def procurement(days: int = DEFAULT_DAYS, from_date: str | None = None, to_date: str | None = None) -> dict:
 	"""What we are buying, what has arrived, and what is still owed."""
-	start, end, days = _window(days)
+	start, end, days = _window(days, from_date, to_date)
 	args = _args({"start": start, "end": end, "limit": SHORTLIST})
 
 	spend = frappe.db.sql(
@@ -1338,9 +1352,9 @@ def procurement(days: int = DEFAULT_DAYS) -> dict:
 
 
 @frappe.whitelist()
-def accounts(days: int = DEFAULT_DAYS) -> dict:
+def accounts(days: int = DEFAULT_DAYS, from_date: str | None = None, to_date: str | None = None) -> dict:
 	"""Where the money is, and which way it is owed."""
-	start, end, days = _window(days)
+	start, end, days = _window(days, from_date, to_date)
 	money = _money_position()
 	company = _company()
 

@@ -106,7 +106,7 @@ function close() {
 									     line is one the shop does not own yet, and reading the
 									     cart back is exactly when that matters. -->
 									<span v-if="line.sourced" class="font-medium text-ink-green-3">
-										· from {{ line.sourced.supplier }}
+										· {{ Number(line.sourced.buyQty ?? line.qty) }} from {{ line.sourced.supplier }}
 									</span>
 									<span v-if="line.discountPct" class="font-medium text-ink-amber-3">
 										· {{ line.discountPct }}% off

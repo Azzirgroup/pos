@@ -13,6 +13,7 @@ import BarList from '@/components/charts/BarList.vue'
 import DonutChart from '@/components/charts/DonutChart.vue'
 import PairedBars from '@/components/charts/PairedBars.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
+import DateField from '@/components/DateField.vue'
 
 /**
  * The first screen of the day.
@@ -27,12 +28,27 @@ const data = ref(null)
 const days = ref(30)
 const loading = ref(false)
 
+const CUSTOM = 'custom'
 const PERIODS = [
+	{ label: 'Today', value: 1 },
 	{ label: 'Last 7 days', value: 7 },
 	{ label: 'Last 30 days', value: 30 },
 	{ label: 'Last 90 days', value: 90 },
 	{ label: 'Last year', value: 365 },
+	// Any two days, for the questions a rolling window cannot answer: one
+	// afternoon, last month exactly, the week of a promotion.
+	{ label: 'Pick the dates', value: CUSTOM },
 ]
+
+function localDay(d = new Date()) {
+	return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10)
+}
+const fromDate = ref(localDay())
+const toDate = ref(localDay())
+const custom = computed(() => days.value === CUSTOM)
+const range = computed(() =>
+	custom.value ? { fromDate: fromDate.value, toDate: toDate.value } : {},
+)
 
 /**
  * Overview is charts and needs its own layout; the other five are all
@@ -78,17 +94,24 @@ onMounted(async () => {
 	load()
 })
 
-watch([days, tab, branch, warehouse], load)
+watch([days, tab, branch, warehouse], () => load())
+watch([fromDate, toDate], () => {
+	if (custom.value) load()
+})
 
-async function load() {
+/** `force` comes from the Refresh button: a deliberate refresh re-reads rather
+ *  than being answered from the minute-long read cache. */
+async function load(force = false) {
 	loading.value = true
 	try {
 		if (tab.value === 'overview') {
-			data.value = await getDashboard({ days: days.value })
+			data.value = await getDashboard({ days: days.value, ...range.value, force })
 		} else {
 			tabData.value = await getDashboardTab({
 				tab: tab.value,
 				days: days.value,
+				...range.value,
+				force,
 				branch: usesBranch.value && branch.value !== ALL ? branch.value : null,
 				warehouse: usesWarehouse.value && warehouse.value !== ALL ? warehouse.value : null,
 			})
@@ -114,9 +137,17 @@ const period = computed(() => data.value?.period)
  */
 const subtitle = computed(() => {
 	if (!period.value) return 'How the shop is doing'
-	const days = period.value.days
-	const label = PERIODS.find((p) => p.value === days)?.label || `Last ${days} days`
-	const against = days === 365 ? 'the year before' : `the ${days} days before`
+	const n = period.value.days
+	const against = n === 365 ? 'the year before' : n === 1 ? 'the day before' : `the ${n} days before`
+	// Dates when dates were picked: the control no longer says which window it
+	// is, so the heading has to.
+	if (custom.value) {
+		const span = period.value.from === period.value.to
+			? period.value.from
+			: `${period.value.from} to ${period.value.to}`
+		return `${span}, against ${against}`
+	}
+	const label = PERIODS.find((p) => p.value === n)?.label || `Last ${n} days`
 	return `${label}, against ${against}`
 })
 
@@ -262,7 +293,11 @@ const attention = computed(() => {
 				<div class="w-[160px]">
 					<FormControl type="select" v-model="days" :options="PERIODS" />
 				</div>
-				<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load" />
+				<div v-if="custom" class="flex flex-wrap items-center gap-2">
+					<DateField v-model="fromDate" label="From" :max="toDate" compact class="w-[190px]" />
+					<DateField v-model="toDate" label="To" :min="fromDate" compact class="w-[190px]" />
+				</div>
+				<Button variant="subtle" :icon-left="LucideRefreshCw" :loading="loading" @click="load(true)" />
 			</template>
 		</PageHeader>
 

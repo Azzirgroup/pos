@@ -178,9 +178,22 @@ def stock_units(row) -> float:
 
 
 def sourced_units(row) -> float:
-	"""How many stock units a neighbour-sourced line buys: at least what it sells."""
+	"""How many stock units a neighbour-sourced line buys.
+
+	Exactly `buy_qty`, which is a number the cashier chose and is not the same
+	as what the line sells. One line can be part shelf and part neighbour — one
+	of these on the shelf, six fetched from next door, seven sold — and it can
+	also buy more than it sells, when the shop next door only breaks a carton.
+
+	It used to buy `max(buy_qty, qty)`, which quietly bought the shelf's share
+	as well: seven bought for a sale of seven that only needed six, leaving a
+	unit on the shelf the shop never had and a balance nobody could explain.
+	"""
 	factor = flt(row.get("conversion_factor")) or 1
-	return max(flt((row.get("sourced") or {}).get("buy_qty")), flt(row.get("qty"))) * factor
+	buy = flt((row.get("sourced") or {}).get("buy_qty"))
+	if buy <= 0:
+		buy = flt(row.get("qty"))
+	return buy * factor
 
 
 def _clear_negative_shelves(items, company):

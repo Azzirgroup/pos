@@ -321,6 +321,7 @@ def get_purchase(name: str) -> dict:
 	"""
 	doc = frappe.get_doc("Purchase Invoice", name)
 	doc.check_permission("read")
+	selling = _selling_prices([row.item_code for row in doc.items])
 
 	return {
 		"name": doc.name,
@@ -348,6 +349,7 @@ def get_purchase(name: str) -> dict:
 				"item_name": row.item_name,
 				"qty": flt(row.qty),
 				"rate": flt(row.rate),
+				"selling_rate": selling.get(row.item_code),
 				"amount": flt(row.amount),
 				"uom": row.uom or row.stock_uom,
 			}
@@ -406,7 +408,21 @@ def _clean_lines(items, keep_zeros: bool = False) -> list:
 			continue
 		if qty <= 0 and not keep_zeros:
 			continue
-		cleaned.append({"item_code": code, "qty": max(qty, 0), "rate": flt(row.get("rate"))})
+		cleaned.append(
+			{
+				"item_code": code,
+				"qty": max(qty, 0),
+				# What the supplier charges. Allowed to be nothing: the person
+				# entering a delivery often does not know it yet — see
+				# `create_purchase`.
+				"rate": flt(row.get("rate")),
+				# What the shop will sell it for. Not part of the purchase at all;
+				# carried here because the moment stock arrives is when somebody
+				# knows the price, and going to another screen to set it is the
+				# step that does not happen.
+				"selling_rate": flt(row.get("selling_rate")),
+			}
+		)
 
 	if not any(row["qty"] > 0 for row in cleaned):
 		frappe.throw(_("Add at least one item with a quantity above zero"))
@@ -458,14 +474,11 @@ def create_purchase(
 	doc.bill_no = bill_no
 	doc.remarks = remarks
 
-	for line in lines:
-		row = {**line, "warehouse": warehouse}
-		if source:
-			row["from_warehouse"] = source
-		doc.append("items", row)
+	_add_lines(doc, lines, warehouse, source)
 
 	_set_landed_costs(doc, landed_costs, landed_basis)
 	doc.insert()
+	_apply_selling_prices(lines)
 
 	return get_purchase(doc.name) | {
 		"message": _("{0} saved — waiting for the store to confirm what arrived").format(doc.name)
@@ -533,11 +546,8 @@ def update_purchase(name: str, values: dict | str) -> dict:
 			warehouse = doc.set_warehouse or _warehouse()
 			source = doc.set_from_warehouse
 			doc.items = []
-			for line in lines:
-				row = {**line, "warehouse": warehouse}
-				if source:
-					row["from_warehouse"] = source
-				doc.append("items", row)
+			_add_lines(doc, lines, warehouse, source)
+			_apply_selling_prices(lines)
 		else:
 			# Re-read keeping the zeros — see `_clean_lines`. A store keeper's zero
 			# means "none of this came", and it has to reach the loop below to say
@@ -726,12 +736,13 @@ def search_suppliers(search: str | None = None, limit: int = 20) -> list:
 
 @frappe.whitelist()
 def search_purchase_items(search: str | None = None, limit: int = 20) -> list:
-	"""Stock items, with the last price paid already filled in.
+	"""Stock items, with the shelf price and the last price paid.
 
-	The rate comes back with the row because the alternative is a second round
-	trip the moment a line is added, and because "what did we pay for this last
-	time" is the number the person typing actually wants — they correct it when
-	the supplier has changed it, which is far less often than they retype it.
+	`selling_rate` fills the line's selling price, which is the figure the person
+	unpacking a delivery is there to set. `rate` — the last price paid — is only
+	*shown* beside the line: filling the buying price in for them was wrong, as
+	the whole point of leaving it blank is that a neighbour's or supplier's
+	price changes and the owner enters the real one when the bill arrives.
 	"""
 	filters = {"disabled": 0, "is_stock_item": 1}
 	or_filters = (
@@ -748,7 +759,9 @@ def search_purchase_items(search: str | None = None, limit: int = 20) -> list:
 		limit_page_length=min(max(cint(limit) or 20, 1), 50),
 	)
 
-	rates = _last_purchase_rates([r.name for r in rows])
+	codes = [r.name for r in rows]
+	rates = _last_purchase_rates(codes)
+	selling = _selling_prices(codes)
 
 	return [
 		{
@@ -758,6 +771,7 @@ def search_purchase_items(search: str | None = None, limit: int = 20) -> list:
 			"item_name": r.item_name or r.name,
 			"uom": r.stock_uom,
 			"rate": rates.get(r.name, 0.0),
+			"selling_rate": selling.get(r.name, 0.0),
 		}
 		for r in rows
 	]
@@ -924,3 +938,95 @@ def landed_cost_accounts(search: str | None = None, limit: int = 20) -> dict:
 			)
 		],
 	}
+
+
+# --------------------------------------------------------------------------
+# Buying price, selling price
+# --------------------------------------------------------------------------
+
+#: Where the shop's shelf price lives. The same list the till reads.
+SELLING_PRICE_LIST = "Standard Selling"
+
+
+def _selling_price_list() -> str:
+	settings = frappe.get_cached_doc("Cosmestics POS Settings")
+	return settings.selling_price_list or SELLING_PRICE_LIST
+
+
+def _selling_prices(codes: list) -> dict:
+	"""{item_code: shelf price} from the list the till sells at."""
+	codes = [c for c in set(codes or []) if c]
+	if not codes:
+		return {}
+	rows = frappe.get_all(
+		"Item Price",
+		filters={"price_list": _selling_price_list(), "item_code": ("in", codes), "selling": 1},
+		fields=["item_code", "price_list_rate"],
+		order_by="valid_from desc, modified desc",
+		limit_page_length=0,
+	)
+	out = {}
+	for r in rows:
+		out.setdefault(r.item_code, flt(r.price_list_rate))
+	return out
+
+
+def _add_lines(doc, lines: list, warehouse: str, source: str | None):
+	"""Put the lines on the invoice.
+
+	A rate of nothing is left as nothing rather than guessed at: the delivery is
+	being recorded by whoever unpacked it, and the price is often on a bill that
+	arrives later. `allow_zero_valuation_rate` is what lets ERPNext receive such
+	a line at all — without it the submit refuses stock it cannot cost, which
+	would put the whole purchase back on somebody who does not know the figure.
+	"""
+	for line in lines:
+		row = {
+			"item_code": line["item_code"],
+			"qty": line["qty"],
+			"rate": line["rate"],
+			"warehouse": warehouse,
+		}
+		if not flt(line["rate"]):
+			# Blank means blank. Left unstated, ERPNext fills the rate from the
+			# buying price list, so a purchase nobody has costed yet would book a
+			# payable the shop may not owe — and the owner would never know the
+			# figure was a guess.
+			row["price_list_rate"] = 0
+			row["discount_percentage"] = 0
+			row["allow_zero_valuation_rate"] = 1
+		if source:
+			row["from_warehouse"] = source
+		doc.append("items", row)
+
+
+def _apply_selling_prices(lines: list):
+	"""Set the shelf price for any line that named one.
+
+	Written to the selling price list rather than onto the purchase, because a
+	shelf price is not something the supplier is owed — it is what the till will
+	charge, and this is simply the moment the shop knows it.
+	"""
+	price_list = _selling_price_list()
+	for line in lines:
+		rate = flt(line.get("selling_rate"))
+		if rate <= 0:
+			continue
+		existing = frappe.db.get_value(
+			"Item Price",
+			{"price_list": price_list, "item_code": line["item_code"], "selling": 1},
+			["name", "price_list_rate"],
+			as_dict=True,
+		)
+		if existing:
+			if flt(existing.price_list_rate) == rate:
+				continue
+			doc = frappe.get_doc("Item Price", existing.name)
+			doc.price_list_rate = rate
+			doc.save(ignore_permissions=True)
+		else:
+			doc = frappe.new_doc("Item Price")
+			doc.item_code = line["item_code"]
+			doc.price_list = price_list
+			doc.price_list_rate = rate
+			doc.insert(ignore_permissions=True)

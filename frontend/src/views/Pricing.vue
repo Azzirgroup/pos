@@ -7,6 +7,7 @@ import {
 	getPrices,
 	getPriceFilters,
 	previewBulkChange,
+	setItemCosts,
 	applyBulkChange,
 } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
@@ -174,7 +175,11 @@ async function openWith({ mode: m, value: v, rounding: r }, isManual = false) {
 			rounding: r,
 		})
 		manual.value = isManual
-		draft.value = (preview.value.rows || []).map((row) => ({ ...row, new_price: row.new_price }))
+		draft.value = (preview.value.rows || []).map((row) => ({
+			...row,
+			new_price: row.new_price,
+			new_cost: row.cost_kept && row.cost ? String(row.cost) : '',
+		}))
 		previewOpen.value = true
 	} catch (e) {
 		notify(e.message || 'Could not preview', 'bad')
@@ -196,6 +201,18 @@ function setPrice(row, raw) {
 	row.new_price = raw ?? ''
 }
 
+/**
+ * The cost the shop maintains, editable here beside the price it sets.
+ *
+ * It was read-only and showed whatever was last paid — which on this shop
+ * means whatever a neighbour charged that afternoon, so every margin moved on
+ * its own. Typing one here fixes it until somebody changes it again; clearing
+ * it goes back to the last price paid. See `pricing.set_costs`.
+ */
+function setCost(row, raw) {
+	row.new_cost = raw ?? ''
+}
+
 function resetPrice(row) {
 	const original = (preview.value?.rows || []).find((r) => r.item_code === row.item_code)
 	row.new_price = original ? original.new_price : row.old_price
@@ -208,11 +225,19 @@ const priced = computed(() =>
 	draft.value.map((r) => {
 		const raw = String(r.new_price ?? '').trim()
 		const next = raw === '' ? null : Number(raw)
+		const rawCost = String(r.new_cost ?? '').trim()
+		const nextCost = rawCost === '' ? null : Number(rawCost)
+		const effectiveCost = nextCost !== null && !Number.isNaN(nextCost) && nextCost > 0 ? nextCost : flt(r.cost)
 		return {
 			...r,
 			next,
+			next_cost: nextCost,
+			cost_changed:
+				!Number.isNaN(nextCost ?? 0) &&
+				(nextCost ?? 0) !== (r.cost_kept ? flt(r.cost) : 0),
+			effective_cost: effectiveCost,
 			delta: next === null ? 0 : next - flt(r.old_price),
-			below_cost: next !== null && !!r.cost && next < flt(r.cost),
+			below_cost: next !== null && !!effectiveCost && next < effectiveCost,
 			invalid: next === null || Number.isNaN(next) || next < 0,
 			changed: next !== null && !Number.isNaN(next) && next !== flt(r.old_price),
 		}
@@ -221,13 +246,26 @@ const priced = computed(() =>
 
 const belowCostCount = computed(() => priced.value.filter((r) => r.below_cost).length)
 const changedRows = computed(() => priced.value.filter((r) => r.changed && !r.invalid))
+const changedCosts = computed(() =>
+	priced.value.filter((r) => r.cost_changed && !Number.isNaN(r.next_cost ?? 0)),
+)
 const invalidCount = computed(() => priced.value.filter((r) => r.invalid).length)
 
 /** Why Apply cannot run, or null. Same reasoning as `blocker` — a dead button
  *  with no explanation is the thing this screen kept getting wrong. */
+/** What Apply is about to do, counting costs as well as prices. */
+const applyLabel = computed(() => {
+	const bits = []
+	if (changedRows.value.length)
+		bits.push(`${changedRows.value.length} price${changedRows.value.length === 1 ? '' : 's'}`)
+	if (changedCosts.value.length)
+		bits.push(`${changedCosts.value.length} cost${changedCosts.value.length === 1 ? '' : 's'}`)
+	return `Apply ${bits.join(' and ')}`
+})
+
 const applyBlocker = computed(() => {
 	if (invalidCount.value) return `${invalidCount.value} price${invalidCount.value === 1 ? '' : 's'} need a number`
-	if (!changedRows.value.length) return 'Nothing has changed'
+	if (!changedRows.value.length && !changedCosts.value.length) return 'Nothing has changed'
 	return null
 })
 
@@ -238,13 +276,25 @@ async function apply() {
 		// Only what actually differs. Sending the untouched rows too would have the
 		// shop told "3 updated, 47 already at that price" after editing three
 		// prices, which reads as though something went wrong.
-		const res = await applyBulkChange({
-			priceList: priceList.value,
-			changes: changedRows.value.map((r) => ({
-				item_code: r.item_code,
-				new_price: r.next,
-			})),
-		})
+		// Costs first: a price applied against a cost that has just been corrected
+		// should be judged against the new one.
+		let costMessage = ''
+		if (changedCosts.value.length) {
+			const costRes = await setItemCosts(
+				changedCosts.value.map((r) => ({ item_code: r.item_code, cost: r.next_cost || 0 })),
+			)
+			costMessage = costRes.message
+		}
+
+		const res = changedRows.value.length
+			? await applyBulkChange({
+					priceList: priceList.value,
+					changes: changedRows.value.map((r) => ({
+						item_code: r.item_code,
+						new_price: r.next,
+					})),
+				})
+			: { updated: 0, created: 0, unchanged: 0 }
 		previewOpen.value = false
 		await load()
 		// "0 updated" on its own reads as a broken screen. Saying how many were
@@ -254,7 +304,11 @@ async function apply() {
 		if (res.updated) parts.push(`${res.updated} updated`)
 		if (res.created) parts.push(`${res.created} created`)
 		if (res.unchanged) parts.push(`${res.unchanged} already at that price`)
-		notify(parts.join(', ') || 'No prices needed changing', res.updated || res.created ? 'good' : 'bad')
+		if (costMessage) parts.push(costMessage)
+		notify(
+			parts.join(' · ') || 'No prices needed changing',
+			res.updated || res.created || costMessage ? 'good' : 'bad',
+		)
 	} catch (e) {
 		notify(e.message || 'Could not apply', 'bad')
 	} finally {
@@ -387,7 +441,13 @@ function marginTone(pct) {
 							<Badge v-if="row.brand" theme="gray" variant="subtle" :label="row.brand" />
 							<span v-else class="text-p-xs text-ink-gray-5">{{ row.item_group }}</span>
 						</td>
-						<td class="tabular px-3 py-1.5 text-right text-ink-gray-6">
+						<!-- A cost the shop keeps reads plainly; one inferred from the
+						     last purchase is dimmed, because it moves on its own. -->
+						<td
+							class="tabular px-3 py-1.5 text-right"
+							:class="row.cost_kept ? 'text-ink-gray-8' : 'text-ink-gray-4'"
+							:title="row.cost_kept ? 'Cost kept by the shop' : 'Last price paid — set a cost to fix it'"
+						>
 							{{ row.cost ? fmtMoney(row.cost) : '—' }}
 						</td>
 						<td class="tabular px-3 py-1.5 text-right font-medium text-ink-gray-9">
@@ -423,7 +483,8 @@ function marginTone(pct) {
 
 				<p class="mb-2 text-p-xs text-ink-gray-5">
 					Type over any price to change just that item. Untouched rows are left
-					exactly as they are.
+					exactly as they are. Cost is the figure the shop keeps — set it and it
+					stops following whatever a neighbour last charged.
 				</p>
 
 				<div class="max-h-[50vh] overflow-auto">
@@ -446,7 +507,21 @@ function marginTone(pct) {
 								:class="r.below_cost ? 'bg-surface-red-1' : r.changed ? 'bg-surface-amber-1' : ''"
 							>
 								<td class="px-2 py-1 text-ink-gray-8">{{ r.item_name }}</td>
-								<td class="tabular px-2 py-1 text-right text-ink-gray-6">{{ fmtMoney(r.cost) }}</td>
+								<!-- The cost the shop keeps. Typed here it stops moving with
+								     whatever a neighbour charged last; left blank it shows the
+								     last price paid, in grey. -->
+								<td class="px-2 py-1 text-right">
+									<input
+										:value="draft[i].new_cost"
+										type="text"
+										inputmode="decimal"
+										:placeholder="r.cost ? fmtMoney(r.cost) : '—'"
+										class="tabular h-8 w-24 rounded-md border border-outline-gray-2 bg-surface-white px-2 text-right text-ink-gray-8 placeholder-ink-gray-4 focus:outline-none focus:ring-2 focus:ring-outline-gray-3"
+										:aria-label="`Cost for ${r.item_name}`"
+										@input="setCost(draft[i], $event.target.value)"
+										@focus="$event.target.select()"
+									/>
+								</td>
 								<td class="tabular px-2 py-1 text-right text-ink-gray-6">{{ fmtMoney(r.old_price) }}</td>
 								<td class="px-2 py-1 text-right">
 									<input
@@ -494,10 +569,7 @@ function marginTone(pct) {
 					class="w-full !font-bold"
 					:loading="applying"
 					:disabled="!!applyBlocker"
-					:label="
-						applyBlocker ||
-						`Apply to ${changedRows.length} item${changedRows.length === 1 ? '' : 's'}`
-					"
+					:label="applyBlocker || applyLabel"
 					@click="apply"
 				/>
 			</template>

@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { Button, Dialog, Spinner } from 'frappe-ui'
-import { getPartyStatement, setCreditLimit } from '@/data/api'
+import { getPartyStatement, getStatementPrint, sendStatement, setCreditLimit } from '@/data/api'
 import { fmtMoney } from '@/utils/format'
 import { printHtml } from '@/utils/silentPrint'
 import DateField from './DateField.vue'
@@ -14,6 +14,7 @@ import LucidePrinter from '~icons/lucide/printer'
 import LucideFileText from '~icons/lucide/file-text'
 import LucideExternalLink from '~icons/lucide/external-link'
 import LucidePencil from '~icons/lucide/pencil'
+import LucideSend from '~icons/lucide/send'
 
 /**
  * A customer's or supplier's account, opened from the balances list.
@@ -177,42 +178,52 @@ const labels = computed(() =>
 		: { charged: 'Billed to us', settled: 'Paid' },
 )
 
-const esc = (v) =>
-	String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c])
-
-/** A plain printable statement, drawn here so it matches the screen exactly. */
-function print() {
-	const d = data.value
-	if (!d) return
-	const body = d.rows
-		.map(
-			(r) => `<tr><td>${esc(r.posting_date)}</td><td>${esc(r.voucher_type)}</td><td>${esc(r.voucher_no)}</td>
-			<td class="n">${r.charged ? esc(fmtMoney(r.charged)) : ''}</td><td class="n">${r.settled ? esc(fmtMoney(r.settled)) : ''}</td>
-			<td class="n">${esc(fmtMoney(r.balance))}</td></tr>`,
-		)
-		.join('')
-	const html = `<!doctype html><html><head><meta charset="utf-8"><title>Statement — ${esc(d.title)}</title>
-	<style>
-		body{font-family:system-ui,sans-serif;font-size:12px;color:#111;margin:24px}
-		h1{font-size:18px;margin:0 0 2px} .muted{color:#666}
-		table{width:100%;border-collapse:collapse;margin-top:14px}
-		th,td{padding:5px 6px;border-bottom:1px solid #ddd;text-align:left}
-		th{background:#f3f3f3} .n{text-align:right;font-variant-numeric:tabular-nums}
-		.sum{display:flex;gap:24px;margin-top:12px} .sum b{display:block;font-size:14px}
-	</style></head><body>
-	<h1>${esc(d.title)}</h1>
-	<div class="muted">${esc(d.party_type)} statement · ${esc(d.from_date)} to ${esc(d.to_date)}${d.company ? ' · ' + esc(d.company) : ''}</div>
-	<div class="muted">${[d.mobile_no, d.email_id, d.location].filter(Boolean).map(esc).join(' · ')}</div>
-	<div class="sum">
-		<div>Opening<b>${esc(fmtMoney(d.opening))}</b></div>
-		<div>Closing<b>${esc(fmtMoney(d.closing))}</b></div>
-		${d.credit_limit != null ? `<div>Credit limit<b>${esc(fmtMoney(d.credit_limit))}</b></div>` : ''}
-	</div>
-	<table><thead><tr><th>Date</th><th>Type</th><th>Document</th><th class="n">${labels.value.charged}</th><th class="n">${labels.value.settled}</th><th class="n">Balance</th></tr></thead>
-	<tbody><tr><td colspan="5">Balance brought forward</td><td class="n">${esc(fmtMoney(d.opening))}</td></tr>${body}</tbody></table>
-	</body></html>`
-	printHtml(html, () => emit('notify', { message: 'Could not reach the printer', tone: 'bad' }))
+/**
+ * Print what the shop's invoices look like, not a page drawn here.
+ *
+ * The statement is rendered on the server (`parties.statement_print`) so the
+ * printed sheet carries the shop's letterhead and is byte-for-byte the page
+ * that gets sent on WhatsApp — two copies of one document, not two documents.
+ */
+const printing = ref(false)
+async function print() {
+	if (!data.value) return
+	printing.value = true
+	try {
+		const res = await getStatementPrint({
+			partyType: props.partyType,
+			party: props.party,
+			fromDate: fromDate.value,
+			toDate: toDate.value,
+		})
+		printHtml(res.html, () => emit('notify', { message: 'Could not reach the printer', tone: 'bad' }))
+	} catch (e) {
+		emit('notify', { message: e.message || 'Could not build the statement', tone: 'bad' })
+	} finally {
+		printing.value = false
+	}
 }
+
+/** Send it to the customer, with the shop's own covering line. */
+const sending = ref(false)
+async function sendOnWhatsapp() {
+	if (!data.value) return
+	sending.value = true
+	try {
+		const res = await sendStatement({
+			partyType: props.partyType,
+			party: props.party,
+			fromDate: fromDate.value,
+			toDate: toDate.value,
+		})
+		emit('notify', { message: res.message, tone: res.sent ? 'good' : 'bad' })
+	} catch (e) {
+		emit('notify', { message: e.message || 'Could not send the statement', tone: 'bad' })
+	} finally {
+		sending.value = false
+	}
+}
+
 </script>
 
 <template>
@@ -298,7 +309,18 @@ function print() {
 						<div class="mr-auto text-p-base font-semibold text-ink-gray-9">Statement</div>
 						<DateField v-model="fromDate" label="From" :max="toDate" class="w-[170px]" />
 						<DateField v-model="toDate" label="To" :min="fromDate" class="w-[170px]" />
-						<Button :icon-left="LucidePrinter" label="Print" :disabled="!data" @click="print" />
+						<Button :icon-left="LucidePrinter" label="Print" :loading="printing" :disabled="!data" @click="print" />
+						<!-- The same page, sent to the number on the record. -->
+						<Button
+							:icon-left="LucideSend"
+							theme="green"
+							variant="subtle"
+							label="WhatsApp"
+							:loading="sending"
+							:disabled="!data || !data.mobile_no"
+							:title="data && !data.mobile_no ? 'No phone number on this record' : 'Send the statement'"
+							@click="sendOnWhatsapp"
+						/>
 					</div>
 
 					<div v-if="loading" class="grid h-32 place-items-center">

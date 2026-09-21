@@ -108,7 +108,14 @@ export function clearCache() {
  * @param args    call arguments
  * @param fetcher () => Promise, the real request
  */
-export function withCache(method, args, fetcher) {
+export function withCache(method, args, fetcher, { force = false } = {}) {
+	// A deliberate refresh must not be answered from memory: pressing Refresh
+	// and seeing the same figures is how a screen comes to look stuck.
+	if (force) {
+		const key = keyFor(method, args)
+		store.delete(key)
+		inflight.delete(key)
+	}
 	if (!CACHEABLE.has(method)) {
 		// A write. Let it run, then drop everything — the next read must see it.
 		return fetcher().then(
@@ -126,7 +133,7 @@ export function withCache(method, args, fetcher) {
 	}
 
 	const key = keyFor(method, args)
-	const hit = store.get(key)
+	const hit = force ? null : store.get(key)
 	const fresh = hit && Date.now() - hit.at < TTL_MS
 
 	// Deduplicate concurrent identical reads regardless of cache state.
