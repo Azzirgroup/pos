@@ -1,0 +1,178 @@
+{
+ "actions": [],
+ "creation": "2026-09-24 18:00:00.000000",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "naming_series",
+  "sales_order",
+  "customer",
+  "phone",
+  "amount",
+  "column_break_req",
+  "status",
+  "mpesa_receipt",
+  "paid_amount",
+  "paid_on",
+  "daraja_section",
+  "merchant_request_id",
+  "checkout_request_id",
+  "column_break_daraja",
+  "result_code",
+  "result_desc",
+  "last_query",
+  "callback_section",
+  "callback"
+ ],
+ "fields": [
+  {
+   "fieldname": "naming_series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "MPR-.YYYY.-.#####",
+   "default": "MPR-.YYYY.-.#####",
+   "hidden": 1
+  },
+  {
+   "fieldname": "sales_order",
+   "fieldtype": "Link",
+   "options": "Sales Order",
+   "label": "Sales Order",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "customer",
+   "fieldtype": "Link",
+   "options": "Customer",
+   "label": "Customer",
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "phone",
+   "fieldtype": "Data",
+   "label": "Phone"
+  },
+  {
+   "fieldname": "amount",
+   "fieldtype": "Currency",
+   "label": "Amount Requested",
+   "in_list_view": 1
+  },
+  {
+   "fieldname": "column_break_req",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "label": "Status",
+   "options": "Pending\nPaid\nFailed\nCancelled\nTimed Out",
+   "default": "Pending",
+   "in_list_view": 1,
+   "in_standard_filter": 1
+  },
+  {
+   "fieldname": "mpesa_receipt",
+   "fieldtype": "Data",
+   "label": "M-Pesa Receipt",
+   "in_list_view": 1,
+   "search_index": 1
+  },
+  {
+   "fieldname": "paid_amount",
+   "fieldtype": "Currency",
+   "label": "Amount Paid"
+  },
+  {
+   "fieldname": "paid_on",
+   "fieldtype": "Datetime",
+   "label": "Paid On"
+  },
+  {
+   "fieldname": "daraja_section",
+   "fieldtype": "Section Break",
+   "label": "Daraja"
+  },
+  {
+   "fieldname": "merchant_request_id",
+   "fieldtype": "Data",
+   "label": "Merchant Request ID"
+  },
+  {
+   "fieldname": "checkout_request_id",
+   "fieldtype": "Data",
+   "label": "Checkout Request ID",
+   "search_index": 1
+  },
+  {
+   "fieldname": "column_break_daraja",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "result_code",
+   "fieldtype": "Data",
+   "label": "Result Code"
+  },
+  {
+   "fieldname": "result_desc",
+   "fieldtype": "Small Text",
+   "label": "Result"
+  },
+  {
+   "fieldname": "last_query",
+   "fieldtype": "Datetime",
+   "label": "Last Status Query"
+  },
+  {
+   "fieldname": "callback_section",
+   "fieldtype": "Section Break",
+   "label": "Callback",
+   "collapsible": 1
+  },
+  {
+   "fieldname": "callback",
+   "fieldtype": "Code",
+   "options": "JSON",
+   "label": "Callback Body"
+  }
+ ],
+ "index_web_pages_for_search": 1,
+ "links": [],
+ "modified": "2026-09-24 18:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Cosmestics",
+ "name": "Cosmestics Mpesa Request",
+ "owner": "Administrator",
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": [],
+ "autoname": "naming_series:",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Accounts User"
+  },
+  {
+   "read": 1,
+   "report": 1,
+   "role": "Sales User"
+  }
+ ],
+ "title_field": "sales_order",
+ "track_changes": 1
+}

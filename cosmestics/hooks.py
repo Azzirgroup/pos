@@ -61,7 +61,12 @@ doctype_js = {
 	"POS Closing Entry": "public/js/pos_shift_cashiers.js",
 	# Approve / Reject for a stock transfer waiting on the store keeper.
 	"Material Request": "public/js/material_request_approval.js",
+	# Online shop orders: a banner with their status and history.
+	"Sales Order": "public/js/sales_order_online.js",
 }
+
+# Online shop orders show their own status in the Sales Order list.
+doctype_list_js = {"Sales Order": "public/js/sales_order_list.js"}
 
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}
@@ -84,6 +89,7 @@ website_route_rules = [
 	# under their own prefixes so a slug can never shadow /shop/search.
 	{"from_route": "/shop/c/<slug>", "to_route": "shop/category"},
 	{"from_route": "/shop/p/<slug>", "to_route": "shop/product"},
+	{"from_route": "/shop/orders/<order>", "to_route": "shop/order"},
 ]
 
 # The tile opens the **dashboard**, not the till.
@@ -116,6 +122,15 @@ doc_events = {
 	"Item Price": {
 		"on_update": "cosmestics.shop.refresh_later",
 		"on_trash": "cosmestics.shop.refresh_later",
+	},
+	# Online shop accounts: a password typed on a Customer (desk or sign-up)
+	# is hashed and dropped before the row is written.
+	"Customer": {
+		"validate": "cosmestics.api.shop_account.hash_customer_password",
+	},
+	# A rider marking an online order's delivery Delivered completes the order.
+	"Cosmestics Delivery": {
+		"on_update": "cosmestics.online_orders.on_delivery_update",
 	},
 	"User": {
 		# Hashes a typed till PIN and drops the digits before the row is written,

@@ -41,12 +41,17 @@
 
 					{% if is_family_page %}
 						<p class="note">Choose {{ choices | map(attribute='attribute') | join(' and ') | lower }} above to see its price and stock.</p>
-					{% elif status.key == 'out' %}
-						<p class="note">This one is sold out at the moment.{% if chat_url %} <a href="{{ chat_url }}" target="_blank" rel="noopener noreferrer" style="color:var(--primary);font-weight:600">Ask us</a> when it's back.{% endif %}</p>
-					{% elif whatsapp %}
-						<a class="btn-wa" href="{{ whatsapp }}" target="_blank" rel="noopener noreferrer">{{ icon('whatsapp') }}Order on WhatsApp</a>
 					{% else %}
-						<p class="note">Available in store.</p>
+						{# The buy box — live stock, quantity, Add to cart — is the shop app's (AddToCart.vue). #}
+						<div id="cc-add" data-code="{{ p.code }}" data-name="{{ name }}" data-price="{{ price }}" data-stock="{{ available }}">
+							<div class="buybox">
+								<div class="stock-line{% if available <= 0 %} out{% elif available <= 5 %} low{% endif %}"><span class="stock-dot"></span>
+									{% if available <= 0 %}Out of stock{% elif available <= 5 %}Only <b>{{ available }}</b> left in stock{% else %}<b>{{ available }}</b> in stock{% endif %}
+								</div>
+								{% if available > 0 %}<button type="button" class="btn btn-primary btn-block" data-add-to-cart="{{ p.code }}">{{ icon('bag', 'i-md') }}Add to cart</button>{% endif %}
+							</div>
+						</div>
+						{% if whatsapp %}<a class="wa-ask" href="{{ whatsapp }}" target="_blank" rel="noopener noreferrer">{{ icon('whatsapp', 'i-md') }}Questions? Ask us on WhatsApp</a>{% endif %}
 					{% endif %}
 
 					<div class="perks">

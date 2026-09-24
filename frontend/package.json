@@ -5,8 +5,10 @@
 	"type": "module",
 	"scripts": {
 		"dev": "vite",
-		"build": "vite build",
-		"serve": "vite preview"
+		"build": "vite build && vite build --config vite.shop.config.js",
+		"serve": "vite preview",
+		"build:shop": "vite build --config vite.shop.config.js",
+		"dev:shop": "vite build --watch --config vite.shop.config.js"
 	},
 	"dependencies": {
 		"@vitejs/plugin-vue": "^5.2.3",

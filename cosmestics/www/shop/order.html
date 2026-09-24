@@ -1,0 +1,8 @@
+{% extends "templates/shop/base.html" %}
+
+{% block content %}{% autoescape true %}
+<div id="cc-page" data-page="order" data-order="{{ order_name }}">
+	<div class="wide co-loading"><span class="spinner"></span> Loading…</div>
+	<noscript><div class="wide co-empty"><h1>Please turn on JavaScript</h1><p>Your cart, checkout and order tracking need it.</p></div></noscript>
+</div>
+{% endautoescape %}{% endblock %}

@@ -4,6 +4,119 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 62. Online orders: accounts, cart, M-Pesa, workflow, tracking (Vue)
+
+**Customers sign in with their Customer record, not a Frappe User.** The
+Customer gets Shop Username / Shop Phone / Shop Email / Can Sign In, plus a
+"Set Shop Password" box. Whatever is typed there, from the desk or at sign-up,
+is hashed with Frappe's pbkdf2 context on `validate`
+(`shop_account.hash_customer_password`) and the box empties itself. Sessions
+are our own: an HttpOnly `cc_shop` cookie mapped to the Customer in Redis
+(`current_customer()`). State-changing calls need an `X-Shop: 1` header,
+which is the CSRF guard for a session Frappe does not know about. Login
+failures are vague and rate-limited per IP and per account.
+
+**Sign-up confirms the password** (checked live in the dialog and again by
+`signup(confirm_password=…)`). **Sign in with Google** uses Google Identity
+Services: the dialog loads Google's own button only when a Client ID is set
+(Cosmestics POS Settings → Google Client ID, or Frappe's Google Social Login
+Key). `shop_account.google_login` verifies the ID token with google-auth
+against that client ID, matches the Customer by `cosmestics_google_sub` and
+then by a verified shop email, or creates one in the online group. Google
+gives no phone number, so the account page and checkout ask for one
+(`needs_phone`), and Google-only accounts have no password form.
+
+**Delivery is two options: pickup (free) or delivery at the flat
+`shop_delivery_fee`** (set to KES 1 for testing), used whenever no Cosmestics
+Delivery Area is enabled. Adding areas switches checkout to per-area fees.
+
+**Online sign-ups join one Customer Group** (Cosmestics POS Settings →
+Online Customer Group, default **Online Customers**, created by
+`ensure_online_customer_group` on migrate and on the first sign-up if
+missing). A shop that picks another group keeps it.
+
+**The cart is a Draft online Sales Order.** It is flagged
+`cosmestics_online_order` with `cosmestics_order_status`, and the workflow
+lives in `cosmestics/online_orders.py`:
+Draft → Order Received → Processing → Out for Delivery | Ready for Pickup →
+Complete (or Cancelled). Every change appends to the `cosmestics_status_log`
+child table (a new doctype, Cosmestics Order Status Log), which is where the
+customer's "took 1 day 1 hour / 5 hours so far" comes from.
+
+- **Stock:** `online_orders.available()` is shelf qty − Bin.reserved_qty
+  (paid orders) − other shoppers' Draft carts touched within
+  `shop_hold_minutes` (default 30). Steppers cap at it, `set_line` enforces
+  it, and `pay` re-checks it.
+- **Guest permissions:** a shopper is Guest, and ERPNext checks permissions
+  deep inside a Sales Order save (`get_item_details`). So the SO saves run
+  inside `online_orders.as_shop()` (Administrator), after the endpoint has
+  checked ownership.
+- **Delivery fee:** each Cosmestics Delivery Area has a fee, charged as the
+  non-stock `ONLINE-DELIVERY` item line. Pickup is free.
+
+**M-Pesa (`api/shop_payments.py`).** Same Daraja production endpoints as
+DukaPlus, with its credentials held in Cosmestics POS Settings (Password
+fields). Differences from DukaPlus:
+
+- The STK password and timestamp are computed per request.
+- No web request is held open polling.
+- The callback URL carries a secret token and must match a request we made.
+- If the callback is late (15s+), `payment_status` asks Daraja's
+  `stkpushquery`. That also makes local testing possible, since the callback
+  cannot reach localhost.
+
+Paid means: record the payment and commit first, then `finalize`, which
+submits the SO (Order Received) and books a Payment Entry against it as an
+advance. It is idempotent under a row lock.
+
+**Importing the credentials was blocked for me (a secrets guard), so it must
+be run by a person:**
+
+    bench --site <site> execute cosmestics.setup.online_setup.import_mpesa_from_env
+
+It reads `/home/frappe/dukaplus/apps/dukaplus/.env`, recovers the passkey from
+DukaPlus's precomputed password and verifies it, and prints nothing secret.
+DukaPlus's short code is **4237271**, and both it and PartyB point there.
+Confirm that paybill is where Classic Cosmetics' money should land. The
+account reference is the order number (compacted to 12 characters). The
+callback base is `https://classiccosmetics.frappe.cloud/`.
+
+**Staff: "Online orders" in the staff app** (`/pos/online-orders`,
+`views/OnlineOrders.vue`, API `api/online_orders.py`):
+
+- The queue lists paid, unfinished orders, oldest first, with time in the
+  current status (amber after 2 hours untouched) and counts per status.
+- "Send out for delivery" **bills** the order (Sales Invoice from the SO,
+  update_stock, advance allocated) and creates a Dispatched Cosmestics
+  Delivery with the rider (courier defaults to "In-house"). The rider marking
+  it Delivered completes the order (`on_delivery_update` hook).
+- "Ready for pickup" also bills; "Mark complete" finishes it.
+- Cancel needs a reason. A paid order is Closed and the refund is manual.
+- The desk Sales Order list shows "Online · <status>", and the form gets a
+  banner with the history.
+
+**Shop Vue layer** (`frontend/shop`, built by `vite.shop.config.js` into
+`cosmestics/public/shop/shop.js`; `yarn build` now builds it too, and
+`public/shop/` is git-ignored like `public/frontend/`). It is plain Vue
+(~44 KB gzip) with no frappe-ui, styled by `shop.css`. It teleports into
+spots the Jinja pages leave (`#cc-header-actions`, `#cc-add`, `#cc-page`),
+which hold server fallbacks that `main.js` clears first, so pages stay
+indexable and shareable. Pages: /shop/checkout, /shop/account and
+/shop/orders/<name> (noindex). Card buttons use `data-add-to-cart` via event
+delegation.
+
+**Build gotcha:** on this bench the POS build's last step
+(`frappeui-build-config-plugin` copying `public/frontend/index.html` →
+`www/pos.html`) failed with EPERM *after* removing the old file, which leaves
+/pos broken. If you see "Error copying index.html", run
+`cp cosmestics/public/frontend/index.html cosmestics/www/pos.html`.
+
+**After pulling:** `bench migrate` (the new doctypes, custom fields,
+delivery item, callback token and scheduler job), then `bench build`. Add
+Delivery Areas, the Pickup Instructions, and run the M-Pesa import.
+
+    bench --site <site> execute cosmestics.setup.online_check.run   # 40 checks, rolls back
+
 ### 61. A public shop at /shop
 
 The first piece of the online shop: a catalog customers can browse, search and

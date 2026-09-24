@@ -1023,6 +1023,12 @@ _STROKE = {
 	"mpesa": '<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>',
 	"cash": '<rect width="20" height="12" x="2" y="6" rx="2"/><circle cx="12" cy="12" r="2"/><path d="M6 12h.01M18 12h.01"/>',
 	"card": '<rect width="20" height="14" x="2" y="5" rx="2"/><line x1="2" x2="22" y1="10" y2="10"/>',
+	"user": '<circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/>',
+	"bag": '<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4Z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
+	"check": '<path d="M20 6 9 17l-5-5"/>',
+	"lock": '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+	"package": '<path d="M11 21.73a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73z"/><path d="M12 22V12"/><path d="m3.3 7 7.703 4.734a2 2 0 0 0 1.994 0L20.7 7"/><path d="m7.5 4.27 9 5.15"/>',
+	"logout": '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" x2="9" y1="12" y2="12"/>',
 }
 _FILL = {
 	"whatsapp": '<path d="M12 2a10 10 0 0 0-8.6 15.1L2 22l5-1.3A10 10 0 1 0 12 2Zm0 18.2a8.2 8.2 0 0 1-4.2-1.2l-.3-.2-3 .8.8-2.9-.2-.3A8.2 8.2 0 1 1 12 20.2Zm4.5-6.1c-.2-.1-1.5-.7-1.7-.8s-.4-.1-.6.1-.7.8-.8 1-.3.2-.5.1a6.7 6.7 0 0 1-3.3-2.9c-.3-.4.2-.4.7-1.4.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.6-.4h-.5a1 1 0 0 0-.7.3 3 3 0 0 0-.9 2.2 5.1 5.1 0 0 0 1.1 2.7 11.7 11.7 0 0 0 4.5 4c1.7.7 2.3.8 3.2.6a2.7 2.7 0 0 0 1.8-1.2 2.2 2.2 0 0 0 .1-1.3c0-.1-.2-.2-.5-.3Z"/>',
@@ -1219,6 +1225,14 @@ def suggest(q: str = "") -> list[dict]:
 	return out
 
 
+def _asset_version(name: str) -> str:
+	"""`?v=<mtime>` for a built shop asset, or "" if it has not been built."""
+	import os
+
+	path = frappe.get_app_path("cosmestics", "public", "shop", name)
+	return str(int(os.path.getmtime(path))) if os.path.exists(path) else ""
+
+
 def base_context(context, *, title, description="", canonical="", noindex=False):
 	"""The fields `templates/shop/base.html` reads, set in one place so no page
 	forgets its canonical URL or its title."""
@@ -1238,6 +1252,17 @@ def base_context(context, *, title, description="", canonical="", noindex=False)
 	context.year = nowdate()[:4]
 	context.icon = icon
 	context.icon_sprite = icon_sprite()
+	context.shop_js = _asset_version("shop.js")
+	from cosmestics.api.shop_account import google_client_id
+
+	context.google_client_id = google_client_id()
+	# A staff member signed in to the desk in the same browser makes Frappe
+	# want its CSRF token on the shop's POSTs; shoppers themselves are Guest.
+	context.csrf_token = (
+		frappe.sessions.get_csrf_token()
+		if frappe.session.user != "Guest" and getattr(frappe.local, "session_obj", None)
+		else ""
+	)
 	context.chat_url = chat_link()
 	context.shop_currency = snapshot()["currency"]
 	context.filter_categories = categories()

@@ -52,6 +52,9 @@ def setup_prerequisites():
 	group = ensure_neighbour_supplier_group()
 	ensure_neighbour_shop_field()
 	ensure_hide_online_field()
+	from cosmestics.setup.online_setup import setup_online_orders
+
+	setup_online_orders()
 	ensure_default_neighbour(group)
 	ensure_mpesa_mode_of_payment()
 	ensure_mpesa_channel_modes()

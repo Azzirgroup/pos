@@ -54,6 +54,11 @@ def get_context(context):
 	context.is_family_page = is_family_page
 	context.description_html = desc_html
 	context.whatsapp = "" if is_family_page else shop.whatsapp_link(p, shop.absolute(url))
+	# What a customer can actually buy online right now (net of paid orders
+	# and other shoppers' held carts). The shop app refreshes it live.
+	from cosmestics.online_orders import available
+
+	context.available = 0 if is_family_page else available([p["code"]]).get(p["code"], 0)
 	context.related = [shop.card(x) for x in shop.related(p)]
 	context.share = shop.share_links(shop.absolute(url), name)
 	context.specs = _specs(p, category, status)

@@ -1,7 +1,6 @@
-{# The card's action: PLM's green WhatsApp "Order", or why it is not offered. #}
+{# The card's action: add to cart (handled by the shop app), choose options, or sold out. #}
 {% autoescape true %}
 {% if c.has_choices %}<a class="btn-order is-choose" href="{{ c.url }}">Choose options</a>
 {% elif c.status.key == 'out' %}<span class="btn-order is-off">Out of stock</span>
-{% elif c.order_url %}<a class="btn-order" href="{{ c.order_url }}" target="_blank" rel="noopener noreferrer">{{ icon('whatsapp', 'i-md') }}Order</a>
-{% else %}<a class="btn-order is-choose" href="{{ c.url }}">View</a>{% endif %}
+{% else %}<button type="button" class="btn-order" data-add-to-cart="{{ c.code }}">{{ icon('bag', 'i-md') }}Add to cart</button>{% endif %}
 {% endautoescape %}
