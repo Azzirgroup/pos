@@ -38,7 +38,23 @@
   "column_break_till",
   "require_shift_to_sell",
   "one_shift_per_day",
-  "show_item_images"
+  "show_item_images",
+  "shop_section",
+  "shop_tagline",
+  "shop_subtitle",
+  "shop_whatsapp",
+  "column_break_shop",
+  "shop_warehouse",
+  "shop_low_stock",
+  "shop_contact_section",
+  "shop_phone",
+  "shop_email",
+  "column_break_shop_contact",
+  "shop_facebook",
+  "shop_instagram",
+  "shop_brand_color",
+  "shop_address",
+  "shop_hours"
  ],
  "fields": [
   {
@@ -262,12 +278,105 @@
    "fieldname": "show_item_images",
    "fieldtype": "Check",
    "label": "Show Item Photos on the Till"
+  },
+  {
+   "fieldname": "shop_section",
+   "fieldtype": "Section Break",
+   "label": "Online Shop",
+   "description": "The public catalog at /shop. Prices come from the Selling Price List above."
+  },
+  {
+   "fieldname": "shop_tagline",
+   "fieldtype": "Data",
+   "label": "Headline",
+   "description": "The large line on the shop's front page, and its description in search results. Leave blank for \"Beauty and personal care\"."
+  },
+  {
+   "fieldname": "shop_subtitle",
+   "fieldtype": "Data",
+   "label": "Sub-headline",
+   "description": "The smaller line under the headline. Leave blank for \"Skin, body and hair care, fragrance & wellness\"."
+  },
+  {
+   "fieldname": "shop_whatsapp",
+   "fieldtype": "Data",
+   "options": "Phone",
+   "label": "Orders WhatsApp Number",
+   "description": "Shown publicly. Each product gets an Order on WhatsApp button that opens a chat with this number, pre-filled with the product and price. Leave blank to hide the button."
+  },
+  {
+   "fieldname": "column_break_shop",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "shop_warehouse",
+   "fieldtype": "Link",
+   "options": "Warehouse",
+   "label": "Online Stock Warehouse",
+   "description": "Whose shelf the In stock / Out of stock badge counts. Leave blank to use the warehouse of the till's POS Profile."
+  },
+  {
+   "default": "3",
+   "fieldname": "shop_low_stock",
+   "fieldtype": "Int",
+   "label": "\"Only a Few Left\" At",
+   "description": "At or below this many, a product shows Only a few left instead of In stock. Exact counts are never shown."
+  },
+  {
+   "fieldname": "shop_contact_section",
+   "fieldtype": "Section Break",
+   "label": "Online Shop Contacts",
+   "description": "Shown in the shop's header, contact strip and footer. Anything left blank is simply not shown."
+  },
+  {
+   "fieldname": "shop_phone",
+   "fieldtype": "Data",
+   "options": "Phone",
+   "label": "Public Phone Number"
+  },
+  {
+   "fieldname": "shop_email",
+   "fieldtype": "Data",
+   "options": "Email",
+   "label": "Public Email"
+  },
+  {
+   "fieldname": "column_break_shop_contact",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "shop_facebook",
+   "fieldtype": "Data",
+   "label": "Facebook Page URL"
+  },
+  {
+   "fieldname": "shop_instagram",
+   "fieldtype": "Data",
+   "label": "Instagram URL"
+  },
+  {
+   "fieldname": "shop_brand_color",
+   "fieldtype": "Color",
+   "label": "Brand Colour",
+   "description": "The shop's main colour: the category bar, buttons and prices. Leave blank for the house berry (#7a2e4e)."
+  },
+  {
+   "fieldname": "shop_address",
+   "fieldtype": "Small Text",
+   "label": "Shop Address",
+   "description": "Where customers can find the shop, shown in the footer. Leave blank to use the company's address from ERPNext."
+  },
+  {
+   "fieldname": "shop_hours",
+   "fieldtype": "Data",
+   "label": "Opening Hours",
+   "description": "For example: Mon-Sat 8am-8pm, Sun 10am-4pm."
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-07-26 23:20:00.000000",
+ "modified": "2026-09-24 17:00:00.000000",
  "modified_by": "Administrator",
  "module": "Cosmestics",
  "name": "Cosmestics POS Settings",

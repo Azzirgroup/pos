@@ -1,0 +1,22 @@
+{#
+	A titled slider of product cards — the home page's rows. A slider rather
+	than a grid so a very wide window shows more cards instead of stretching
+	six, and a phone swipes instead of scrolling past a wall of them.
+#}
+{% autoescape true %}
+<section class="section">
+	<div class="sec-head">
+		<div>
+			<h2 class="h2">{{ row.title }}</h2>
+		</div>
+		{% if row.url %}<a class="view-all" href="{{ row.url }}">View all {{ icon('right', 'i-sm') }}</a>{% endif %}
+	</div>
+	<div class="scroller" data-scroller>
+		<button class="scroll-btn prev" type="button" aria-label="Previous products">{{ icon('left') }}</button>
+		<div class="scroll-track">
+			{% for c in row.cards %}{% set eager = row.eager and loop.index <= 5 %}{% include "templates/shop/card.html" %}{% endfor %}
+		</div>
+		<button class="scroll-btn next" type="button" aria-label="Next products">{{ icon('right') }}</button>
+	</div>
+</section>
+{% endautoescape %}

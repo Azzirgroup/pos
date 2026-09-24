@@ -1,0 +1,102 @@
+{% extends "templates/shop/base.html" %}
+
+{% block content %}{% autoescape true %}
+<div class="pdp wide">
+	<nav class="crumbs" aria-label="Breadcrumb">
+		<a href="/shop">Home</a><span>/</span>
+		<a href="/shop/catalog">Catalog</a><span>/</span>
+		{% if category %}<a href="/shop/c/{{ category.slug }}">{{ category.label }}</a><span>/</span>{% endif %}
+		<span class="here">{{ name }}</span>
+	</nav>
+
+	<div class="pdp-grid{% if shop.phone or chat_url or shop.email %} has-aside{% endif %}">
+		<div class="pdp-main">
+			<div class="pdp-top">
+				<div class="gallery">
+					<span class="ph" aria-hidden="true"><b>{{ card.initials }}</b>No image</span>
+					{% if image %}<img src="{{ image }}" alt="{{ name }}" width="800" height="800" fetchpriority="high" onerror="this.remove()" />{% endif %}
+				</div>
+
+				<div class="pdp-info">
+					{% if category %}<a class="pdp-brand" href="/shop/c/{{ category.slug }}">Category: {{ category.label }}</a>{% endif %}
+					<h1>{{ name }}</h1>
+
+					<div class="pdp-price">
+						<span class="price">{{ price }}</span>
+						<span class="status status-{{ status.key }}">{{ status.label }}</span>
+					</div>
+
+					{% for ch in choices %}
+					<div>
+						<p class="choice-label">{{ ch.attribute }}{% for o in ch.options if o.selected %}: <span>{{ o.value }}</span>{% endfor %}</p>
+						<div class="tags">
+							{% for o in ch.options %}
+							<a class="tag opt{% if o.selected %} is-selected{% endif %}{% if not o.available %} is-unavailable{% endif %}"
+								href="{{ o.url }}" {% if o.selected %}aria-current="true"{% endif %}
+								{% if not o.available %}title="Out of stock"{% endif %}>{{ o.value }}</a>
+							{% endfor %}
+						</div>
+					</div>
+					{% endfor %}
+
+					{% if is_family_page %}
+						<p class="note">Choose {{ choices | map(attribute='attribute') | join(' and ') | lower }} above to see its price and stock.</p>
+					{% elif status.key == 'out' %}
+						<p class="note">This one is sold out at the moment.{% if chat_url %} <a href="{{ chat_url }}" target="_blank" rel="noopener noreferrer" style="color:var(--primary);font-weight:600">Ask us</a> when it's back.{% endif %}</p>
+					{% elif whatsapp %}
+						<a class="btn-wa" href="{{ whatsapp }}" target="_blank" rel="noopener noreferrer">{{ icon('whatsapp') }}Order on WhatsApp</a>
+					{% else %}
+						<p class="note">Available in store.</p>
+					{% endif %}
+
+					<div class="perks">
+						<div>{{ icon('shield', 'i-md') }}Genuine products, sourced by our shop</div>
+						<div>{{ icon('truck', 'i-md') }}Delivery or pick-up from our counter</div>
+						<div>{{ icon('headset', 'i-md') }}Beauty advice on WhatsApp</div>
+					</div>
+
+					<div class="share">
+						<h3>Share</h3>
+						<div class="share-row">
+							{% for s in share %}<a class="{{ s.cls }}" href="{{ s.href }}" target="_blank" rel="noopener noreferrer" title="{{ s.label }}" aria-label="{{ s.label }}">{{ icon(s.icon, 'i-md') }}</a>{% endfor %}
+						</div>
+					</div>
+				</div>
+			</div>
+
+			{% if description_html %}
+			<section class="pdp-sec">
+				<h2 class="h2">Product Description</h2>
+				<div class="desc">{{ description_html | safe }}</div>
+			</section>
+			{% endif %}
+
+			<section class="pdp-sec">
+				<h2 class="h2">Specifications</h2>
+				<dl class="specs">
+					{% for label, value in specs %}<div class="spec"><dt>{{ label }}</dt><dd>{{ value }}</dd></div>{% endfor %}
+				</dl>
+			</section>
+		</div>
+
+		{% if shop.phone or chat_url or shop.email %}
+		<aside class="aside">
+			<div class="aside-card">
+				<h3>For bulk purchase</h3>
+				<p>Buying for a salon, a shop or an event? Talk to us for quantities and prices.</p>
+				{% if shop.phone %}<a href="tel:{{ shop.phone }}">{{ icon('phone', 'i-md') }}{{ shop.phone_display }}</a>{% endif %}
+				{% if chat_url %}<a href="{{ chat_url }}" target="_blank" rel="noopener noreferrer">{{ icon('whatsapp', 'i-md') }}WhatsApp us</a>{% endif %}
+				{% if shop.email %}<a href="mailto:{{ shop.email }}">{{ icon('mail', 'i-md') }}{{ shop.email }}</a>{% endif %}
+			</div>
+		</aside>
+		{% endif %}
+	</div>
+
+	{% if related %}
+	<div class="related">
+		{% set row = {"title": "Related products", "url": ("/shop/c/" ~ category.slug) if category else "/shop/catalog", "cards": related} %}
+		{% include "templates/shop/row.html" %}
+	</div>
+	{% endif %}
+</div>
+{% endautoescape %}{% endblock %}

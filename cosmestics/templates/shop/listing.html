@@ -1,0 +1,159 @@
+{#
+	The catalog layout shared by /shop/catalog, /shop/c/<slug> and search —
+	PLM's: filters on the left (a full-screen panel on phones), a toolbar with
+	count, sort and grid / list, then the products and numbered pages.
+
+	Reads `listing` (from `shop.listing_context`), `cards`, `page`, `sorts`,
+	`filter_categories` and `active_category`. Plain GET forms throughout, so
+	sorting and filtering work with scripts off.
+#}
+{% autoescape true %}
+<div class="page-hero">
+	<div class="wide">
+		<nav class="crumbs" aria-label="Breadcrumb" style="margin-bottom:4px">
+			<a href="/shop">Home</a><span>/</span>
+			{% if listing.query %}<span class="here">Search</span>{% elif active_category %}<a href="/shop/catalog">Shop</a><span>/</span><span class="here">{{ listing.title }}</span>{% else %}<span class="here">Shop</span>{% endif %}
+		</nav>
+		<h1>{% if listing.query %}“{{ listing.query }}”{% else %}{{ listing.title }}{% endif %}</h1>
+		<p>{{ page.total }} product{{ "" if page.total == 1 else "s" }}{% if listing.query %} match your search{% endif %}</p>
+	</div>
+</div>
+<div class="catalog wide">
+
+	<div class="catalog-grid">
+		<aside class="filters" id="filters" aria-label="Filters">
+			<div class="panel">
+				<div class="panel-top">
+					<button type="button" class="panel-back" data-filters-close aria-label="Close filters">{{ icon('close', 'i-md') }}</button>
+					<h3>{{ icon('sliders', 'i-md') }}Filters</h3>
+					{% if listing.filtered %}<a class="panel-clear" href="{{ listing.clear_url }}">Clear all</a>{% endif %}
+				</div>
+
+				{% if listing.chips %}
+				<div class="chips-active" aria-label="Active filters">
+					{% for chip in listing.chips %}
+					<a class="chip-x" href="{{ chip.url }}" aria-label="Remove {{ chip.label }}">{{ chip.label }}{{ icon('close', 'i-sm') }}</a>
+					{% endfor %}
+				</div>
+				{% endif %}
+
+				<section class="fblock">
+					<h4 class="fhead">Availability</h4>
+					<a class="switch{% if listing.stock %} is-on{% endif %}" href="{{ listing.stock_url }}" role="switch" aria-checked="{{ 'true' if listing.stock else 'false' }}">
+						<span class="switch-track"><span class="switch-knob"></span></span>
+						<span class="switch-label">In stock only</span>
+						<span class="count">{{ listing.stock_count }}</span>
+					</a>
+				</section>
+
+				<section class="fblock">
+					<h4 class="fhead">Price <span>{{ shop_currency }}</span></h4>
+					{% if listing.bands %}
+					<div class="bands">
+						{% for b in listing.bands %}
+						<a class="band{% if b.active %} is-active{% endif %}" href="{{ b.url }}" {% if b.active %}aria-current="true"{% endif %}>
+							<span>{{ b.label }}</span><span class="count">{{ b.count }}</span>
+						</a>
+						{% endfor %}
+					</div>
+					{% endif %}
+					<form class="price-form" method="get" action="{{ listing.path }}">
+						{% if listing.query %}<input type="hidden" name="q" value="{{ listing.query }}" />{% endif %}
+						{% if listing.sort != 'popular' %}<input type="hidden" name="sort" value="{{ listing.sort }}" />{% endif %}
+						{% if listing.stock %}<input type="hidden" name="stock" value="1" />{% endif %}
+						{% if listing.view == 'list' %}<input type="hidden" name="view" value="list" />{% endif %}
+						<label class="money-in"><span>{{ shop_currency }}</span><input type="number" name="min" min="0" inputmode="numeric" value="{{ listing.min }}" placeholder="Min" aria-label="Minimum price" /></label>
+						<span class="dash">-</span>
+						<label class="money-in"><span>{{ shop_currency }}</span><input type="number" name="max" min="0" inputmode="numeric" value="{{ listing.max }}" placeholder="Max" aria-label="Maximum price" /></label>
+						<button type="submit" aria-label="Apply price">{{ icon('right', 'i-md') }}</button>
+					</form>
+					{% if listing.bounds[1] %}<p class="fnote">Prices here run from {{ shop_currency }} {{ "{:,}".format(listing.bounds[0]) }} to {{ "{:,}".format(listing.bounds[1]) }}.</p>{% endif %}
+				</section>
+
+				<section class="fblock">
+					<h4 class="fhead">Categories</h4>
+					<label class="cat-find">
+						{{ icon('search', 'i-sm') }}
+						<input type="search" placeholder="Find a category" data-cat-find aria-label="Find a category" />
+					</label>
+					<a class="cat-all{% if not active_category %} is-active{% endif %}" href="{{ listing.all_url }}">
+						<span>All products</span><span class="count">{{ total_listed }}</span>
+					</a>
+					{% for d in listing.depts %}
+					<details class="dept-f" {% if d.open %}open{% endif %}>
+						<summary><span>{{ d.name }}</span><span class="count">{{ d.count }}</span></summary>
+						<div class="cat-list">
+							{% for c in d.cats %}
+							<a class="{% if c.active %}is-active{% endif %}" href="{{ c.url }}" data-cat="{{ c.label | lower }}" {% if c.active %}aria-current="page"{% endif %}>
+								<span>{{ c.label }}</span><span class="count">{{ c.count }}</span>
+							</a>
+							{% endfor %}
+						</div>
+					</details>
+					{% endfor %}
+					<p class="fnote" data-cat-none hidden>No category by that name.</p>
+				</section>
+
+				<div class="panel-foot">
+					<a class="btn btn-soft" href="{{ listing.clear_url }}">Clear</a>
+					<button type="button" class="btn btn-primary" data-filters-close>Show {{ page.total }} product{{ "" if page.total == 1 else "s" }}</button>
+				</div>
+			</div>
+		</aside>
+
+		<div class="catalog-main">
+			<div class="toolbar">
+				<div class="tb-title">
+					<p class="tb-count" style="font-size:14px;color:var(--muted-fg)">{% if page.total %}Showing <b style="color:var(--ink)">{{ page.first }}-{{ page.last }}</b> of {{ page.total }}{% else %}Nothing to show{% endif %}</p>
+				</div>
+				<div class="tb-actions">
+					<a class="sq filter-btn" href="#filters" data-filters-open aria-label="Open filters">{{ icon('sliders', 'i-md') }}Filters{% if listing.chips %} <span class="count" style="background:var(--primary);color:#fff">{{ listing.chips | length }}</span>{% endif %}</a>
+					<form method="get" action="{{ listing.path }}">
+						{% if listing.query %}<input type="hidden" name="q" value="{{ listing.query }}" />{% endif %}
+						{% if listing.stock %}<input type="hidden" name="stock" value="1" />{% endif %}
+						{% if listing.min %}<input type="hidden" name="min" value="{{ listing.min }}" />{% endif %}
+						{% if listing.max %}<input type="hidden" name="max" value="{{ listing.max }}" />{% endif %}
+						{% if listing.view == 'list' %}<input type="hidden" name="view" value="list" />{% endif %}
+						<label class="visually-hidden" for="sort">Sort by</label>
+						<select id="sort" name="sort" onchange="this.form.submit()">
+							{% for key, label in sorts.items() %}
+							<option value="{{ key }}" {% if key == listing.sort %}selected{% endif %}>{{ label }}</option>
+							{% endfor %}
+						</select>
+						<noscript><button class="sq" type="submit">Go</button></noscript>
+					</form>
+					<a class="sq {% if listing.view == 'grid' %}is-on{% endif %}" href="{{ listing.grid_url }}" aria-label="Grid view">{{ icon('grid', 'i-md') }}</a>
+					<a class="sq {% if listing.view == 'list' %}is-on{% endif %}" href="{{ listing.list_url }}" aria-label="List view">{{ icon('list', 'i-md') }}</a>
+				</div>
+			</div>
+
+			{% if cards %}
+				{% if listing.view == 'list' %}
+				<div class="plist">{% for c in cards %}{% include "templates/shop/line.html" %}{% endfor %}</div>
+				{% else %}
+				<div class="pgrid">{% for c in cards %}{% set eager = loop.index <= 4 %}{% include "templates/shop/card.html" %}{% endfor %}</div>
+				{% endif %}
+
+				{% if page.pages > 1 %}
+				<nav class="pager" aria-label="Pages">
+					<a class="{% if page.page == 1 %}is-off{% endif %}" href="{{ page.first_url }}" aria-label="First page">{{ icon('first', 'i-md') }}</a>
+					<a class="{% if not page.prev_url %}is-off{% endif %}" href="{{ page.prev_url or page.first_url }}" rel="prev" aria-label="Previous page">{{ icon('left', 'i-md') }}</a>
+					{% for n in page.numbers %}
+						{% if n %}<a class="{% if n.current %}is-current{% endif %}" href="{{ n.url }}" {% if n.current %}aria-current="page"{% endif %}>{{ n.n }}</a>
+						{% else %}<span class="gap">…</span>{% endif %}
+					{% endfor %}
+					<a class="{% if not page.next_url %}is-off{% endif %}" href="{{ page.next_url or page.last_url }}" rel="next" aria-label="Next page">{{ icon('right', 'i-md') }}</a>
+					<a class="{% if page.page == page.pages %}is-off{% endif %}" href="{{ page.last_url }}" aria-label="Last page">{{ icon('last', 'i-md') }}</a>
+				</nav>
+				{% endif %}
+			{% else %}
+				<div class="none">
+					<p>Nothing here yet</p>
+					<p>No products match these filters.</p>
+					<a class="btn btn-primary" href="{{ listing.clear_url if listing.filtered else '/shop/catalog' }}">View all products</a>
+				</div>
+			{% endif %}
+		</div>
+	</div>
+</div>
+{% endautoescape %}

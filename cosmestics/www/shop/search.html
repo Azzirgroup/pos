@@ -1,0 +1,24 @@
+{% extends "templates/shop/base.html" %}
+
+{% block content %}{% autoescape true %}
+{% if query %}
+	{% include "templates/shop/listing.html" %}
+{% else %}
+<div class="wide msearch">
+	<form action="/shop/search" method="get" role="search">
+		<label class="field">
+			{{ icon('search') }}
+			<span class="visually-hidden">Search products</span>
+			<input name="q" type="search" placeholder="Search products..." autofocus enterkeyhint="search" />
+		</label>
+		<button class="btn-search" type="submit">Search</button>
+	</form>
+	<h2 class="h2" style="margin:28px 0 14px">Popular categories</h2>
+	<div class="tiles">
+		{% for c in suggestions %}
+		<a class="tile" href="/shop/c/{{ c.slug }}"><span class="tile-ico">{{ icon('sparkle') }}{% if c.image %}<img src="{{ c.image }}" alt="" loading="lazy" />{% endif %}</span><span>{{ c.label }}</span></a>
+		{% endfor %}
+	</div>
+</div>
+{% endif %}
+{% endautoescape %}{% endblock %}

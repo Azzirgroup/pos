@@ -1,0 +1,16 @@
+{# Grid card — PLM's default product card. #}
+{% autoescape true %}
+<div class="card">
+	<a class="card-link" href="{{ c.url }}">
+		{% include "templates/shop/media.html" %}
+		<div class="card-body">
+			<div>
+				{% if c.category %}<p class="card-cat">{{ c.category }}</p>{% endif %}
+				<h3 class="card-name">{{ c.name }}</h3>
+			</div>
+			<p class="price">{{ c.price }}</p>
+		</div>
+	</a>
+	<div class="card-foot">{% include "templates/shop/order.html" %}</div>
+</div>
+{% endautoescape %}

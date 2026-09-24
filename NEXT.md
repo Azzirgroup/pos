@@ -4,6 +4,136 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 61. A public shop at /shop
+
+The first piece of the online shop: a catalog customers can browse, search and
+find on Google. No cart or checkout yet — a product can be ordered through a
+WhatsApp button, and only if a number is set.
+
+**Server-rendered Jinja, not the Vue app.** `www/shop/` (home, category,
+product, search, sitemap) on a standalone layout in `templates/shop/`. A search
+engine reads the HTML it is sent, and a phone on a slow connection gets a page
+without waiting on a bundle. Routes: `/shop`, `/shop/c/<slug>`,
+`/shop/p/<slug>`, `/shop/search?q=`, `/shop/sitemap.xml`.
+
+**One cached snapshot** (`cosmestics/shop.py`, Redis, 120 s) holds the whole
+catalog. Prices go through `catalog._prices` on the till's price list, so the
+website cannot show a price the counter would not charge. Stock comes from
+`shop_warehouse()`, *not* `pos.selling_warehouse()` — that one starts from
+the signed-in user's open shift, and a shopper has no shift. Saving an Item or
+Item Price clears the snapshot; stock just waits for the TTL.
+
+**What is listed:** enabled sales items that have a price *and a photo whose
+file exists on this site* (`shop._image_ok` checks the disk; private files are
+refused). Categories appear only if they contain a listed item. On the
+restored data that is 175 items in 35 categories. Also excluded: anything with
+the new **Hide from Online Shop** check on Item (opt-out — nobody is going to
+tick 2,000 boxes). Variants never get a card of their own. Their template does,
+and the variants become shade / size pickers built from plain links, so each
+variant is its own crawlable page.
+
+**Frappe's Jinja does not autoescape.** Every shop template and partial opens
+its own `{% autoescape true %}`. That is why the partials are `include`s and
+not macros: a macro defined inside an autoescape block is not exported. A
+search for `"><script>` is part of `shop_check`.
+
+**Data the shop has to fix, not code:** the loaded database arrived without
+`sites/<site>/public/files`, so all 176 photo paths 404 on this bench (see
+`catalog.diagnose_images`). Duplicate Item Groups (`Toners`/`TONER`, …) are
+merged for display only, and nothing is renamed. No item has a description.
+
+**Before it goes public:** set `host_name` in site_config, because canonical
+and sitemap URLs are built from it. Add `Sitemap: https://<domain>/shop/sitemap.xml`
+to robots.txt in Website Settings, since Frappe's own /sitemap.xml cannot see
+route-rule pages. Then submit that sitemap to Search Console.
+
+**Second pass on the look** (at the shop's request): a boutique palette of
+berry `#7a2e4e`, champagne gold and blush, with a dark aubergine footer.
+**Fluid width.** There's no page-width cap any more (`--max: 100%`, gutter
+`clamp(16px, 2.5vw, 56px)`), so a large monitor or a zoomed-out page doesn't
+show empty sides. Rows and grids add columns instead: sliders go 5 → 6 → 8 →
+10 → 12 per view at 1024 / 1440 / 1800 / 2400 / 3000px, category cards
+8 → 10 → 12 → 16, and the catalog grid auto-fills. Only the hero content
+(1760px), the promise row (1600px), text blocks and the product photo keep a
+limit, centred in full-width bands. The category menu lists up to 16 and
+scrolls sideways on narrow screens.
+
+**Speed.** The snapshot is served stale-while-revalidate (`shop.snapshot`).
+Past `SNAPSHOT_TTL` the old copy is still returned and one deduplicated
+background job rebuilds it. A scheduler cron (`*/2 * * * *` →
+`shop.refresh_snapshot`) keeps it warm, and Item / Item Price saves queue a
+rebuild after commit (`refresh_later`). Measured: an expired catalog serves in
+~0.1-0.18s (it was ~0.9s when the visitor paid for the ~0.75s rebuild), the
+worker refreshes within ~5s, and a true cold start (no snapshot) is ~0.45s.
+Gotcha: a page view never commits, so its refresh must be queued with
+`enqueue_after_commit=False` or it never runs. Settings are read once per
+request, and the Google Fonts CSS loads via `preload` + `onload` so it doesn't
+block first paint. After pulling this, run `bench migrate` (or
+`scheduled_job_type.sync_jobs`) so the cron job exists.
+
+**Hero: scattered products.** Up to six best sellers (one per category) are
+placed straight on the hero colour, with no cards or thumbnails, each drifting
+on its own rhythm. Every 4s one is spotlit (slightly larger, name and price
+tag) and the hero eases to one of five flat tones. Hover or focus takes the
+spotlight. The "cut-out" look is `mix-blend-mode: multiply` on the `<img>`
+plus a small brightness lift, so only photos shot on near-pure white are used:
+`shop.white_backdrop` samples the photo's border pixels (min channel >= 246 on
+90% of them) and caches the answer in Redis by path+mtime (`WHITE_KEY`; bump
+it if the test changes). Keep anything that creates a stacking context
+(transform, z-index, opacity) off `.scatter` / `.spot`, or the blend stops
+reaching the hero background.
+
+**Third pass, "natural, not AI-generated"** (shop's request): no gradients,
+blobs, tilted cards, gold-dash eyebrow labels, spaced uppercase or floating
+shadows. Colours are flat, corners 4–8px, and hover changes the border only.
+Type uses Kilimall's scale, taken from their live CSS (1rem = 36px on
+their 1200px layout): 14px body, 12px small, 16/18px sub-heads, 21px section
+titles at 600, in Open Sans (Kilimall's face, and on the shop's shortlist).
+Playfair Display is kept only for the wordmark, page titles and product names.
+Greys follow Kilimall: #333 / #666 / #999 on #f7f7f7. The home page has a hero with
+a collage of best sellers, round category pictures, and sliders for best
+sellers, new arrivals and the busiest categories. The PLM-style category
+sidebar was dropped from the home page. Every band shares one container
+(`--max: 1440px`) and grids use auto-fill columns, so the page holds together
+zoomed out or on very wide screens.
+
+**The look first followed the PLM Technologies storefront** (a Next.js site on
+cPanel), at the shop's request. Only the look was copied, not its setup: the
+same header, blue category bar, hero with contact ticker, trust badges,
+sidebar + New Arrivals + category rows, catalog with filters / sort / grid-list
+/ numbered pages, product page with specifications, share buttons and a
+bulk-purchase box, the four-column footer, and the phone tab bar. That added
+`/shop/catalog`, `/shop/categories` (the phones' browser), and header
+suggestions from `shop.suggest` (a guest GET endpoint over the snapshot).
+Departments in the sidebar are keyword-matched from category names
+(`shop.DEPARTMENTS`) — a display grouping, not data.
+
+Parts of the page appear only once they are configured: phone and WhatsApp in
+the header, the dark contact ticker, the green Order buttons and the
+bulk-purchase box. With no WhatsApp number, cards say "View" instead.
+
+The filter panel (`listing_context` builds all of it) has these parts:
+removable chips for every active filter plus "Clear all"; an in-stock switch;
+quick price bands (`PRICE_BANDS`) with custom KES min/max; and categories
+grouped by department, with a find-as-you-type box. Every option carries the
+count it would show given the *other* filters, and every category link keeps
+the current price/stock/sort. On phones it opens full screen with sticky
+Clear / "Show N products" buttons. It also opens from `#filters` via CSS
+`:target`, so it works without JavaScript.
+
+The footer lists categories by department (not a pill cloud), a "Visit us"
+column (address → the Company's ERPNext address when the setting is blank,
+opening hours, phone, WhatsApp, email), and "We accept" chips derived from the
+till's configured tenders (`shop._payments`), so it never advertises a payment
+the counter cannot take.
+
+Settings live in **Cosmestics POS Settings → Online Shop / Online Shop
+Contacts** (these now include address and opening hours): headline and sub-headline, orders WhatsApp number, phone, email,
+Facebook, Instagram, brand colour (defaults to berry #7a2e4e; every tint is
+derived from it), stock warehouse and the "only a few left" threshold.
+
+    bench --site <site> execute cosmestics.setup.shop_check.run   # 53 checks, rolls back
+
 ### 60. The Classic Cosmetics review
 
 Seven things the shop asked for, in one pass. Nothing here is speculative — each

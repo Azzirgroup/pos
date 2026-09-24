@@ -1,0 +1,15 @@
+{#
+	The square image block every card shares. `c` is `shop.card(p)`.
+
+	Most of this catalog has no photo yet, so the fallback is the product's
+	initials over PLM's "No image" line. `onerror` drops a photo whose file is
+	missing and leaves the fallback showing.
+#}
+{% autoescape true %}
+<div class="media">
+	<span class="ph" aria-hidden="true"><b>{{ c.initials }}</b>No image</span>
+	{% if c.image %}<img src="{{ c.image }}" alt="{{ c.name }}" width="400" height="400" {% if not eager %}loading="lazy"{% endif %} decoding="async" onerror="this.remove()" />{% endif %}
+	{% if c.status.key == 'out' %}<span class="flag flag-out">Out of stock</span>
+	{% elif c.status.key == 'low' %}<span class="flag flag-low">Few left</span>{% endif %}
+</div>
+{% endautoescape %}
