@@ -213,6 +213,8 @@ def list_credit_customers(days: int = DEFAULT_DAYS, limit: int = 200) -> dict:
 			entry["oldest_date"] = row["date"]
 			entry["oldest_invoice"] = row["name"]
 
+	_net_off_unapplied(customers)
+
 	rows = sorted(customers.values(), key=lambda r: r["outstanding"], reverse=True)
 
 	# One lookup for the page rather than one per row: this list is refreshed on
@@ -239,6 +241,7 @@ def list_credit_customers(days: int = DEFAULT_DAYS, limit: int = 200) -> dict:
 			"outstanding": flt(sum(r["outstanding"] for r in rows)),
 			"overdue": flt(sum(r["overdue"] for r in rows)),
 			"invoices": sum(r["invoices"] for r in rows),
+			"unapplied": flt(sum(r["unapplied"] for r in rows)),
 		},
 		"reason": None if rows else _("Nobody owes anything in this window."),
 	}
@@ -511,3 +514,96 @@ def _record_till_receipt(invoice, amount, mode, entry):
 			f"Could not record the till receipt for {entry}", "Cosmetics POS"
 		)
 		return None
+
+
+# --------------------------------------------------------------------------
+# Money received but not yet matched to an invoice
+# --------------------------------------------------------------------------
+
+
+def _ledger_balance(customers: list) -> dict:
+	"""{customer: what the ledger says they owe} — the real net position."""
+	if not customers:
+		return {}
+	company = frappe.defaults.get_user_default("Company") or frappe.defaults.get_global_default("company")
+	rows = frappe.db.sql(
+		f"""select party, sum(debit) - sum(credit) as balance
+		    from `tabGL Entry`
+		    where is_cancelled = 0 and party_type = 'Customer' and party in %(parties)s
+		    {"and company = %(company)s" if company else ""}
+		    group by party""",
+		{"parties": customers, "company": company},
+		as_dict=True,
+	)
+	return {r.party: flt(r.balance) for r in rows}
+
+
+def _net_off_unapplied(customers: dict):
+	"""Take money already received off what each customer owes.
+
+	Unpaid invoices and the customer's ledger can disagree, and did: a payment
+	taken on account — at the desk, or against no invoice in particular — leaves
+	every invoice untouched while the ledger records the money. This screen then
+	said 69,660 while Receivables said 41,070, and the shop had no way to tell
+	which was true. Both were: 28,590 had been paid and never matched.
+
+	So the figure here becomes what they actually owe, and the difference is
+	reported as `unapplied` — money in hand looking for an invoice, which
+	`apply_credits` matches up.
+	"""
+	if not customers:
+		return
+	balances = _ledger_balance(list(customers))
+	for code, row in customers.items():
+		billed = flt(row["outstanding"])
+		net = flt(balances.get(code, billed))
+		row["billed"] = billed
+		row["unapplied"] = max(billed - net, 0)
+		row["outstanding"] = max(net, 0)
+		# An overdue figure larger than the balance would be money already paid,
+		# still shown in red.
+		row["overdue"] = min(flt(row["overdue"]), row["outstanding"])
+
+
+@frappe.whitelist(methods=["POST"])
+def apply_credits(customer: str) -> dict:
+	"""Match money already received against this customer's unpaid invoices.
+
+	ERPNext's own Payment Reconciliation, oldest invoice first — the same rule
+	the till uses when it takes a payment. Nothing new is posted: it only
+	attaches payments the shop already has to the invoices they were for, which
+	is what makes the two screens agree and closes the invoices.
+	"""
+	company = frappe.defaults.get_user_default("Company") or frappe.defaults.get_global_default("company")
+	if not frappe.db.exists("Customer", customer):
+		frappe.throw(_("{0} is not a customer").format(customer))
+
+	tool = frappe.new_doc("Payment Reconciliation")
+	tool.company = company
+	tool.party_type = "Customer"
+	tool.party = customer
+	tool.receivable_payable_account = frappe.db.get_value("Company", company, "default_receivable_account")
+	tool.get_unreconciled_entries()
+
+	if not tool.get("payments"):
+		return {"customer": customer, "applied": 0, "message": _("There is nothing waiting to be matched.")}
+	if not tool.get("invoices"):
+		return {
+			"customer": customer,
+			"applied": 0,
+			"message": _("They have money on account and no unpaid invoices — it stays as credit."),
+		}
+
+	tool.allocate_entries({"payments": [p.as_dict() for p in tool.payments], "invoices": [i.as_dict() for i in tool.invoices]})
+	applied = flt(sum(flt(a.allocated_amount) for a in tool.get("allocation") or []))
+	if not applied:
+		return {"customer": customer, "applied": 0, "message": _("Nothing could be matched automatically.")}
+	tool.reconcile()
+
+	return {
+		"customer": customer,
+		"applied": applied,
+		"message": _("{0} matched to {1}'s invoices").format(
+			frappe.format_value(applied, {"fieldtype": "Currency"}), customer
+		),
+	}

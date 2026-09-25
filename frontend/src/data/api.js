@@ -483,6 +483,10 @@ export const getCustomerCredit = ({ customer, days } = {}) =>
  * invoices first. The customer is paying down what they owe, not choosing an
  * invoice — see `credit.pay_customer`.
  */
+/** Match money already received against a customer's unpaid invoices. */
+export const applyCredits = ({ customer }) =>
+	call('cosmestics.api.credit.apply_credits', { customer })
+
 export const payCustomer = ({ customer, amount, modeOfPayment, reference }) =>
 	call('cosmestics.api.credit.pay_customer', {
 		customer,

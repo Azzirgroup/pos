@@ -8,6 +8,7 @@ import {
 	payCustomer,
 	payCreditSale,
 	getPaymentMethods,
+	applyCredits,
 } from '@/data/api'
 import PageHeader from '@/components/PageHeader.vue'
 import StatTiles from '@/components/StatTiles.vue'
@@ -224,6 +225,29 @@ function said(res) {
 
 const toast = ref(null)
 let toastTimer = null
+/**
+ * Money already received, matched to the invoices it was for.
+ *
+ * A payment taken on account — or a credit note nobody applied — leaves every
+ * invoice reading unpaid while the ledger records the money, which is how this
+ * screen and Receivables came to show two different figures for one customer.
+ * The balance shown here is already the true one; this closes the invoices
+ * behind it so the paperwork agrees.
+ */
+const applying = ref('')
+async function applyUnmatched(row) {
+	applying.value = row.customer
+	try {
+		const res = await applyCredits({ customer: row.customer })
+		notify(res.message, res.applied ? 'good' : 'bad')
+		await load()
+	} catch (e) {
+		notify(e.message || 'Could not match the money', 'bad')
+	} finally {
+		applying.value = ''
+	}
+}
+
 function notify(message, tone = 'good') {
 	toast.value = { message, tone }
 	clearTimeout(toastTimer)
@@ -310,7 +334,23 @@ watch(payOpen, (open) => {
 						<div v-if="row.overdue > 0" class="tabular text-p-xs font-medium text-ink-red-3">
 							{{ fmtMoney(row.overdue) }} overdue
 						</div>
+						<!-- What they were billed, when some of it has already been paid
+						     against nothing in particular. Without this the figure above
+						     looks wrong to anyone reading the invoices. -->
+						<div v-if="row.unapplied > 0" class="tabular text-p-xs text-ink-gray-5">
+							{{ fmtMoney(row.billed) }} billed · {{ fmtMoney(row.unapplied) }} paid, unmatched
+						</div>
 					</div>
+
+					<button
+						v-if="row.unapplied > 0"
+						class="shrink-0 rounded-lg border border-outline-gray-2 px-3 py-2 text-p-sm font-medium text-ink-gray-7 transition-colors hover:bg-surface-gray-2 disabled:opacity-50"
+						:disabled="applying === row.customer"
+						title="Match money already received to these invoices"
+						@click="applyUnmatched(row)"
+					>
+						{{ applying === row.customer ? 'Matching…' : 'Apply payments' }}
+					</button>
 
 					<button
 						class="shrink-0 rounded-lg bg-surface-gray-7 px-3 py-2 text-p-sm font-semibold text-ink-white transition-colors hover:bg-surface-gray-6"
