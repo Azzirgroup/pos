@@ -1045,3 +1045,20 @@ export const listExpenses = ({ fromDate, toDate, expenseAccount, limit } = {}) =
 		expense_account: expenseAccount || null,
 		limit: limit || 200,
 	})
+
+/** Online shop orders — the staff queue. See cosmestics/api/online_orders.py. */
+export const listOnlineOrders = ({ status, search } = {}) =>
+	call('cosmestics.api.online_orders.list_orders', { status: status || null, search: search || null })
+
+export const getOnlineOrder = (name) => call('cosmestics.api.online_orders.get_order', { name })
+
+/** Move an order along. Out for Delivery / Ready for Pickup also bill it. */
+export const advanceOnlineOrder = ({ name, to, rider, riderName, courier, note }) =>
+	call('cosmestics.api.online_orders.advance', {
+		name,
+		to,
+		rider: rider || null,
+		rider_name: riderName || null,
+		courier: courier || null,
+		note: note || null,
+	})

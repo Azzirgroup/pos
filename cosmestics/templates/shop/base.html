@@ -1,0 +1,347 @@
+<!doctype html>
+<!--
+	The public shop's layout, modelled on the PLM Technologies storefront:
+	white header with search and call / WhatsApp, a brand-colour category bar,
+	a four-column footer, and a tab bar on phones.
+
+	A complete document rather than the website theme: Frappe only wraps a www
+	page in `web.html` when it does not extend its own base, and the theme's
+	navbar and login link belong to the desk, not a shop window.
+
+	Titles, descriptions and canonical URLs come from `shop.base_context`.
+-->
+{% autoescape true %}
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+	<title>{{ page_title }}</title>
+	{% if meta_description %}<meta name="description" content="{{ meta_description }}" />{% endif %}
+	{% if canonical %}<link rel="canonical" href="{{ canonical }}" />{% endif %}
+	{% if noindex %}<meta name="robots" content="noindex, follow" />{% endif %}
+	{% if rel_prev %}<link rel="prev" href="{{ rel_prev }}" />{% endif %}
+	{% if rel_next %}<link rel="next" href="{{ rel_next }}" />{% endif %}
+	<meta property="og:site_name" content="{{ shop.name }}" />
+	<meta property="og:title" content="{{ og_title or page_title }}" />
+	{% if meta_description %}<meta property="og:description" content="{{ meta_description }}" />{% endif %}
+	{% if canonical %}<meta property="og:url" content="{{ canonical }}" />{% endif %}
+	<meta property="og:type" content="{{ og_type or 'website' }}" />
+	<meta property="og:locale" content="en_KE" />
+	{% if og_image %}<meta property="og:image" content="{{ og_image }}" /><meta name="twitter:card" content="summary_large_image" />{% endif %}
+	<meta name="theme-color" content="#2b1a24" />
+	<link rel="icon" type="image/svg+xml" href="/assets/cosmestics/images/logo.svg" />
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	{# Loaded without blocking the first paint: the page draws in the fallback face at once and swaps when the fonts land. #}
+	<link rel="preload" as="style" href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&family=Playfair+Display:wght@700&display=swap" onload="this.onload=null;this.rel='stylesheet'" />
+	<noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;600;700&family=Playfair+Display:wght@700&display=swap" /></noscript>
+	<style>
+		{% include "templates/shop/shop.css" %}
+	</style>
+	{% if shop.brand_color %}<style>:root { --primary: {{ shop.brand_color }}; }</style>{% endif %}
+	{% if csrf_token %}<meta name="csrf-token" content="{{ csrf_token }}" />{% endif %}
+	{% if google_client_id %}<meta name="google-client-id" content="{{ google_client_id }}" />{% endif %}
+	{% for block in json_ld or [] %}
+	<script type="application/ld+json">{{ block | tojson }}</script>
+	{% endfor %}
+</head>
+<body>
+	{{ icon_sprite }}
+	<a class="skip" href="#main">Skip to content</a>
+	{% set words = shop.name.split(' ') %}
+	<div class="topbar">
+		<div class="wide topbar-row">
+			<span>Genuine beauty &amp; personal care<span class="hide-s">&nbsp;- prices and stock straight from our shop</span></span>
+			<span style="display:inline-flex;gap:18px;align-items:center">
+				{% if shop.phone %}<a class="hide-s" href="tel:{{ shop.phone }}">{{ icon('phone', 'i-sm') }}{{ shop.phone_display }}</a>{% endif %}
+				{% if chat_url %}<span class="sep hide-s"></span><a class="hide-s" href="{{ chat_url }}" target="_blank" rel="noopener noreferrer">{{ icon('whatsapp', 'i-sm') }}WhatsApp us</a>{% endif %}
+				{% if shop.email %}<span class="sep hide-s"></span><a class="hide-s" href="mailto:{{ shop.email }}">{{ icon('mail', 'i-sm') }}{{ shop.email }}</a>{% endif %}
+			</span>
+		</div>
+	</div>
+	<header class="hdr">
+		<div class="hdr-main">
+			<div class="wide hdr-row">
+				<a class="logo" href="/shop" aria-label="{{ shop.name }} home">
+					<svg viewBox="0 0 512 512" aria-hidden="true">
+						<rect width="512" height="512" rx="256" fill="currentColor" />
+						<path d="M196 214 a60 60 0 0 1 120 0" fill="none" stroke="#f3e4d4" stroke-width="24" stroke-linecap="round" />
+						<path d="M150 214 h212 l16 164 a22 22 0 0 1 -22 24 h-200 a22 22 0 0 1 -22 -24 z" fill="#f3e4d4" />
+					</svg>
+					<span class="logo-text">
+						<span class="logo-top">{{ words[0] }}</span>
+						{% if words | length > 1 %}<span class="logo-bottom">{{ words[1:] | join(' ') }}</span>{% endif %}
+					</span>
+				</a>
+
+				<div class="hsearch" data-suggest>
+					<form action="/shop/search" method="get" role="search">
+						<label class="field">
+							{{ icon('search') }}
+							<span class="visually-hidden">Search products</span>
+							<input name="q" type="search" placeholder="Search creams, serums, perfumes…" value="{{ query or '' }}" autocomplete="off" />
+						</label>
+						<button class="btn-search" type="submit">Search</button>
+					</form>
+					<div class="suggest" role="listbox" hidden></div>
+				</div>
+
+				{# Sign in / account and the cart, filled in by the shop app (frontend/shop). #}
+				<div id="cc-header-actions" class="hx-slot">
+					<a class="round" href="/shop/account" aria-label="My account">{{ icon('user') }}</a>
+					<a class="round" href="#" data-open-cart aria-label="Cart">{{ icon('bag') }}</a>
+				</div>
+				<div class="hactions">
+					{% if shop.phone %}<a class="round call" href="tel:{{ shop.phone }}" title="Call us">{{ icon('phone') }}</a>{% endif %}
+					{% if chat_url %}<a class="round chat" href="{{ chat_url }}" target="_blank" rel="noopener noreferrer" title="WhatsApp">{{ icon('whatsapp') }}</a>{% endif %}
+				</div>
+				<div class="hactions-m">
+					<a class="round" href="/shop/search" aria-label="Search">{{ icon('search') }}</a>
+					{% if shop.phone %}<a class="round call" href="tel:{{ shop.phone }}" title="Call us">{{ icon('phone') }}</a>{% endif %}
+					{% if chat_url %}<a class="round chat" href="{{ chat_url }}" target="_blank" rel="noopener noreferrer" title="WhatsApp">{{ icon('whatsapp') }}</a>{% endif %}
+				</div>
+			</div>
+		</div>
+
+		<nav class="nav" aria-label="Categories">
+			<div class="wide nav-row">
+				<a class="all" href="/shop/catalog">Shop all</a>
+				{% for c in nav_categories %}
+				<a href="/shop/c/{{ c.slug }}" {% if active_category == c.key %}class="is-active" aria-current="page"{% endif %}>{{ c.label }}</a>
+				{% endfor %}
+			</div>
+		</nav>
+	</header>
+
+	<main id="main">
+		{% block content %}{% endblock %}
+	</main>
+
+	<footer class="ftr">
+		{% if chat_url or shop.phone %}
+		<div class="ftr-news">
+			<div class="wide">
+				<div>
+					<h2>Not sure what suits your skin?</h2>
+					<p>Message us - we'll recommend, confirm stock and arrange delivery.</p>
+				</div>
+				<div class="banner-btns">
+					{% if chat_url %}<a class="btn btn-gold" href="{{ chat_url }}" target="_blank" rel="noopener noreferrer">{{ icon('whatsapp', 'i-md') }}Chat on WhatsApp</a>{% endif %}
+					{% if shop.phone %}<a class="btn btn-ghost-light" href="tel:{{ shop.phone }}">{{ icon('phone', 'i-md') }}Call us</a>{% endif %}
+				</div>
+			</div>
+		</div>
+		{% endif %}
+
+		<div class="ftr-main">
+			<div class="wide ftr-grid">
+				<div class="ftr-col ftr-brand">
+					<a class="ftr-logo" href="/shop" aria-label="{{ shop.name }} home">
+						<svg viewBox="0 0 512 512" aria-hidden="true">
+							<rect width="512" height="512" rx="256" fill="currentColor" />
+							<path d="M196 214 a60 60 0 0 1 120 0" fill="none" stroke="#2b1a24" stroke-width="24" stroke-linecap="round" />
+							<path d="M150 214 h212 l16 164 a22 22 0 0 1 -22 24 h-200 a22 22 0 0 1 -22 -24 z" fill="#2b1a24" />
+						</svg>
+						<span><b>{{ words[0] }}</b>{% if words | length > 1 %}<small>{{ words[1:] | join(' ') }}</small>{% endif %}</span>
+					</a>
+					<p>Genuine skin, body and hair care, fragrance and wellness - at the same prices as our shop counter.</p>
+					{% if shop.facebook or shop.instagram or chat_url %}
+					<div class="ftr-social">
+						{% if shop.facebook %}<a href="{{ shop.facebook }}" target="_blank" rel="noopener noreferrer" aria-label="Facebook">{{ icon('facebook', 'i-md') }}</a>{% endif %}
+						{% if shop.instagram %}<a href="{{ shop.instagram }}" target="_blank" rel="noopener noreferrer" aria-label="Instagram">{{ icon('instagram', 'i-md') }}</a>{% endif %}
+						{% if chat_url %}<a href="{{ chat_url }}" target="_blank" rel="noopener noreferrer" aria-label="WhatsApp">{{ icon('whatsapp', 'i-md') }}</a>{% endif %}
+					</div>
+					{% endif %}
+				</div>
+
+				<div class="ftr-col">
+					<h4>Shop</h4>
+					<nav class="ftr-links">
+						<a href="/shop/catalog">All products</a>
+						<a href="/shop/catalog?sort=new">New arrivals</a>
+						<a href="/shop/catalog?stock=1">In stock now</a>
+						<a href="/shop/categories">Browse categories</a>
+						<a href="/shop/search">Search</a>
+					</nav>
+				</div>
+
+				<div class="ftr-col">
+					<h4>Visit us</h4>
+					<ul class="ftr-contact">
+						{% if shop.address %}<li><span class="box">{{ icon('pin', 'i-md') }}</span><span>{{ shop.address }}</span></li>{% endif %}
+						{% if shop.hours %}<li><span class="box">{{ icon('clock', 'i-md') }}</span><span>{{ shop.hours }}</span></li>{% endif %}
+						{% if shop.phone %}<li><span class="box">{{ icon('phone', 'i-md') }}</span><a href="tel:{{ shop.phone }}">{{ shop.phone_display }}</a></li>{% endif %}
+						{% if chat_url %}<li><span class="box">{{ icon('whatsapp', 'i-md') }}</span><a href="{{ chat_url }}" target="_blank" rel="noopener noreferrer">Chat on WhatsApp</a></li>{% endif %}
+						{% if shop.email %}<li><span class="box">{{ icon('mail', 'i-md') }}</span><a href="mailto:{{ shop.email }}">{{ shop.email }}</a></li>{% endif %}
+						{% if not (shop.address or shop.hours or shop.phone or chat_url or shop.email) %}
+						<li><span class="box">{{ icon('store', 'i-md') }}</span><span>Visit our shop counter - every price here is the price in store.</span></li>
+						{% endif %}
+					</ul>
+				</div>
+			</div>
+		</div>
+
+		{% if footer_departments %}
+		<div class="ftr-cats">
+			<div class="wide">
+				<h4>Shop by category</h4>
+				<div class="ftr-depts">
+					{% for d in footer_departments %}
+					<div>
+						<a class="ftr-dept" href="/shop/categories?cat={{ d.slug }}">{{ d.name }}</a>
+						<nav class="ftr-links sm">
+							{% for c in d.categories %}<a href="/shop/c/{{ c.slug }}">{{ c.label }}</a>{% endfor %}
+						</nav>
+					</div>
+					{% endfor %}
+				</div>
+			</div>
+		</div>
+		{% endif %}
+
+		<div class="ftr-bottom">
+			<div class="wide ftr-bottom-row">
+				<p>&copy; {{ year }} {{ shop.name }}. All rights reserved.</p>
+				{% if shop.payments %}
+				<div class="pay">
+					<span>We accept</span>
+					{% for key, label in shop.payments %}<span class="pay-chip">{{ icon(key, 'i-sm') }}{{ label }}</span>{% endfor %}
+				</div>
+				{% endif %}
+				<a class="to-top" href="#main">Back to top {{ icon('up', 'i-sm') }}</a>
+			</div>
+		</div>
+	</footer>
+
+	<nav class="tabbar" aria-label="Shop">
+		<div class="tabbar-row">
+			<a href="/shop" {% if tab == 'home' %}class="is-active"{% endif %}>{{ icon('home') }}Home</a>
+			<a href="/shop/categories" {% if tab == 'categories' %}class="is-active"{% endif %}>{{ icon('grid') }}Categories</a>
+			<a href="/shop/catalog" {% if tab == 'shop' %}class="is-active"{% endif %}>{{ icon('store') }}Shop</a>
+			<a href="#" data-open-cart class="tab-cart">{{ icon('bag') }}Cart<span id="cc-tab-count"></span></a>
+			<a href="/shop/account" {% if tab == 'account' %}class="is-active"{% endif %}>{{ icon('user') }}Account</a>
+		</div>
+	</nav>
+
+	<script>
+	/*
+		Three small enhancements; every page works without them.
+		1. Header search suggestions as you type (desktop).
+		2. Arrow buttons on horizontal product rows.
+		3. The filter panel on phones, which slides over the page.
+	*/
+	(function () {
+		var box = document.querySelector("[data-suggest]");
+		if (box) {
+			var input = box.querySelector("input"), list = box.querySelector(".suggest"), timer, seq = 0;
+			var hide = function () { list.hidden = true; };
+			var render = function (q, rows) {
+				list.textContent = "";
+				if (!rows.length) {
+					var none = document.createElement("p");
+					none.className = "s-none";
+					none.textContent = 'No products match "' + q + '"';
+					list.appendChild(none);
+				}
+				rows.forEach(function (r) {
+					var a = document.createElement("a"); a.href = r.url;
+					var t = document.createElement("span"); t.className = "thumb";
+					if (r.image) { var img = document.createElement("img"); img.src = r.image; img.alt = ""; img.onerror = function () { img.remove(); }; t.appendChild(img); }
+					var b = document.createElement("span"); b.style.minWidth = "0";
+					var n = document.createElement("p"); n.className = "s-name"; n.textContent = r.name;
+					var p = document.createElement("p"); p.className = "s-price"; p.textContent = r.price;
+					b.appendChild(n); b.appendChild(p); a.appendChild(t); a.appendChild(b); list.appendChild(a);
+				});
+				if (rows.length) {
+					var all = document.createElement("a"); all.className = "s-all";
+					all.href = "/shop/search?q=" + encodeURIComponent(q); all.textContent = "See all results";
+					list.appendChild(all);
+				}
+				list.hidden = false;
+			};
+			input.addEventListener("input", function () {
+				var q = input.value.trim(), mine = ++seq;
+				clearTimeout(timer);
+				if (!q) return hide();
+				timer = setTimeout(function () {
+					fetch("/api/method/cosmestics.shop.suggest?q=" + encodeURIComponent(q))
+						.then(function (r) { return r.json(); })
+						.then(function (d) { if (mine === seq) render(q, d.message || []); })
+						.catch(hide);
+				}, 150);
+			});
+			input.addEventListener("focus", function () { if (input.value.trim() && list.childNodes.length) list.hidden = false; });
+			document.addEventListener("mousedown", function (e) { if (!box.contains(e.target)) hide(); });
+			input.addEventListener("keydown", function (e) { if (e.key === "Escape") hide(); });
+		}
+
+		document.querySelectorAll("[data-scroller]").forEach(function (s) {
+			var track = s.querySelector(".scroll-track");
+			var step = function (dir) { track.scrollBy({ left: dir * track.clientWidth * 0.9, behavior: "smooth" }); };
+			if (track.scrollWidth <= track.clientWidth + 4) s.querySelectorAll(".scroll-btn").forEach(function (b) { b.style.display = "none"; });
+			var auto = s.hasAttribute("data-autoplay") && setInterval(function () {
+				var atEnd = track.scrollLeft + track.clientWidth >= track.scrollWidth - 10;
+				track.scrollTo({ left: atEnd ? 0 : track.scrollLeft + track.clientWidth * 0.9, behavior: "smooth" });
+			}, 7000);
+			s.querySelectorAll(".scroll-btn").forEach(function (b) {
+				b.addEventListener("click", function () { clearInterval(auto); step(b.classList.contains("prev") ? -1 : 1); });
+			});
+			track.addEventListener("pointerdown", function () { clearInterval(auto); });
+		});
+
+		// The hero's scattered products: every 4s the next is spotlit (name and
+		// price shown) and the hero eases to its tone. Hover takes the spotlight.
+		document.querySelectorAll("[data-scatter]").forEach(function (box) {
+			var spots = Array.prototype.filter.call(box.querySelectorAll(".spot"), function (s) { return s.offsetParent !== null; });
+			var hero = box.closest(".hero"), at = 0, timer = null;
+			if (spots.length < 2) return;
+			var still = window.matchMedia && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+			var show = function (n) {
+				at = (n + spots.length) % spots.length;
+				spots.forEach(function (s, i) { s.classList.toggle("is-on", i === at); });
+				if (hero) hero.setAttribute("data-tone", spots[at].getAttribute("data-tone"));
+			};
+			var play = function () { if (!still && !timer) timer = setInterval(function () { show(at + 1); }, 4000); };
+			var pause = function () { clearInterval(timer); timer = null; };
+			spots.forEach(function (s, i) {
+				s.addEventListener("mouseenter", function () { pause(); show(i); });
+				s.addEventListener("focus", function () { pause(); show(i); });
+			});
+			box.addEventListener("mouseleave", play);
+			document.addEventListener("visibilitychange", function () { document.hidden ? pause() : play(); });
+			play();
+		});
+
+		var find = document.querySelector("[data-cat-find]");
+		if (find) {
+			find.addEventListener("input", function () {
+				var q = find.value.trim().toLowerCase(), any = false;
+				document.querySelectorAll(".dept-f").forEach(function (d) {
+					var hits = 0;
+					d.querySelectorAll("[data-cat]").forEach(function (a) {
+						var hit = !q || a.getAttribute("data-cat").indexOf(q) !== -1;
+						a.hidden = !hit; if (hit) hits++;
+					});
+					d.hidden = !hits; if (q && hits) d.open = true; if (hits) any = true;
+				});
+				document.querySelector("[data-cat-none]").hidden = any;
+			});
+		}
+
+		var panel = document.querySelector(".filters");
+		document.querySelectorAll("[data-filters-open]").forEach(function (b) {
+			b.addEventListener("click", function (e) { e.preventDefault(); panel.classList.add("is-open"); document.body.style.overflow = "hidden"; });
+		});
+		document.querySelectorAll("[data-filters-close]").forEach(function (b) {
+			b.addEventListener("click", function () {
+				panel.classList.remove("is-open"); document.body.style.overflow = "";
+				// Opened from a #filters link: drop the hash, or :target keeps it open.
+				if (location.hash === "#filters") location.hash = "";
+			});
+		});
+	})();
+	</script>
+	{% if shop_js %}<script type="module" src="/assets/cosmestics/shop/shop.js?v={{ shop_js }}"></script>{% endif %}
+</body>
+</html>
+{% endautoescape %}

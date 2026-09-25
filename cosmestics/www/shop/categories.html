@@ -1,0 +1,27 @@
+{% extends "templates/shop/base.html" %}
+
+{% block content %}{% autoescape true %}
+<div class="browser">
+	<nav class="rail" aria-label="Departments">
+		{% for d in departments %}
+		<a href="/shop/categories?cat={{ d.slug }}" {% if active and d.slug == active.slug %}class="is-active" aria-current="page"{% endif %}>{{ d.name }}</a>
+		{% endfor %}
+	</nav>
+	<div class="pane">
+		{% if active %}
+		<h1><a class="pane-title" href="/shop/catalog">Shop in {{ active.name }} {{ icon('right') }}</a></h1>
+		<div class="tiles">
+			<a class="tile" href="/shop/catalog"><span class="tile-ico">{{ icon('more') }}</span><span>View All</span></a>
+			{% for c in tiles %}
+			<a class="tile" href="/shop/c/{{ c.slug }}">
+				<span class="tile-ico">{{ icon('sparkle') }}{% if c.image %}<img src="{{ c.image }}" alt="" loading="lazy" onerror="this.remove()" />{% endif %}</span>
+				<span>{{ c.label }}</span>
+			</a>
+			{% endfor %}
+		</div>
+		{% else %}
+		<p class="note">No categories available.</p>
+		{% endif %}
+	</div>
+</div>
+{% endautoescape %}{% endblock %}

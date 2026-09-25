@@ -4,6 +4,249 @@ Handoff notes.
 
 ## Done since the last handoff
 
+### 62. Online orders: accounts, cart, M-Pesa, workflow, tracking (Vue)
+
+**Customers sign in with their Customer record, not a Frappe User.** The
+Customer gets Shop Username / Shop Phone / Shop Email / Can Sign In, plus a
+"Set Shop Password" box. Whatever is typed there, from the desk or at sign-up,
+is hashed with Frappe's pbkdf2 context on `validate`
+(`shop_account.hash_customer_password`) and the box empties itself. Sessions
+are our own: an HttpOnly `cc_shop` cookie mapped to the Customer in Redis
+(`current_customer()`). State-changing calls need an `X-Shop: 1` header,
+which is the CSRF guard for a session Frappe does not know about. Login
+failures are vague and rate-limited per IP and per account.
+
+**Sign-up confirms the password** (checked live in the dialog and again by
+`signup(confirm_password=…)`). **Sign in with Google** uses Google Identity
+Services: the dialog loads Google's own button only when a Client ID is set
+(Cosmestics POS Settings → Google Client ID, or Frappe's Google Social Login
+Key). `shop_account.google_login` verifies the ID token with google-auth
+against that client ID, matches the Customer by `cosmestics_google_sub` and
+then by a verified shop email, or creates one in the online group. Google
+gives no phone number, so the account page and checkout ask for one
+(`needs_phone`), and Google-only accounts have no password form.
+
+**Delivery is two options: pickup (free) or delivery at the flat
+`shop_delivery_fee`** (set to KES 1 for testing), used whenever no Cosmestics
+Delivery Area is enabled. Adding areas switches checkout to per-area fees.
+
+**Online sign-ups join one Customer Group** (Cosmestics POS Settings →
+Online Customer Group, default **Online Customers**, created by
+`ensure_online_customer_group` on migrate and on the first sign-up if
+missing). A shop that picks another group keeps it.
+
+**The cart is a Draft online Sales Order.** It is flagged
+`cosmestics_online_order` with `cosmestics_order_status`, and the workflow
+lives in `cosmestics/online_orders.py`:
+Draft → Order Received → Processing → Out for Delivery | Ready for Pickup →
+Complete (or Cancelled). Every change appends to the `cosmestics_status_log`
+child table (a new doctype, Cosmestics Order Status Log), which is where the
+customer's "took 1 day 1 hour / 5 hours so far" comes from.
+
+- **Stock:** `online_orders.available()` is shelf qty − Bin.reserved_qty
+  (paid orders) − other shoppers' Draft carts touched within
+  `shop_hold_minutes` (default 30). Steppers cap at it, `set_line` enforces
+  it, and `pay` re-checks it.
+- **Guest permissions:** a shopper is Guest, and ERPNext checks permissions
+  deep inside a Sales Order save (`get_item_details`). So the SO saves run
+  inside `online_orders.as_shop()` (Administrator), after the endpoint has
+  checked ownership.
+- **Delivery fee:** each Cosmestics Delivery Area has a fee, charged as the
+  non-stock `ONLINE-DELIVERY` item line. Pickup is free.
+
+**M-Pesa (`api/shop_payments.py`).** Same Daraja production endpoints as
+DukaPlus, with its credentials held in Cosmestics POS Settings (Password
+fields). Differences from DukaPlus:
+
+- The STK password and timestamp are computed per request.
+- No web request is held open polling.
+- The callback URL carries a secret token and must match a request we made.
+- If the callback is late (15s+), `payment_status` asks Daraja's
+  `stkpushquery`. That also makes local testing possible, since the callback
+  cannot reach localhost.
+
+Paid means: record the payment and commit first, then `finalize`, which
+submits the SO (Order Received) and books a Payment Entry against it as an
+advance. It is idempotent under a row lock.
+
+**Importing the credentials was blocked for me (a secrets guard), so it must
+be run by a person:**
+
+    bench --site <site> execute cosmestics.setup.online_setup.import_mpesa_from_env
+
+It reads `/home/frappe/dukaplus/apps/dukaplus/.env`, recovers the passkey from
+DukaPlus's precomputed password and verifies it, and prints nothing secret.
+DukaPlus's short code is **4237271**, and both it and PartyB point there.
+Confirm that paybill is where Classic Cosmetics' money should land. The
+account reference is the order number (compacted to 12 characters). The
+callback base is `https://classiccosmetics.frappe.cloud/`.
+
+**Staff: "Online orders" in the staff app** (`/pos/online-orders`,
+`views/OnlineOrders.vue`, API `api/online_orders.py`):
+
+- The queue lists paid, unfinished orders, oldest first, with time in the
+  current status (amber after 2 hours untouched) and counts per status.
+- "Send out for delivery" **bills** the order (Sales Invoice from the SO,
+  update_stock, advance allocated) and creates a Dispatched Cosmestics
+  Delivery with the rider (courier defaults to "In-house"). The rider marking
+  it Delivered completes the order (`on_delivery_update` hook).
+- "Ready for pickup" also bills; "Mark complete" finishes it.
+- Cancel needs a reason. A paid order is Closed and the refund is manual.
+- The desk Sales Order list shows "Online · <status>", and the form gets a
+  banner with the history.
+
+**Shop Vue layer** (`frontend/shop`, built by `vite.shop.config.js` into
+`cosmestics/public/shop/shop.js`; `yarn build` now builds it too, and
+`public/shop/` is git-ignored like `public/frontend/`). It is plain Vue
+(~44 KB gzip) with no frappe-ui, styled by `shop.css`. It teleports into
+spots the Jinja pages leave (`#cc-header-actions`, `#cc-add`, `#cc-page`),
+which hold server fallbacks that `main.js` clears first, so pages stay
+indexable and shareable. Pages: /shop/checkout, /shop/account and
+/shop/orders/<name> (noindex). Card buttons use `data-add-to-cart` via event
+delegation.
+
+**Build gotcha:** on this bench the POS build's last step
+(`frappeui-build-config-plugin` copying `public/frontend/index.html` →
+`www/pos.html`) failed with EPERM *after* removing the old file, which leaves
+/pos broken. If you see "Error copying index.html", run
+`cp cosmestics/public/frontend/index.html cosmestics/www/pos.html`.
+
+**After pulling:** `bench migrate` (the new doctypes, custom fields,
+delivery item, callback token and scheduler job), then `bench build`. Add
+Delivery Areas, the Pickup Instructions, and run the M-Pesa import.
+
+    bench --site <site> execute cosmestics.setup.online_check.run   # 40 checks, rolls back
+
+### 61. A public shop at /shop
+
+The first piece of the online shop: a catalog customers can browse, search and
+find on Google. No cart or checkout yet — a product can be ordered through a
+WhatsApp button, and only if a number is set.
+
+**Server-rendered Jinja, not the Vue app.** `www/shop/` (home, category,
+product, search, sitemap) on a standalone layout in `templates/shop/`. A search
+engine reads the HTML it is sent, and a phone on a slow connection gets a page
+without waiting on a bundle. Routes: `/shop`, `/shop/c/<slug>`,
+`/shop/p/<slug>`, `/shop/search?q=`, `/shop/sitemap.xml`.
+
+**One cached snapshot** (`cosmestics/shop.py`, Redis, 120 s) holds the whole
+catalog. Prices go through `catalog._prices` on the till's price list, so the
+website cannot show a price the counter would not charge. Stock comes from
+`shop_warehouse()`, *not* `pos.selling_warehouse()` — that one starts from
+the signed-in user's open shift, and a shopper has no shift. Saving an Item or
+Item Price clears the snapshot; stock just waits for the TTL.
+
+**What is listed:** enabled sales items that have a price *and a photo whose
+file exists on this site* (`shop._image_ok` checks the disk; private files are
+refused). Categories appear only if they contain a listed item. On the
+restored data that is 175 items in 35 categories. Also excluded: anything with
+the new **Hide from Online Shop** check on Item (opt-out — nobody is going to
+tick 2,000 boxes). Variants never get a card of their own. Their template does,
+and the variants become shade / size pickers built from plain links, so each
+variant is its own crawlable page.
+
+**Frappe's Jinja does not autoescape.** Every shop template and partial opens
+its own `{% autoescape true %}`. That is why the partials are `include`s and
+not macros: a macro defined inside an autoescape block is not exported. A
+search for `"><script>` is part of `shop_check`.
+
+**Data the shop has to fix, not code:** the loaded database arrived without
+`sites/<site>/public/files`, so all 176 photo paths 404 on this bench (see
+`catalog.diagnose_images`). Duplicate Item Groups (`Toners`/`TONER`, …) are
+merged for display only, and nothing is renamed. No item has a description.
+
+**Before it goes public:** set `host_name` in site_config, because canonical
+and sitemap URLs are built from it. Add `Sitemap: https://<domain>/shop/sitemap.xml`
+to robots.txt in Website Settings, since Frappe's own /sitemap.xml cannot see
+route-rule pages. Then submit that sitemap to Search Console.
+
+**Second pass on the look** (at the shop's request): a boutique palette of
+berry `#7a2e4e`, champagne gold and blush, with a dark aubergine footer.
+**Fluid width.** There's no page-width cap any more (`--max: 100%`, gutter
+`clamp(16px, 2.5vw, 56px)`), so a large monitor or a zoomed-out page doesn't
+show empty sides. Rows and grids add columns instead: sliders go 5 → 6 → 8 →
+10 → 12 per view at 1024 / 1440 / 1800 / 2400 / 3000px, category cards
+8 → 10 → 12 → 16, and the catalog grid auto-fills. Only the hero content
+(1760px), the promise row (1600px), text blocks and the product photo keep a
+limit, centred in full-width bands. The category menu lists up to 16 and
+scrolls sideways on narrow screens.
+
+**Speed.** The snapshot is served stale-while-revalidate (`shop.snapshot`).
+Past `SNAPSHOT_TTL` the old copy is still returned and one deduplicated
+background job rebuilds it. A scheduler cron (`*/2 * * * *` →
+`shop.refresh_snapshot`) keeps it warm, and Item / Item Price saves queue a
+rebuild after commit (`refresh_later`). Measured: an expired catalog serves in
+~0.1-0.18s (it was ~0.9s when the visitor paid for the ~0.75s rebuild), the
+worker refreshes within ~5s, and a true cold start (no snapshot) is ~0.45s.
+Gotcha: a page view never commits, so its refresh must be queued with
+`enqueue_after_commit=False` or it never runs. Settings are read once per
+request, and the Google Fonts CSS loads via `preload` + `onload` so it doesn't
+block first paint. After pulling this, run `bench migrate` (or
+`scheduled_job_type.sync_jobs`) so the cron job exists.
+
+**Hero: scattered products.** Up to six best sellers (one per category) are
+placed straight on the hero colour, with no cards or thumbnails, each drifting
+on its own rhythm. Every 4s one is spotlit (slightly larger, name and price
+tag) and the hero eases to one of five flat tones. Hover or focus takes the
+spotlight. The "cut-out" look is `mix-blend-mode: multiply` on the `<img>`
+plus a small brightness lift, so only photos shot on near-pure white are used:
+`shop.white_backdrop` samples the photo's border pixels (min channel >= 246 on
+90% of them) and caches the answer in Redis by path+mtime (`WHITE_KEY`; bump
+it if the test changes). Keep anything that creates a stacking context
+(transform, z-index, opacity) off `.scatter` / `.spot`, or the blend stops
+reaching the hero background.
+
+**Third pass, "natural, not AI-generated"** (shop's request): no gradients,
+blobs, tilted cards, gold-dash eyebrow labels, spaced uppercase or floating
+shadows. Colours are flat, corners 4–8px, and hover changes the border only.
+Type uses Kilimall's scale, taken from their live CSS (1rem = 36px on
+their 1200px layout): 14px body, 12px small, 16/18px sub-heads, 21px section
+titles at 600, in Open Sans (Kilimall's face, and on the shop's shortlist).
+Playfair Display is kept only for the wordmark, page titles and product names.
+Greys follow Kilimall: #333 / #666 / #999 on #f7f7f7. The home page has a hero with
+a collage of best sellers, round category pictures, and sliders for best
+sellers, new arrivals and the busiest categories. The PLM-style category
+sidebar was dropped from the home page. Every band shares one container
+(`--max: 1440px`) and grids use auto-fill columns, so the page holds together
+zoomed out or on very wide screens.
+
+**The look first followed the PLM Technologies storefront** (a Next.js site on
+cPanel), at the shop's request. Only the look was copied, not its setup: the
+same header, blue category bar, hero with contact ticker, trust badges,
+sidebar + New Arrivals + category rows, catalog with filters / sort / grid-list
+/ numbered pages, product page with specifications, share buttons and a
+bulk-purchase box, the four-column footer, and the phone tab bar. That added
+`/shop/catalog`, `/shop/categories` (the phones' browser), and header
+suggestions from `shop.suggest` (a guest GET endpoint over the snapshot).
+Departments in the sidebar are keyword-matched from category names
+(`shop.DEPARTMENTS`) — a display grouping, not data.
+
+Parts of the page appear only once they are configured: phone and WhatsApp in
+the header, the dark contact ticker, the green Order buttons and the
+bulk-purchase box. With no WhatsApp number, cards say "View" instead.
+
+The filter panel (`listing_context` builds all of it) has these parts:
+removable chips for every active filter plus "Clear all"; an in-stock switch;
+quick price bands (`PRICE_BANDS`) with custom KES min/max; and categories
+grouped by department, with a find-as-you-type box. Every option carries the
+count it would show given the *other* filters, and every category link keeps
+the current price/stock/sort. On phones it opens full screen with sticky
+Clear / "Show N products" buttons. It also opens from `#filters` via CSS
+`:target`, so it works without JavaScript.
+
+The footer lists categories by department (not a pill cloud), a "Visit us"
+column (address → the Company's ERPNext address when the setting is blank,
+opening hours, phone, WhatsApp, email), and "We accept" chips derived from the
+till's configured tenders (`shop._payments`), so it never advertises a payment
+the counter cannot take.
+
+Settings live in **Cosmestics POS Settings → Online Shop / Online Shop
+Contacts** (these now include address and opening hours): headline and sub-headline, orders WhatsApp number, phone, email,
+Facebook, Instagram, brand colour (defaults to berry #7a2e4e; every tint is
+derived from it), stock warehouse and the "only a few left" threshold.
+
+    bench --site <site> execute cosmestics.setup.shop_check.run   # 53 checks, rolls back
+
 ### 60. The Classic Cosmetics review
 
 Seven things the shop asked for, in one pass. Nothing here is speculative — each

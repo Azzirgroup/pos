@@ -51,6 +51,10 @@ def setup_prerequisites():
 	ensure_roles()
 	group = ensure_neighbour_supplier_group()
 	ensure_neighbour_shop_field()
+	ensure_hide_online_field()
+	from cosmestics.setup.online_setup import setup_online_orders
+
+	setup_online_orders()
 	ensure_default_neighbour(group)
 	ensure_mpesa_mode_of_payment()
 	ensure_mpesa_channel_modes()
@@ -775,6 +779,33 @@ def hide_single_cashier_field(doctype: str):
 		},
 		is_system_generated=True,
 		validate_fields_for_doctype=False,
+	)
+
+
+def ensure_hide_online_field():
+	"""Let the shop keep an item off the public catalog at /shop.
+
+	Opt-out rather than opt-in: a shop with two thousand items is not going to
+	tick two thousand boxes, and an online shop that starts empty is not one.
+	Hidden items stay sellable at the till — this is only about the website.
+	"""
+	if not frappe.db.exists("DocType", "Item"):
+		return
+
+	if frappe.db.exists("Custom Field", {"dt": "Item", "fieldname": "cosmestics_hide_online"}):
+		return
+
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	create_custom_field(
+		"Item",
+		{
+			"fieldname": "cosmestics_hide_online",
+			"label": "Hide from Online Shop",
+			"fieldtype": "Check",
+			"insert_after": "is_sales_item",
+			"description": "Keep this item off the public shop at /shop. It can still be sold at the till.",
+		},
 	)
 
 

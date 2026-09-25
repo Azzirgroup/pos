@@ -7,6 +7,7 @@ import LucideShoppingCart from '~icons/lucide/shopping-cart'
 import LucideBoxes from '~icons/lucide/boxes'
 import LucideTruck from '~icons/lucide/truck'
 import LucideReceipt from '~icons/lucide/receipt-text'
+import LucideGlobe from '~icons/lucide/globe'
 import LucideLandmark from '~icons/lucide/landmark'
 import LucideUsers from '~icons/lucide/users'
 import LucideSettings from '~icons/lucide/settings-2'
@@ -84,6 +85,8 @@ const GROUPS = computed(() => [
 	],
 	[
 		{ to: '/sales', icon: LucideReceipt, label: 'Sales', tone: 'money' },
+		// Orders placed on the online shop, waiting to be packed and sent.
+		{ to: '/online-orders', icon: LucideGlobe, label: 'Online orders', tone: 'money' },
 		// Also reachable as a tab under Sales — this is a second, more
 		// discoverable door to the same Delivery Note list for anyone who
 		// wants it without going through Sales first.

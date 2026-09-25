@@ -1,0 +1,83 @@
+{% extends "templates/shop/base.html" %}
+
+{% block content %}{% autoescape true %}
+<section class="hero" data-tone="0">
+	<div class="wide hero-grid">
+		<div class="hero-copy">
+			<h1>{{ headline }}</h1>
+			<p>{{ subtitle }}</p>
+			<div class="hero-cta">
+				<a class="btn btn-primary" href="/shop/catalog">Shop now</a>
+				<a class="btn btn-soft" href="/shop/categories">Browse categories</a>
+			</div>
+			<div class="hero-stats">
+				<div><b>{{ "{:,}".format(total) }}</b><span>Products</span></div>
+				<div><b>{{ circles | length }}</b><span>Categories</span></div>
+				<div><b>{{ "{:,}".format(in_stock) }}</b><span>In stock</span></div>
+			</div>
+		</div>
+		{% if hero_products %}
+		{#
+			Products scattered on the hero's own colour. Each photo is on white,
+			and `mix-blend-mode: multiply` lets that white take the background
+			tone, so the product stands there like a cut-out. One at a time is
+			spotlit with its name and price while the background eases to a new
+			tone. Without scripts they simply rest where they are.
+		#}
+		<div class="scatter" data-scatter aria-label="Best sellers">
+			{% for c in hero_products %}
+			<a class="spot s{{ loop.index }}{% if loop.first %} is-on{% endif %}" href="{{ c.url }}" data-tone="{{ loop.index0 % 5 }}">
+				<img src="{{ c.image }}" alt="{{ c.name }}" {% if loop.index <= 2 %}fetchpriority="high"{% else %}loading="lazy"{% endif %} decoding="async" />
+				<span class="spot-tag"><span>{{ c.name }}</span><b>{{ c.price }}</b></span>
+			</a>
+			{% endfor %}
+		</div>
+		{% endif %}
+	</div>
+</section>
+
+<div class="trust">
+	<div class="wide trust-row">
+		{% for ico, title, sub in trust %}
+		<div class="trust-item">
+			<span class="trust-ico">{{ icon(ico) }}</span>
+			<div><p class="trust-title">{{ title }}</p><p class="trust-sub">{{ sub }}</p></div>
+		</div>
+		{% endfor %}
+	</div>
+</div>
+
+<div class="wide">
+	<section class="section">
+		<div class="sec-head">
+			<h2 class="h2">Shop by Category</h2>
+			<a class="view-all" href="/shop/categories">All categories {{ icon('right', 'i-sm') }}</a>
+		</div>
+		<nav class="circles" aria-label="Categories">
+			{% for c in circles %}
+			<a class="circle" href="/shop/c/{{ c.slug }}">
+				<span class="circle-img">{% if c.image %}<img src="{{ c.image }}" alt="" loading="lazy" />{% endif %}</span>
+				<span class="circle-name">{{ c.label }}<span class="circle-count">{{ c.count }} item{{ "" if c.count == 1 else "s" }}</span></span>
+			</a>
+			{% endfor %}
+		</nav>
+	</section>
+
+	{% for row in rows_top %}{% include "templates/shop/row.html" %}{% endfor %}
+
+	<section class="banner">
+		<div class="banner-row">
+			<div>
+				<h2>Order on WhatsApp, collect in store or get it delivered</h2>
+				<p>Every price and stock level on this site comes straight from our shop counter, so what you see is what we have.</p>
+			</div>
+			<div class="banner-btns">
+				<a class="btn btn-gold" href="/shop/catalog">Start shopping</a>
+				{% if chat_url %}<a class="btn btn-ghost-light" href="{{ chat_url }}" target="_blank" rel="noopener noreferrer">{{ icon('whatsapp', 'i-md') }}Ask us</a>{% endif %}
+			</div>
+		</div>
+	</section>
+
+	{% for row in rows_bottom %}{% include "templates/shop/row.html" %}{% endfor %}
+</div>
+{% endautoescape %}{% endblock %}

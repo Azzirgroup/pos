@@ -60,3 +60,6 @@ cosmestics/www/pos.html
 
 # bench generates this as an absolute symlink — machine-specific, never commit
 cosmestics/public/node_modules
+
+# Built by `yarn build:shop` (frontend/vite.shop.config.js)
+cosmestics/public/shop/

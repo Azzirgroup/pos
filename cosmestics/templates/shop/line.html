@@ -1,0 +1,16 @@
+{# List-view row for the catalog's list toggle. #}
+{% autoescape true %}
+<div class="line">
+	<a class="line-media" href="{{ c.url }}">{% include "templates/shop/media.html" %}</a>
+	<div class="line-body">
+		<a href="{{ c.url }}">
+			{% if c.category %}<p class="card-cat">{{ c.category }}</p>{% endif %}
+			<h3 class="card-name" style="margin-top:4px">{{ c.name }}</h3>
+		</a>
+		<div class="line-foot">
+			<p class="price">{{ c.price }}</p>
+			{% include "templates/shop/order.html" %}
+		</div>
+	</div>
+</div>
+{% endautoescape %}

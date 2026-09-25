@@ -38,7 +38,44 @@
   "column_break_till",
   "require_shift_to_sell",
   "one_shift_per_day",
-  "show_item_images"
+  "show_item_images",
+  "shop_section",
+  "shop_tagline",
+  "shop_subtitle",
+  "shop_whatsapp",
+  "column_break_shop",
+  "shop_warehouse",
+  "shop_low_stock",
+  "shop_contact_section",
+  "shop_phone",
+  "shop_email",
+  "column_break_shop_contact",
+  "shop_facebook",
+  "shop_instagram",
+  "shop_brand_color",
+  "shop_address",
+  "shop_hours",
+  "online_orders_section",
+  "shop_hold_minutes",
+  "shop_pickup_note",
+  "column_break_online",
+  "shop_mode_of_payment",
+  "shop_delivery_item",
+  "shop_delivery_fee",
+  "shop_customer_group",
+  "shop_google_client_id",
+  "mpesa_section",
+  "mpesa_environment",
+  "mpesa_shortcode",
+  "mpesa_party_b",
+  "mpesa_transaction_type",
+  "mpesa_account_reference",
+  "column_break_mpesa",
+  "mpesa_consumer_key",
+  "mpesa_consumer_secret",
+  "mpesa_passkey",
+  "mpesa_callback_base_url",
+  "mpesa_callback_token"
  ],
  "fields": [
   {
@@ -262,12 +299,233 @@
    "fieldname": "show_item_images",
    "fieldtype": "Check",
    "label": "Show Item Photos on the Till"
+  },
+  {
+   "fieldname": "shop_section",
+   "fieldtype": "Section Break",
+   "label": "Online Shop",
+   "description": "The public catalog at /shop. Prices come from the Selling Price List above."
+  },
+  {
+   "fieldname": "shop_tagline",
+   "fieldtype": "Data",
+   "label": "Headline",
+   "description": "The large line on the shop's front page, and its description in search results. Leave blank for \"Beauty and personal care\"."
+  },
+  {
+   "fieldname": "shop_subtitle",
+   "fieldtype": "Data",
+   "label": "Sub-headline",
+   "description": "The smaller line under the headline. Leave blank for \"Skin, body and hair care, fragrance & wellness\"."
+  },
+  {
+   "fieldname": "shop_whatsapp",
+   "fieldtype": "Data",
+   "options": "Phone",
+   "label": "Orders WhatsApp Number",
+   "description": "Shown publicly. Each product gets an Order on WhatsApp button that opens a chat with this number, pre-filled with the product and price. Leave blank to hide the button."
+  },
+  {
+   "fieldname": "column_break_shop",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "shop_warehouse",
+   "fieldtype": "Link",
+   "options": "Warehouse",
+   "label": "Online Stock Warehouse",
+   "description": "Whose shelf the In stock / Out of stock badge counts. Leave blank to use the warehouse of the till's POS Profile."
+  },
+  {
+   "default": "3",
+   "fieldname": "shop_low_stock",
+   "fieldtype": "Int",
+   "label": "\"Only a Few Left\" At",
+   "description": "At or below this many, a product shows Only a few left instead of In stock. Exact counts are never shown."
+  },
+  {
+   "fieldname": "shop_contact_section",
+   "fieldtype": "Section Break",
+   "label": "Online Shop Contacts",
+   "description": "Shown in the shop's header, contact strip and footer. Anything left blank is simply not shown."
+  },
+  {
+   "fieldname": "shop_phone",
+   "fieldtype": "Data",
+   "options": "Phone",
+   "label": "Public Phone Number"
+  },
+  {
+   "fieldname": "shop_email",
+   "fieldtype": "Data",
+   "options": "Email",
+   "label": "Public Email"
+  },
+  {
+   "fieldname": "column_break_shop_contact",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "shop_facebook",
+   "fieldtype": "Data",
+   "label": "Facebook Page URL"
+  },
+  {
+   "fieldname": "shop_instagram",
+   "fieldtype": "Data",
+   "label": "Instagram URL"
+  },
+  {
+   "fieldname": "shop_brand_color",
+   "fieldtype": "Color",
+   "label": "Brand Colour",
+   "description": "The shop's main colour: the category bar, buttons and prices. Leave blank for the house berry (#7a2e4e)."
+  },
+  {
+   "fieldname": "shop_address",
+   "fieldtype": "Small Text",
+   "label": "Shop Address",
+   "description": "Where customers can find the shop, shown in the footer. Leave blank to use the company's address from ERPNext."
+  },
+  {
+   "fieldname": "shop_hours",
+   "fieldtype": "Data",
+   "label": "Opening Hours",
+   "description": "For example: Mon-Sat 8am-8pm, Sun 10am-4pm."
+  },
+  {
+   "fieldname": "online_orders_section",
+   "fieldtype": "Section Break",
+   "label": "Online Orders",
+   "description": "How the online shop takes orders. Delivery areas and their fees are kept in Cosmestics Delivery Area."
+  },
+  {
+   "fieldname": "shop_hold_minutes",
+   "fieldtype": "Int",
+   "label": "Cart Holds Stock For (Minutes)",
+   "default": "30",
+   "description": "While a customer is shopping, the items in their cart are held for them for this long after their last change, so two customers cannot pay for the last one. Paid orders hold their stock until they are billed."
+  },
+  {
+   "fieldname": "shop_pickup_note",
+   "fieldtype": "Small Text",
+   "label": "Pickup Instructions",
+   "description": "Shown to customers who choose to collect from the shop, e.g. the address and opening hours."
+  },
+  {
+   "fieldname": "column_break_online",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "shop_mode_of_payment",
+   "fieldtype": "Link",
+   "options": "Mode of Payment",
+   "label": "Online Payments Mode",
+   "description": "The Mode of Payment the Payment Entry for an online M-Pesa payment is booked under. Leave blank to use the till's M-Pesa Paybill mode."
+  },
+  {
+   "fieldname": "shop_delivery_item",
+   "fieldtype": "Link",
+   "options": "Item",
+   "label": "Delivery Fee Item",
+   "description": "The non-stock item a delivery fee is charged as on the Sales Order. Created automatically."
+  },
+  {
+   "fieldname": "shop_delivery_fee",
+   "fieldtype": "Currency",
+   "label": "Delivery Fee",
+   "default": "0",
+   "description": "What delivery costs the customer when no Delivery Areas are set up. Checkout then offers two options: pick up at the shop (free) or delivery at this fee."
+  },
+  {
+   "fieldname": "shop_customer_group",
+   "fieldtype": "Link",
+   "options": "Customer Group",
+   "label": "Online Customer Group",
+   "description": "Every customer who creates an account on the online shop is put in this group. Created automatically as Online Customers."
+  },
+  {
+   "fieldname": "shop_google_client_id",
+   "fieldtype": "Data",
+   "label": "Google Client ID (Sign in with Google)",
+   "description": "From Google Cloud Console \u2192 APIs & Services \u2192 Credentials \u2192 OAuth client ID (Web application). Add this site's address under Authorised JavaScript origins. Leave blank to hide the Google button."
+  },
+  {
+   "fieldname": "mpesa_section",
+   "fieldtype": "Section Break",
+   "label": "M-Pesa (Daraja) for Online Orders",
+   "description": "Sends the payment prompt to the customer's phone (STK push) and confirms it when they pay."
+  },
+  {
+   "fieldname": "mpesa_environment",
+   "fieldtype": "Select",
+   "label": "Environment",
+   "options": "Production\nSandbox",
+   "default": "Production"
+  },
+  {
+   "fieldname": "mpesa_shortcode",
+   "fieldtype": "Data",
+   "label": "Business Short Code",
+   "description": "The shortcode the passkey belongs to."
+  },
+  {
+   "fieldname": "mpesa_party_b",
+   "fieldtype": "Data",
+   "label": "Paybill / Till Receiving Payment",
+   "description": "Where the money goes. Usually the same as the short code for a paybill."
+  },
+  {
+   "fieldname": "mpesa_transaction_type",
+   "fieldtype": "Select",
+   "label": "Transaction Type",
+   "options": "CustomerPayBillOnline\nCustomerBuyGoodsOnline",
+   "default": "CustomerPayBillOnline"
+  },
+  {
+   "fieldname": "mpesa_account_reference",
+   "fieldtype": "Data",
+   "label": "Account Reference",
+   "description": "What the customer sees as the account number. Leave blank to use the order number, which ties every payment to its order."
+  },
+  {
+   "fieldname": "column_break_mpesa",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "mpesa_consumer_key",
+   "fieldtype": "Password",
+   "label": "Consumer Key"
+  },
+  {
+   "fieldname": "mpesa_consumer_secret",
+   "fieldtype": "Password",
+   "label": "Consumer Secret"
+  },
+  {
+   "fieldname": "mpesa_passkey",
+   "fieldtype": "Password",
+   "label": "Passkey"
+  },
+  {
+   "fieldname": "mpesa_callback_base_url",
+   "fieldtype": "Data",
+   "label": "Callback Base URL",
+   "default": "https://classiccosmetics.frappe.cloud/",
+   "description": "The public address of this site. Safaricom sends the payment result to this address, so it must be reachable from the internet."
+  },
+  {
+   "fieldname": "mpesa_callback_token",
+   "fieldtype": "Data",
+   "label": "Callback Token",
+   "read_only": 1,
+   "description": "A secret added to the callback address so only Safaricom's calls for this site are accepted. Generated automatically."
   }
  ],
  "index_web_pages_for_search": 1,
  "issingle": 1,
  "links": [],
- "modified": "2026-07-26 23:20:00.000000",
+ "modified": "2026-09-24 20:00:00.000000",
  "modified_by": "Administrator",
  "module": "Cosmestics",
  "name": "Cosmestics POS Settings",

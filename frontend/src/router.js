@@ -27,6 +27,13 @@ const routes = [
 		component: () => import('@/views/Documents.vue'),
 	},
 	{
+		// Orders placed on the online shop (/shop): accept, pack, send out.
+		path: '/online-orders',
+		name: 'OnlineOrders',
+		meta: { title: 'Online orders' },
+		component: () => import('@/views/OnlineOrders.vue'),
+	},
+	{
 		path: '/inventory',
 		name: 'Inventory',
 		meta: { title: 'Inventory' },

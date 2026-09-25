@@ -61,7 +61,12 @@ doctype_js = {
 	"POS Closing Entry": "public/js/pos_shift_cashiers.js",
 	# Approve / Reject for a stock transfer waiting on the store keeper.
 	"Material Request": "public/js/material_request_approval.js",
+	# Online shop orders: a banner with their status and history.
+	"Sales Order": "public/js/sales_order_online.js",
 }
+
+# Online shop orders show their own status in the Sales Order list.
+doctype_list_js = {"Sales Order": "public/js/sales_order_list.js"}
 
 # include js in doctype views
 # doctype_js = {"doctype" : "public/js/doctype.js"}
@@ -80,6 +85,11 @@ doctype_js = {
 # Serve the POS SPA (and all its client-side routes) from cosmestics/www/pos.html
 website_route_rules = [
 	{"from_route": "/pos/<path:app_path>", "to_route": "pos"},
+	# The public shop — see `cosmestics/shop.py`. Categories and products live
+	# under their own prefixes so a slug can never shadow /shop/search.
+	{"from_route": "/shop/c/<slug>", "to_route": "shop/category"},
+	{"from_route": "/shop/p/<slug>", "to_route": "shop/product"},
+	{"from_route": "/shop/orders/<order>", "to_route": "shop/order"},
 ]
 
 # The tile opens the **dashboard**, not the till.
@@ -101,6 +111,27 @@ add_to_apps_screen = [
 # ---------------
 
 doc_events = {
+	# A price, a photo or a "hide online" flag changed in the desk is rebuilt
+	# into the shop in the background within seconds. Stock is left to the
+	# scheduler's two-minute refresh: it moves on every sale, and rebuilding on
+	# each would rebuild the catalog once per till transaction.
+	"Item": {
+		"on_update": "cosmestics.shop.refresh_later",
+		"on_trash": "cosmestics.shop.refresh_later",
+	},
+	"Item Price": {
+		"on_update": "cosmestics.shop.refresh_later",
+		"on_trash": "cosmestics.shop.refresh_later",
+	},
+	# Online shop accounts: a password typed on a Customer (desk or sign-up)
+	# is hashed and dropped before the row is written.
+	"Customer": {
+		"validate": "cosmestics.api.shop_account.hash_customer_password",
+	},
+	# A rider marking an online order's delivery Delivered completes the order.
+	"Cosmestics Delivery": {
+		"on_update": "cosmestics.online_orders.on_delivery_update",
+	},
 	"User": {
 		# Hashes a typed till PIN and drops the digits before the row is written,
 		# so the plaintext never reaches the database. Runs on every save path —
@@ -237,6 +268,14 @@ jinja = {
 
 # Scheduled Tasks
 # ---------------
+
+# The public shop's catalog is rebuilt in the background, so a visitor never
+# waits for it — see `shop.snapshot`.
+scheduler_events = {
+	"cron": {
+		"*/2 * * * *": ["cosmestics.shop.refresh_snapshot"],
+	},
+}
 
 # scheduler_events = {
 # 	"all": [
