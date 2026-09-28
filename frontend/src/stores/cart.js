@@ -44,6 +44,18 @@ function seedLineSeq(payload) {
 	lineSeq = Math.max(lineSeq, 0, ...ids)
 }
 
+/**
+ * Normalise a stored customer.
+ *
+ * Carts parked before the customer became an object hold a bare name string.
+ * The id is not recoverable from it, and showing a name the invoice would not
+ * carry is how this bug read to a cashier in the first place — so such a cart
+ * comes back as a walk-in, honestly, and the name is re-picked in one tap.
+ */
+function asCustomer(value) {
+	return value && typeof value === 'object' ? value : null
+}
+
 export const useCartStore = defineStore('cart', () => {
 	/**
 	 * Restored before anything else, so a reload comes back to the same cart.
@@ -56,7 +68,17 @@ export const useCartStore = defineStore('cart', () => {
 	seedLineSeq(restored)
 
 	const lines = ref(restored?.lines || [])
-	const customer = ref(restored?.customer ?? null)
+	/**
+	 * Who the sale is for — the whole record, not just the name on it.
+	 *
+	 * The view used to hold the customer *object* (which carries the id the
+	 * invoice is posted against) while the store held only the display name, so
+	 * anything that outlived the view — a page reload, a parked ticket, leaving
+	 * the till screen and coming back — kept the name on screen and lost the id.
+	 * The sale then posted as a walk-in under a customer's name. One copy, here,
+	 * where every path that clears or restores a cart already goes.
+	 */
+	const customer = ref(asCustomer(restored?.customer))
 	/** Whole-sale discount, in shillings, on top of any per-line discount. */
 	const discount = ref(restored?.discount || 0)
 	/** Line id most recently touched — drives the flash/scroll-into-view affordance. */
@@ -306,7 +328,7 @@ export const useCartStore = defineStore('cart', () => {
 		if (idx === -1) return
 		const [ticket] = held.value.splice(idx, 1)
 		lines.value = ticket.lines
-		customer.value = ticket.customer
+		customer.value = asCustomer(ticket.customer)
 		discount.value = ticket.discount || 0
 		lastTouched.value = null
 		// Remembered so re-holding files it under the same number.
@@ -441,7 +463,7 @@ export const useCartStore = defineStore('cart', () => {
 
 		if (isEmpty.value) {
 			lines.value = recovered
-			customer.value = snapshot.customer ?? null
+			customer.value = asCustomer(snapshot.customer)
 			discount.value = snapshot.discount || 0
 			sourceQuotation.value = snapshot.sourceQuotation ?? null
 			sourceTicket.value = snapshot.sourceTicket ?? null
@@ -544,7 +566,7 @@ export const useCartStore = defineStore('cart', () => {
 		if (existing) {
 			seedLineSeq(existing)
 			lines.value = existing.lines || []
-			customer.value = existing.customer ?? null
+			customer.value = asCustomer(existing.customer)
 			discount.value = existing.discount || 0
 			held.value = existing.held || []
 			sourceQuotation.value = existing.sourceQuotation ?? null
@@ -570,10 +592,16 @@ export const useCartStore = defineStore('cart', () => {
 		})
 	}
 
+	/** What to call the customer on screen. Walk-in when nobody is named. */
+	const customerLabel = computed(
+		() => customer.value?.customer_name || customer.value?.name || '',
+	)
+
 	return {
 		adoptSession,
 		lines,
 		customer,
+		customerLabel,
 		discount,
 		lastTouched,
 		sourceQuotation,

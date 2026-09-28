@@ -111,7 +111,7 @@ watch(
 			>
 				<LucideUserPlus class="h-4 w-4 shrink-0 text-ink-gray-5" />
 				<span class="truncate text-p-sm text-ink-gray-7">
-					{{ cart.customer || 'Walk-in customer' }}
+					{{ cart.customerLabel || 'Walk-in customer' }}
 				</span>
 			</button>
 			<span class="tabular shrink-0 text-p-xs text-ink-gray-5">

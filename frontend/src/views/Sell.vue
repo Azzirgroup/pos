@@ -196,7 +196,18 @@ const paymentModes = computed(() => {
 
 /* ---------- customer ---------- */
 
-const customer = ref(null)
+/**
+ * The customer, read straight off the cart.
+ *
+ * Deliberately not a ref of its own. When it was, it lived and died with this
+ * screen: leaving the till and coming back, reloading the page, or resuming a
+ * parked ticket brought the basket back but not the customer, and the sale
+ * posted as a walk-in while the cart panel still showed the name.
+ */
+const customer = computed({
+	get: () => cart.customer,
+	set: (c) => (cart.customer = c || null),
+})
 const customerSheet = ref(false)
 const customerRequired = ref(false)
 
@@ -648,7 +659,6 @@ async function refreshCatalog() {
 
 function onCustomerSelected(c) {
 	customer.value = c
-	cart.customer = c ? c.customer_name || c.name : null
 }
 
 const visibleItems = computed(() => catalog.search(query.value))
@@ -1190,10 +1200,12 @@ function loadQuotation(quote) {
 		if (added) cart.setRate(added.id, line.rate)
 	}
 
-	if (quote.customer_id) {
-		customer.value = { name: quote.customer_id, customer_name: quote.customer }
-		cart.customer = quote.customer
-	}
+	// The quote's party comes with it. Set unconditionally: a quote raised to a
+	// Lead has no customer to seat, and leaving the *previous* sale's customer
+	// in place would post this basket to whoever was served before.
+	customer.value = quote.customer_id
+		? { name: quote.customer_id, customer_name: quote.customer }
+		: null
 
 	// Saving after an edit now updates this quote instead of raising another.
 	cart.sourceQuotation = quote.name
@@ -1209,6 +1221,10 @@ function loadQuotation(quote) {
 		)
 	} else if (quote.expired) {
 		notify(`${quote.name} loaded — note it expired on ${quote.valid_till}`, 'warn')
+	} else if (!quote.customer_id && quote.customer) {
+		// Raised to a lead or a prospect, which a Sales Invoice cannot be. Said
+		// out loud, because the cart has quietly gone back to walk-in.
+		notify(`${quote.name} loaded — ${quote.customer} is not a customer yet, so pick one`, 'warn')
 	} else {
 		notify(`${quote.name} loaded at quoted prices`, 'ok')
 	}
