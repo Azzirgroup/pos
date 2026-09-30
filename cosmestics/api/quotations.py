@@ -57,6 +57,19 @@ SOURCE_FIELDS = {
 }
 
 
+def _has_sourcing_fields() -> bool:
+	"""Whether this site has been migrated far enough to store the sourcing.
+
+	The fields are created by `after_migrate`. A deploy whose migrate step did
+	not run leaves the code ahead of the schema — and writing a column that is
+	not there is an `OperationalError`, which reaches the till as a bare
+	Internal Server Error on every quote saved. The note is worth having; it is
+	not worth losing quotations over, so it is skipped when it cannot be kept.
+	"""
+	meta = frappe.get_meta("Quotation Item")
+	return all(meta.has_field(field) for field in SOURCE_FIELDS.values())
+
+
 def _save_sourcing(doc, rows):
 	"""Remember, on the quote, what has to be bought from a neighbour.
 
@@ -69,6 +82,9 @@ def _save_sourcing(doc, rows):
 	submitted by the time this runs, and rewritten in full on every save so
 	dropping a line's sourcing sticks.
 	"""
+	if not _has_sourcing_fields():
+		return False
+
 	wanted = {}
 	for row in rows or []:
 		source = row.get("sourced") or {}
@@ -97,9 +113,20 @@ def _save_sourcing(doc, rows):
 		values = wanted.get(item.item_code, blank)
 		if all(_same(item.get(field), value) for field, value in values.items()):
 			continue
-		# `update_modified=False`: remembering how a line will be filled is not
-		# an edit the customer's copy of the quote should look newer for.
-		frappe.db.set_value("Quotation Item", item.name, values, update_modified=False)
+		try:
+			# `update_modified=False`: remembering how a line will be filled is
+			# not an edit the customer's copy of the quote should look newer for.
+			frappe.db.set_value("Quotation Item", item.name, values, update_modified=False)
+		except Exception:
+			# The quote itself is already saved and is the thing the customer is
+			# holding. Losing the note means the till asks about the neighbour
+			# again on conversion — annoying; losing the quotation to an
+			# Internal Server Error is worse.
+			frappe.log_error(
+				f"Could not record neighbour sourcing on {doc.name}\n{frappe.get_traceback()}",
+				"Cosmetics POS",
+			)
+			return touched
 		touched = True
 	return touched
 
@@ -119,6 +146,8 @@ def _row_sourcing(row) -> dict | None:
 	there is not a plan, and the till should ask again rather than have the
 	purchase refused at checkout with a customer waiting.
 	"""
+	if not _has_sourcing_fields():
+		return None
 	supplier = row.get(SOURCE_FIELDS["supplier"])
 	if not supplier:
 		return None
@@ -192,8 +221,23 @@ def create(
 	if notes:
 		doc.terms = notes
 
-	doc.insert()
-	doc.submit()
+	try:
+		doc.insert()
+		doc.submit()
+	except (frappe.ValidationError, frappe.PermissionError):
+		# Already worded by ERPNext — "Item X is disabled", and the like. Those
+		# read perfectly well at a counter.
+		raise
+	except Exception as e:
+		# Anything else reaches the till as a bare Internal Server Error, with
+		# the reason left in a log nobody at a counter can open. The same
+		# translation `update` already does, and for the same reason.
+		frappe.log_error(
+			f"quotations.create failed\nlines={len(doc.items)}\n{frappe.get_traceback()}",
+			"Cosmetics POS",
+		)
+		frappe.throw(_("Could not save the quotation: {0}").format(str(e)[:200] or type(e).__name__))
+
 	_save_sourcing(doc, items)
 
 	return {
@@ -660,7 +704,9 @@ def update(name: str, items: list | str, valid_days: int | None = None, notes: s
 	doc.reload()
 
 	# After the reload, so the rows exist — `update_child_qty_rate` creates a
-	# new child row for a line the quote did not have before.
+	# new child row for a line the quote did not have before. It cannot raise:
+	# by this point the quote has already been changed, and failing the call
+	# would tell the cashier nothing was saved when something was.
 	_save_sourcing(doc, lines)
 
 	# `valid_till` and `terms` are not `allow_on_submit`, so the document refuses
