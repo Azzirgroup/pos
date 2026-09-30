@@ -1179,6 +1179,48 @@ async function saveQuotation({ validDays, notes, asNew }) {
  * that matches neither. The current cart is held first when there is one, so
  * nothing is destroyed by loading a quote onto it by mistake.
  */
+/**
+ * What still has to be fetched from next door for a quoted line.
+ *
+ * A quote records the arrangement, not a purchase: nothing is bought until the
+ * sale is submitted. So the plan is re-read against today's shelf rather than
+ * replayed blindly — the shop may have been restocked in the meantime, and
+ * buying the goods a second time is as wrong as not buying them at all.
+ *
+ * Mutates `shelf` (what is left to draw on) and the two report lists, so the
+ * caller can tell the cashier what changed since the quote was given.
+ */
+function quoteSourcing(line, item, shelf, toBuy, restocked) {
+	const plan = line.sourced
+	if (!plan?.supplier) {
+		shelf[line.item_code] = Math.max(0, shelf[line.item_code] - line.qty)
+		return null
+	}
+
+	const left = shelf[line.item_code]
+	const shortfall = Math.max(0, line.qty - left)
+	if (shortfall <= 0) {
+		// Came in since. Buying it again from next door would pay twice for
+		// stock already on the shelf.
+		shelf[line.item_code] = left - line.qty
+		restocked.push(item.item_name)
+		return null
+	}
+
+	// The whole line is still missing, so the errand is the one that was agreed
+	// — including a neighbour who only sells by the carton. Once part of it can
+	// come off our own shelf, only the gap is fetched.
+	const buyQty = left <= 0 ? Math.max(Number(plan.buy_qty) || 0, shortfall) : shortfall
+	shelf[line.item_code] = Math.max(0, left - (line.qty - buyQty))
+	toBuy.push({ name: item.item_name, qty: buyQty, supplier: plan.supplier })
+	return {
+		supplier: plan.supplier,
+		buyRate: Number(plan.buy_rate) || 0,
+		buyQty,
+		paidNow: Boolean(plan.paid),
+	}
+}
+
 function loadQuotation(quote) {
 	if (!isEmpty.value) {
 		const ticket = cart.hold()
@@ -1186,6 +1228,11 @@ function loadQuotation(quote) {
 	}
 
 	cart.clear()
+	// What this shop can cover off its own shelf, spent down line by line, so
+	// two lines of the same item cannot each claim the last one.
+	const shelf = {}
+	const toBuy = []
+	const restocked = []
 	for (const line of quote.items) {
 		const item = catalog.byCode.get(line.item_code) || {
 			item_code: line.item_code,
@@ -1194,7 +1241,11 @@ function loadQuotation(quote) {
 			uom: line.uom,
 			stock: 0,
 		}
-		const added = cart.add({ ...item, price: line.rate }, line.qty)
+		if (shelf[line.item_code] === undefined) {
+			shelf[line.item_code] = Math.max(Number(item.stock) || 0, 0)
+		}
+		const sourced = quoteSourcing(line, item, shelf, toBuy, restocked)
+		const added = cart.add({ ...item, price: line.rate }, line.qty, sourced ? { sourced } : {})
 		// The quoted rate wins over today's price list — that is the promise the
 		// quote made, and re-pricing here would make it a suggestion.
 		if (added) cart.setRate(added.id, line.rate)
@@ -1212,21 +1263,32 @@ function loadQuotation(quote) {
 
 	quotationSheet.value = false
 
+	// What still has to be fetched, carried on the same toast as the load — the
+	// till shows one message at a time, and this is the half the cashier has to
+	// act on. The neighbour's price is the one number on a quote that is not a
+	// promise, so it is flagged for a second look rather than assumed.
+	const suppliers = [...new Set(toBuy.map((l) => l.supplier))]
+	const fetchNote = toBuy.length
+		? ` · fetching ${toBuy.reduce((n, l) => n + l.qty, 0)} from ${suppliers.join(', ')} — check the price still stands`
+		: restocked.length
+			? ` · ${restocked.length} line${restocked.length === 1 ? '' : 's'} back in stock, no longer buying from next door`
+			: ''
+
 	// Said out loud rather than dropped: a quote whose lines quietly vanish is
 	// worse than one that names the line it cannot honour.
 	if (quote.unavailable?.length) {
 		notify(
-			`${quote.name} loaded — ${quote.unavailable.length} line${quote.unavailable.length === 1 ? '' : 's'} no longer sellable and left out`,
+			`${quote.name} loaded — ${quote.unavailable.length} line${quote.unavailable.length === 1 ? '' : 's'} no longer sellable and left out${fetchNote}`,
 			'warn',
 		)
 	} else if (quote.expired) {
-		notify(`${quote.name} loaded — note it expired on ${quote.valid_till}`, 'warn')
+		notify(`${quote.name} loaded — note it expired on ${quote.valid_till}${fetchNote}`, 'warn')
 	} else if (!quote.customer_id && quote.customer) {
 		// Raised to a lead or a prospect, which a Sales Invoice cannot be. Said
 		// out loud, because the cart has quietly gone back to walk-in.
 		notify(`${quote.name} loaded — ${quote.customer} is not a customer yet, so pick one`, 'warn')
 	} else {
-		notify(`${quote.name} loaded at quoted prices`, 'ok')
+		notify(`${quote.name} loaded at quoted prices${fetchNote}`, toBuy.length ? 'warn' : 'ok')
 	}
 }
 

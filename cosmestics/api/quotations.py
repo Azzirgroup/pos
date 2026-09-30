@@ -46,6 +46,92 @@ DEFAULT_VALID_DAYS = 14
 FINISHED_STATUSES = ("Ordered", "Partially Ordered", "Lost", "Closed")
 
 
+#: Cart-line sourcing, as it is stored on the quotation row. Kept as a mapping
+#: rather than four scattered names so the write, the read and the round-trip
+#: test all talk about the same four things.
+SOURCE_FIELDS = {
+	"supplier": "cosmestics_source_supplier",
+	"buy_qty": "cosmestics_source_qty",
+	"buy_rate": "cosmestics_source_rate",
+	"paid": "cosmestics_source_paid",
+}
+
+
+def _save_sourcing(doc, rows):
+	"""Remember, on the quote, what has to be bought from a neighbour.
+
+	Nothing is purchased when a quote is raised — the purchase invoice is
+	written at the moment the sale is submitted, from the cart line. So a quote
+	that forgot the sourcing sent the cashier back to an empty shelf weeks
+	later, on a sale they had already arranged the goods for.
+
+	Written by `db_set` rather than by assignment because the quotation is
+	submitted by the time this runs, and rewritten in full on every save so
+	dropping a line's sourcing sticks.
+	"""
+	wanted = {}
+	for row in rows or []:
+		source = row.get("sourced") or {}
+		supplier = source.get("supplier")
+		if not row.get("item_code") or not supplier:
+			continue
+		wanted[row["item_code"]] = {
+			SOURCE_FIELDS["supplier"]: supplier,
+			SOURCE_FIELDS["buy_qty"]: flt(source.get("buy_qty")) or flt(row.get("qty")),
+			SOURCE_FIELDS["buy_rate"]: flt(source.get("buy_rate")),
+			SOURCE_FIELDS["paid"]: 1 if int(source.get("paid") or 0) else 0,
+		}
+
+	# Cleared rather than nulled: these columns are `NOT NULL`, so blanking a
+	# line's sourcing with `None` fails at the database rather than at anything
+	# that could be worded.
+	blank = {
+		SOURCE_FIELDS["supplier"]: "",
+		SOURCE_FIELDS["buy_qty"]: 0,
+		SOURCE_FIELDS["buy_rate"]: 0,
+		SOURCE_FIELDS["paid"]: 0,
+	}
+
+	touched = False
+	for item in doc.items:
+		values = wanted.get(item.item_code, blank)
+		if all(_same(item.get(field), value) for field, value in values.items()):
+			continue
+		# `update_modified=False`: remembering how a line will be filled is not
+		# an edit the customer's copy of the quote should look newer for.
+		frappe.db.set_value("Quotation Item", item.name, values, update_modified=False)
+		touched = True
+	return touched
+
+
+def _same(stored, value) -> bool:
+	"""Whether a row already holds this value — `None` and `""` are both empty."""
+	if stored is None or stored == "":
+		return value is None or value == "" or value == 0
+	return flt(stored) == flt(value) if isinstance(value, int | float) else stored == value
+
+
+def _row_sourcing(row) -> dict | None:
+	"""The sourcing on a quotation row, in the shape the cart holds it.
+
+	`None` when the line is an ordinary one, or when the neighbour it names has
+	since been deleted or disabled — a plan to buy from a shop that is no longer
+	there is not a plan, and the till should ask again rather than have the
+	purchase refused at checkout with a customer waiting.
+	"""
+	supplier = row.get(SOURCE_FIELDS["supplier"])
+	if not supplier:
+		return None
+	if frappe.db.get_value("Supplier", supplier, "disabled") != 0:
+		return None
+	return {
+		"supplier": supplier,
+		"buy_qty": flt(row.get(SOURCE_FIELDS["buy_qty"])) or flt(row.qty),
+		"buy_rate": flt(row.get(SOURCE_FIELDS["buy_rate"])),
+		"paid": 1 if row.get(SOURCE_FIELDS["paid"]) else 0,
+	}
+
+
 @frappe.whitelist(methods=["POST"])
 def create(
 	items: list | str,
@@ -108,6 +194,7 @@ def create(
 
 	doc.insert()
 	doc.submit()
+	_save_sourcing(doc, items)
 
 	return {
 		"name": doc.name,
@@ -415,10 +502,23 @@ def merge(
 	# (item, rate) -> qty. Keyed on the pair so a price the customer was actually
 	# given is never quietly replaced by another one.
 	combined: dict = {}
+	# Sourcing travels with the merge, by item: two quotes that both arranged the
+	# same goods from next door add up to one fetch, not none. First supplier
+	# named wins the line — a merged quote is one basket and one errand.
+	sourcing: dict = {}
 	for d in docs:
 		for row in d.items:
 			key = (row.item_code, flt(row.rate))
 			combined[key] = combined.get(key, 0) + flt(row.qty)
+			source = _row_sourcing(row)
+			if not source:
+				continue
+			held = sourcing.get(row.item_code)
+			if held and held["supplier"] != source["supplier"]:
+				continue
+			source["buy_qty"] = flt(source["buy_qty"]) + (flt(held["buy_qty"]) if held else 0)
+			source["paid"] = max(source["paid"], held["paid"]) if held else source["paid"]
+			sourcing[row.item_code] = source
 
 	party_type, party = chosen
 
@@ -445,6 +545,10 @@ def merge(
 
 	merged.insert()
 	merged.submit()
+	_save_sourcing(
+		merged,
+		[{"item_code": code, "sourced": source} for code, source in sourcing.items()],
+	)
 
 	for d in docs:
 		# Closed the same way a single quote is, so nothing downstream has to know
@@ -554,6 +658,10 @@ def update(name: str, items: list | str, valid_days: int | None = None, notes: s
 		)
 
 	doc.reload()
+
+	# After the reload, so the rows exist — `update_child_qty_rate` creates a
+	# new child row for a line the quote did not have before.
+	_save_sourcing(doc, lines)
 
 	# `valid_till` and `terms` are not `allow_on_submit`, so the document refuses
 	# them through the normal path. Written directly because extending a quote's
@@ -859,6 +967,10 @@ def get(name: str) -> dict:
 				# the quote a suggestion rather than a promise.
 				"rate": flt(row.rate),
 				"uom": row.uom or sellable.stock_uom,
+				# What was agreed with the shop next door when the quote was
+				# given. The till trims this against today's shelf before using
+				# it — see `loadQuotation`.
+				"sourced": _row_sourcing(row),
 			}
 		)
 

@@ -149,6 +149,48 @@ def _run(r):
 	_quotations(r, item)
 
 
+def _quote_sourcing(r, item):
+	"""A quote must remember what is to be bought from the shop next door.
+
+	Nothing is actually purchased when a quote is raised — the purchase invoice
+	is written when the sale is submitted, off the cart line. So a quote that
+	dropped the arrangement sent the cashier back to an empty shelf on
+	conversion, on a sale they had already fetched the goods for.
+	"""
+	from cosmestics.api.quotations import create, get, update
+
+	supplier = frappe.db.get_value("Supplier", {"disabled": 0}, "name")
+	if not supplier:
+		return
+
+	sourced = {"supplier": supplier, "buy_rate": 77, "buy_qty": 5, "paid": 1}
+	quoted = create(
+		items=[{"item_code": item.item_code, "qty": 2, "rate": 333, "discount_pct": 0, "sourced": sourced}],
+		valid_days=7,
+	)
+	line = (get(name=quoted["name"])["items"] or [{}])[0]
+	back = line.get("sourced") or {}
+	r.check("a quoted line remembers the neighbour it is bought from",
+	        back.get("supplier") == supplier, str(back.get("supplier")))
+	r.check("…how many to fetch (5, more than the 2 sold)", flt(back.get("buy_qty")) == 5,
+	        str(back.get("buy_qty")))
+	r.check("…what they charge (77)", flt(back.get("buy_rate")) == 77, str(back.get("buy_rate")))
+	r.check("…and that they were paid on collection", back.get("paid") == 1, str(back.get("paid")))
+
+	# Editing the quote keeps it, and clearing it sticks.
+	update(name=quoted["name"],
+	       items=[{"item_code": item.item_code, "qty": 4, "rate": 333, "discount_pct": 0,
+	               "sourced": dict(sourced, buy_qty=6)}])
+	edited = (get(name=quoted["name"])["items"] or [{}])[0].get("sourced") or {}
+	r.check("editing a quote keeps the sourcing", flt(edited.get("buy_qty")) == 6,
+	        str(edited.get("buy_qty")))
+
+	update(name=quoted["name"],
+	       items=[{"item_code": item.item_code, "qty": 4, "rate": 333, "discount_pct": 0, "sourced": None}])
+	cleared = (get(name=quoted["name"])["items"] or [{}])[0].get("sourced")
+	r.check("dropping the sourcing sticks", cleared is None, str(cleared))
+
+
 def _quotations(r, item):
 	"""Quote a cart, then load it back.
 
@@ -183,6 +225,8 @@ def _quotations(r, item):
 		# The point of the whole feature: the customer was promised 333.
 		r.check("loaded line keeps the QUOTED rate (333)", flt(line["rate"]) == 333,
 		        str(line["rate"]))
+
+	_quote_sourcing(r, item)
 
 	listed = list_quotations(days=1)
 	r.check("the new quotation is listed", any(q["name"] == quoted["name"] for q in listed["rows"]),

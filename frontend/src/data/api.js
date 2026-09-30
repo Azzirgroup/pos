@@ -217,6 +217,17 @@ export const createQuotation = ({ items, customer, validDays, notes }) =>
 			qty: l.qty,
 			rate: l.rate,
 			discount_pct: l.discountPct,
+			// What was arranged with the shop next door. Nothing is bought until
+			// the sale is submitted, so a quote that dropped this sent the
+			// cashier back to an empty shelf on conversion.
+			sourced: l.sourced
+				? {
+						supplier: l.sourced.supplier,
+						buy_rate: l.sourced.buyRate,
+						buy_qty: l.sourced.buyQty ?? l.qty,
+						paid: l.sourced.paidNow ? 1 : 0,
+					}
+				: null,
 		})),
 		customer: customer || null,
 		valid_days: validDays || 14,
@@ -246,6 +257,17 @@ export const updateQuotation = ({ name, items, validDays, notes }) =>
 			qty: l.qty,
 			rate: l.rate,
 			discount_pct: l.discountPct,
+			// What was arranged with the shop next door. Nothing is bought until
+			// the sale is submitted, so a quote that dropped this sent the
+			// cashier back to an empty shelf on conversion.
+			sourced: l.sourced
+				? {
+						supplier: l.sourced.supplier,
+						buy_rate: l.sourced.buyRate,
+						buy_qty: l.sourced.buyQty ?? l.qty,
+						paid: l.sourced.paidNow ? 1 : 0,
+					}
+				: null,
 		})),
 		valid_days: validDays || null,
 		notes: notes || null,

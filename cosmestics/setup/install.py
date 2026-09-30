@@ -68,6 +68,7 @@ def setup_prerequisites():
 	ensure_shift_cashier_field()
 	ensure_pin_login_fields()
 	ensure_quote_conversion_fields()
+	ensure_quote_sourcing_fields()
 	ensure_purchase_landed_cost_fields()
 	ensure_transfer_approval_fields()
 	ensure_material_request_customer_field()
@@ -244,6 +245,69 @@ def ensure_quote_conversion_fields():
 		if frappe.db.exists("Custom Field", {"dt": "Quotation", "fieldname": field["fieldname"]}):
 			continue
 		create_custom_field("Quotation", field)
+
+
+def ensure_quote_sourcing_fields():
+	"""Where a quote remembers what has to be bought from next door.
+
+	A cart line can be part- or wholly sourced from a neighbouring shop. Nothing
+	is actually purchased until the sale is submitted — the purchase invoice is
+	raised at that moment, from the cart line — so a quote that dropped the
+	sourcing left the shop with a promise it could not fill: converting the
+	quote weeks later found the shelf empty again and refused the line, with
+	the cashier certain they had already arranged the goods.
+
+	Kept on the row rather than in a blob on the parent so the store keeper can
+	see, in the Quotation itself, which lines are coming from whom and at what
+	cost. `allow_on_submit` because a quote is submitted the moment it is
+	raised, and these are written straight after.
+	"""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	fields = [
+		{
+			"fieldname": "cosmestics_source_supplier",
+			"label": "Buy From",
+			"fieldtype": "Link",
+			"options": "Supplier",
+			"insert_after": "warehouse",
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"description": "Neighbouring shop this line is to be bought from when the quote becomes a sale.",
+		},
+		{
+			"fieldname": "cosmestics_source_qty",
+			"label": "Buy Qty",
+			"fieldtype": "Float",
+			"insert_after": "cosmestics_source_supplier",
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"depends_on": "cosmestics_source_supplier",
+			"description": "How many to fetch — may exceed the quantity sold when the neighbour only sells a carton.",
+		},
+		{
+			"fieldname": "cosmestics_source_rate",
+			"label": "Buy Rate",
+			"fieldtype": "Currency",
+			"insert_after": "cosmestics_source_qty",
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"depends_on": "cosmestics_source_supplier",
+		},
+		{
+			"fieldname": "cosmestics_source_paid",
+			"label": "Paid On Collection",
+			"fieldtype": "Check",
+			"insert_after": "cosmestics_source_rate",
+			"allow_on_submit": 1,
+			"no_copy": 1,
+			"depends_on": "cosmestics_source_supplier",
+		},
+	]
+	for field in fields:
+		if frappe.db.exists("Custom Field", {"dt": "Quotation Item", "fieldname": field["fieldname"]}):
+			continue
+		create_custom_field("Quotation Item", field)
 
 
 def ensure_purchase_landed_cost_fields():
