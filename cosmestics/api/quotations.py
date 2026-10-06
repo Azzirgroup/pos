@@ -870,10 +870,18 @@ def close(name: str, reason: str | None = None) -> dict:
 	# A draft was never given to anybody, so there is nothing to lose; cancelling
 	# it is the honest record. ERPNext also refuses `Lost` on a docstatus 0 doc.
 	if doc.docstatus == 0:
+		# The owner is told from `on_quotation_trash`, which this reaches — not
+		# from here, or a discarded draft would be announced twice.
 		doc.delete()
 		return {"name": name, "status": "Deleted", "message": _("Draft {0} discarded").format(name)}
 
 	doc.declare_enquiry_lost([], [], detailed_reason=reason or None)
+
+	from cosmestics.api.notifications import queue_quote_ended_notice
+
+	queue_quote_ended_notice(
+		name, "closed", reason, frappe.utils.get_fullname(frappe.session.user)
+	)
 
 	return {
 		"name": name,

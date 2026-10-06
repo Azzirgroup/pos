@@ -1633,3 +1633,180 @@ def _enqueued_payment_change_notice(old: str, new: str, was: str, became: str, c
 			ok = _send_to_group(jid, message) if is_group(jid) else send_text(jid, message, sender)
 		sent += 1 if ok else 0
 	return sent
+
+
+def _owner_targets() -> list:
+	"""Where an undo is reported: [(number_or_jid, sender)].
+
+	The owner's own number, not the sales group. A void and a closed quote are
+	about somebody's work being undone — the owner asked to be told, and posting
+	that to the whole staff group is a different act from announcing a sale.
+
+	The group is the fallback only when no owner number is set, so a shop that
+	has not filled that in still gets told rather than silently getting nothing.
+	"""
+	try:
+		manager = (_settings().get("manager_whatsapp") or "").strip()
+	except Exception:
+		manager = ""
+	if manager:
+		try:
+			sender = _settings().get("whatsapp_sender") or None
+		except Exception:
+			sender = None
+		return [(manager, sender)]
+	return _sale_group_targets()
+
+
+def _announce_to_owner(message: str) -> int:
+	sent = 0
+	for to, sender in _owner_targets():
+		if is_group(to):
+			try:
+				from whatsapp_integration.service.groups import send_group_text
+
+				ok = send_group_text(to, message, sender)
+			except ImportError:
+				ok = _send_to_group(to, message)
+		else:
+			ok = send_text(to, message, sender)
+		sent += 1 if ok else 0
+	return sent
+
+
+def _owner_notices_on() -> bool:
+	"""Whether voids and closed quotes are reported.
+
+	A missing value counts as on. The setting arrives with a migration, and on a
+	Single doctype an unsaved field reads as `None` until somebody opens the
+	form and saves it — so reading `None` as off would mean the shop that
+	upgraded gets silence instead of the feature, with nothing on screen to say
+	why.
+	"""
+	try:
+		value = _settings().get("notify_sale_changes")
+	except Exception:
+		return False
+	return True if value is None else bool(value)
+
+
+def format_sale_void(doc, reason: str | None, voided_by: str) -> str:
+	"""A sale that has been taken back off the books, in the owner's terms."""
+	total = abs(flt(doc.rounded_total or doc.grand_total))
+	rows = [
+		[f"{abs(flt(item.qty)):g}", (item.item_name or item.item_code)[:24]] for item in doc.items
+	]
+	lines = [
+		"*Sale voided*",
+		f"{doc.name} · {doc.customer_name or doc.customer}",
+		f"Sold on {frappe.utils.formatdate(doc.posting_date)} by {frappe.utils.get_fullname(doc.owner)}",
+		"",
+		_table(["Qty", "Item"], rows),
+		f"Taken back: {frappe.utils.fmt_money(total, currency=doc.currency)}",
+		# Said plainly, because this is the difference between a void and a
+		# return: nothing was refunded, the sale simply never happened.
+		"Stock and accounts reversed — the goods are back on the shelf.",
+		f"Voided by: {voided_by}",
+	]
+	if (reason or "").strip():
+		lines.append(f"Reason: {reason.strip()}")
+	return "\n".join(lines)
+
+
+def queue_sale_void_notice(invoice: str, reason: str | None, voided_by: str):
+	"""After commit and off the request, like every other notice here."""
+
+	def _enqueue():
+		try:
+			frappe.enqueue(
+				"cosmestics.api.notifications._enqueued_sale_void_notice",
+				queue="short",
+				invoice=invoice,
+				reason=reason,
+				voided_by=voided_by,
+			)
+		except Exception as e:
+			frappe.log_error(f"Could not queue the void notice for {invoice}: {e}", "Cosmetics POS")
+
+	try:
+		frappe.db.after_commit.add(_enqueue)
+	except Exception as e:
+		frappe.log_error(f"Could not schedule the void notice for {invoice}: {e}", "Cosmetics POS")
+
+
+def _enqueued_sale_void_notice(invoice: str, reason: str | None, voided_by: str) -> int:
+	if not _owner_notices_on():
+		return 0
+	doc = frappe.get_doc("Sales Invoice", invoice)
+	return _announce_to_owner(format_sale_void(doc, reason, voided_by))
+
+
+def format_quote_ended(doc, action: str, reason: str | None, ended_by: str) -> str:
+	"""A quotation that will not become a sale.
+
+	`action` is the shop's word for what happened — "closed" or "deleted" — not
+	ERPNext's `Lost`, which reads like the shop mislaid the document.
+	"""
+	total = flt(doc.grand_total)
+	lines = [
+		f"*Quotation {action}*",
+		f"{doc.name} · {doc.customer_name or doc.party_name}",
+		f"Quoted on {frappe.utils.formatdate(doc.transaction_date)} by {frappe.utils.get_fullname(doc.owner)}",
+		f"Value: {frappe.utils.fmt_money(total, currency=doc.currency)}",
+		f"{action.title()} by: {ended_by}",
+	]
+	if (reason or "").strip():
+		lines.append(f"Reason: {reason.strip()}")
+	return "\n".join(lines)
+
+
+def queue_quote_ended_notice(name: str, action: str, reason: str | None, ended_by: str):
+	"""Rendered now, sent after commit.
+
+	The message is built here rather than in the job because a deleted
+	quotation is gone by the time the job runs — there is nothing left to read
+	it off.
+	"""
+	if not _owner_notices_on():
+		return
+	try:
+		doc = frappe.get_doc("Quotation", name)
+		message = format_quote_ended(doc, action, reason, ended_by)
+	except Exception as e:
+		frappe.log_error(f"Could not word the quotation notice for {name}: {e}", "Cosmetics POS")
+		return
+
+	def _enqueue():
+		try:
+			frappe.enqueue(
+				"cosmestics.api.notifications._enqueued_owner_notice",
+				queue="short",
+				message=message,
+			)
+		except Exception as e:
+			frappe.log_error(f"Could not queue the quotation notice for {name}: {e}", "Cosmetics POS")
+
+	try:
+		frappe.db.after_commit.add(_enqueue)
+	except Exception as e:
+		frappe.log_error(f"Could not schedule the quotation notice for {name}: {e}", "Cosmetics POS")
+
+
+def _enqueued_owner_notice(message: str) -> int:
+	return _announce_to_owner(message)
+
+
+def on_quotation_trash(doc, method=None):
+	"""Hooked on Quotation `on_trash` — a quote deleted outright.
+
+	Deleting is the other way a quote ends, and the one that leaves no record
+	at all: `close` at least leaves a Lost document somebody can find. Both are
+	reported, and neither is reported twice — the till's own close discards a
+	*draft* by deleting it, and that path arrives here.
+	"""
+	try:
+		queue_quote_ended_notice(
+			doc.name, "deleted", None, frappe.utils.get_fullname(frappe.session.user)
+		)
+	except Exception as e:
+		frappe.log_error(f"Could not report the deletion of {doc.name}: {e}", "Cosmetics POS")

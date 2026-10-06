@@ -187,13 +187,22 @@ def void_sale(invoice: str, reason: str | None = None) -> dict:
 
 	doc.cancel()
 
+	voided_by = frappe.utils.get_fullname(frappe.session.user)
 	_comment(
 		doc,
 		_("Voided at the till by {0}{1}").format(
-			frappe.utils.get_fullname(frappe.session.user),
+			voided_by,
 			f": {reason.strip()}" if (reason or "").strip() else "",
 		),
 	)
+
+	# Told from here rather than from a `on_cancel` hook. `change_payment` also
+	# cancels the invoice — to re-book it under the tenders it was really paid
+	# with — and a hook could not tell the two apart, so every corrected payment
+	# method would have reached the owner as a voided sale.
+	from cosmestics.api.notifications import queue_sale_void_notice
+
+	queue_sale_void_notice(doc.name, reason, voided_by)
 
 	return {
 		"invoice": doc.name,

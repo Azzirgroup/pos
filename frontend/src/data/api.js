@@ -975,6 +975,16 @@ export const listMasterRecords = ({ key, search, limit }) =>
 export const getMasterOptions = ({ key, fieldname, search }) =>
 	call('cosmestics.api.master.options', { key, fieldname, search: search || null })
 
+/**
+ * Records that already look like the one being typed.
+ *
+ * Asked while the form is being filled in rather than refused on save: two
+ * products can legitimately share words, so this shows what is there and lets
+ * the shop decide. See `master.find_similar`.
+ */
+export const findSimilarMasters = ({ key, text }) =>
+	call('cosmestics.api.master.find_similar', { key, text })
+
 export const createMaster = ({ key, values }) =>
 	call('cosmestics.api.master.create', { key, values })
 

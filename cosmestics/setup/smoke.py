@@ -147,6 +147,9 @@ def _run(r):
 	_whatsapp(r)
 	_settings(r)
 	_quotations(r, item)
+	_duplicate_items(r, item)
+	_owner_notices(r, item)
+	_statement_print(r)
 
 
 def _quote_sourcing(r, item):
@@ -189,6 +192,70 @@ def _quote_sourcing(r, item):
 	       items=[{"item_code": item.item_code, "qty": 4, "rate": 333, "discount_pct": 0, "sourced": None}])
 	cleared = (get(name=quoted["name"])["items"] or [{}])[0].get("sourced")
 	r.check("dropping the sourcing sticks", cleared is None, str(cleared))
+
+
+def _duplicate_items(r, item):
+	"""Typing a product that is already on the shelf has to say so."""
+	from cosmestics.api.master import find_similar
+
+	print()
+	name = item.item_name or item.item_code
+	found = find_similar("item", name)
+	r.check(
+		"an item already on the system is offered back",
+		any(f["name"] == item.item_code for f in found),
+		f"{len(found)} matches for {name!r}",
+	)
+
+	# The duplicate that actually happens is the near miss, not the exact retype.
+	typo = (name[:-1] + "x") if len(name) > 4 else name
+	near = find_similar("item", typo)
+	r.check("…and so does a near miss", any(f["name"] == item.item_code for f in near), typo)
+
+	r.check("two letters are not a question", find_similar("item", "ab") == [], "nothing offered")
+	if found:
+		row = next(f for f in found if f["name"] == item.item_code)
+		r.check("the suggestion carries what is on the shelf", "stock" in row and "price" in row,
+		        f"{row.get('stock')} · {row.get('price')}")
+
+
+def _owner_notices(r, item):
+	"""Voids and ended quotes are reported; the wording is the whole feature."""
+	from cosmestics.api import notifications as N
+
+	print()
+	r.check("owner notices are switched on by default",
+	        frappe.db.get_single_value("Cosmestics POS Settings", "notify_sale_changes") == 1,
+	        str(frappe.db.get_single_value("Cosmestics POS Settings", "notify_sale_changes")))
+
+	quote = frappe.get_doc(
+		{
+			"doctype": "Quotation",
+			"quotation_to": "Customer",
+			"party_name": frappe.db.get_value("Customer", {"disabled": 0}, "name"),
+			"transaction_date": nowdate(),
+			"items": [{"item_code": item.item_code, "qty": 1, "rate": 100}],
+		}
+	).insert()
+	wording = N.format_quote_ended(quote, "closed", "Bought elsewhere", "Jane")
+	r.check("a closed quote names the document", quote.name in wording, wording.splitlines()[1])
+	r.check("…who closed it", "Jane" in wording, "Closed by line present")
+	r.check("…and why", "Bought elsewhere" in wording, "reason carried")
+
+
+def _statement_print(r):
+	"""The statement is a printed sheet, so it is checked as one."""
+	from cosmestics.api.parties import statement_html
+
+	print()
+	party = frappe.db.get_value("Customer", {"disabled": 0}, "name")
+	html = statement_html("Customer", party, add_days(nowdate(), -30), nowdate())
+	# `display:flex` is ignored by the engine that renders the PDF the shop
+	# sends, which stacked the three figures down the margin.
+	r.check("the statement uses no flexbox", "display: flex" not in html, "table layout")
+	r.check("column headers repeat on every page", "table-header-group" in html, "thead repeats")
+	r.check("the sheet declares its own page", "@page" in html, "page box set")
+	r.check("rows are not split across a page break", "page-break-inside: avoid" in html, "rows kept whole")
 
 
 def _quotations(r, item):

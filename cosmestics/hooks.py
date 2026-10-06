@@ -139,6 +139,12 @@ doc_events = {
 		# by one of them is stored in the clear.
 		"validate": "cosmestics.api.pin.hash_user_pin",
 	},
+	"Quotation": {
+		# A quote deleted outright leaves no record at all — see
+		# `notifications.on_quotation_trash`. Closing one is reported from
+		# `quotations.close`, which is the other way a quote ends.
+		"on_trash": "cosmestics.api.notifications.on_quotation_trash",
+	},
 	"Sales Invoice": {
 		# Credit notes only: tells the customer their sale was reversed. Every
 		# other invoice falls straight through — see `on_sales_invoice_submit`.

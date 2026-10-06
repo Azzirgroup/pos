@@ -58,7 +58,7 @@ import MoveStockSheet from '@/components/MoveStockSheet.vue'
 import ShareSheet from '@/components/ShareSheet.vue'
 import MaterialRequestSheet from '@/components/MaterialRequestSheet.vue'
 import { saleMessage } from '@/utils/salesMessage'
-import { printHtml, printUrl } from '@/utils/silentPrint'
+import { printHtml, printUrl, RECEIPT_WIDTH } from '@/utils/silentPrint'
 import { cameraScanSupported } from '@/composables/useCameraScanner'
 import LucideTriangleAlert from '~icons/lucide/triangle-alert'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
@@ -409,7 +409,7 @@ async function printReceipt(invoice) {
 	notify('Preparing the receipt…')
 	try {
 		const { html } = await getReceiptHtml({ invoice: target })
-		printHtml(html, () => notify('Could not reach the printer', 'warn'))
+		printHtml(html, () => notify('Could not reach the printer', 'warn'), { width: RECEIPT_WIDTH })
 		return
 	} catch (e) {
 		// Older sites, or a print format the server could not render: fall back
@@ -419,7 +419,7 @@ async function printReceipt(invoice) {
 
 	try {
 		const { url } = await getReceiptUrl({ invoice: target })
-		printUrl(url, () => notify('Could not reach the printer', 'warn'))
+		printUrl(url, () => notify('Could not reach the printer', 'warn'), { width: RECEIPT_WIDTH })
 	} catch (e) {
 		notify(e.message || 'Could not open the receipt', 'warn')
 	}

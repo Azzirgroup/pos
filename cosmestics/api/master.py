@@ -182,6 +182,10 @@ def list_types() -> list:
 				"icon": m["icon"],
 				"fields": m["fields"],
 				"hint": m.get("hint"),
+				# Which box names the record. The form watches it to ask whether
+				# what is being typed is already on the system — see
+				# `find_similar`.
+				"title_field": m["title_field"],
 			}
 		)
 	return out
@@ -544,3 +548,124 @@ def _set_opening_price(item_code: str, price):
 	# for the same problem costing a Material Request its creation.
 	doc.price_list_rate = flt(price)
 	doc.insert()
+
+
+#: How many near-matches are worth showing before the question stops being
+#: "is this already here" and starts being a search.
+SIMILAR_LIMIT = 5
+
+
+@frappe.whitelist()
+def find_similar(key: str, text: str, limit: int = SIMILAR_LIMIT) -> list:
+	"""Records that already look like the one being typed.
+
+	A shop adds the same product twice the way everybody does: the person at the
+	counter cannot see the shelf list while they are filling in a form, so
+	"Argan Oil Shampoo 400ml" is added beside "Argan oil shampoo 400 ml" and the
+	stock for one product is then split across two codes that never add up
+	again. Splitting them is a day's work; not splitting them is a lookup.
+
+	Matched on the same columns a person would look at — the code, the name, the
+	barcode printed on the packet — and ranked by `search_rows`, so a near miss
+	and a typo both surface. Advisory only: two genuinely different products do
+	share words, and the shop is the one who knows.
+	"""
+	entry = _entry(key)
+	doctype = entry["doctype"]
+	if not frappe.has_permission(doctype, "read"):
+		return []
+
+	term = (text or "").strip()
+	# Two letters match half the shelf; it is noise, not an answer.
+	if len(term) < 3:
+		return []
+
+	meta = frappe.get_meta(doctype)
+	title = entry["title_field"] if meta.has_field(entry["title_field"]) else "name"
+
+	fields = ["name", f"{title} as title"]
+	for extra in ("item_group", "brand", "stock_uom", "disabled", "is_sales_item"):
+		if meta.has_field(extra) and extra not in (title,):
+			fields.append(extra)
+
+	search_fields = ["name", title]
+	for extra in ("item_group", "brand"):
+		if meta.has_field(extra):
+			search_fields.append(extra)
+
+	cap = min(max(cint(limit) or SIMILAR_LIMIT, 1), 10)
+
+	def _fetch(or_filters, page_length):
+		return frappe.get_all(
+			doctype,
+			or_filters=or_filters,
+			fields=fields,
+			order_by="modified desc",
+			limit_page_length=page_length,
+		)
+
+	rows = search_rows(_fetch, term, search_fields, cap, rank_fields=["name", "title"])
+
+	# Nothing at all, on a term long enough to be a real name or code. A product
+	# code is one opaque word, so a single wrong character leaves the matching
+	# with nothing to go on — "NAL-00x" and "NAL-004" share no whole token, and
+	# a code one character off an existing one is precisely a duplicate. The
+	# leading two-thirds is tried as a prefix before giving up.
+	if not rows and len(term) >= 5:
+		stem = term[: max(4, (len(term) * 2) // 3)]
+		rows = _fetch(
+			{field: ["like", f"{stem}%"] for field in dict.fromkeys(["name", title])}, cap
+		)
+
+	# A barcode is the one thing a person can type that is an exact answer, so
+	# the item it belongs to goes to the front whatever the name matching made
+	# of it.
+	if doctype == "Item":
+		exact = frappe.db.get_value("Item Barcode", {"barcode": term}, "parent")
+		if exact and exact not in {r["name"] for r in rows}:
+			row = frappe.db.get_value(
+				"Item", exact, ["name", "item_name as title", "item_group", "brand", "stock_uom", "disabled"], as_dict=True
+			)
+			if row:
+				rows.insert(0, row)
+				rows = rows[:cap]
+
+	# Price and stock for the whole short list at once. One row at a time would
+	# be two queries per suggestion, run every few keystrokes.
+	prices, stock = {}, {}
+	if doctype == "Item" and rows:
+		codes = [r["name"] for r in rows]
+		price_list = frappe.get_cached_doc("Cosmestics POS Settings").selling_price_list
+		if price_list:
+			prices = {
+				r.item_code: flt(r.price_list_rate)
+				for r in frappe.get_all(
+					"Item Price",
+					filters={"item_code": ["in", codes], "price_list": price_list},
+					fields=["item_code", "price_list_rate"],
+				)
+			}
+		stock = {
+			r[0]: flt(r[1])
+			for r in frappe.db.sql("select item_code, sum(actual_qty) from `tabBin` where item_code in %(codes)s group by item_code", {"codes": codes})
+		}
+
+	out = []
+	for row in rows:
+		found = {
+			"name": row["name"],
+			"title": row.get("title") or row["name"],
+			# Shown beside the name when they differ: somebody who typed a code
+			# needs to see codes back, not a list of names.
+			"code": row["name"] if (row.get("title") or row["name"]) != row["name"] else None,
+			"group": row.get("item_group") or row.get("brand") or None,
+			"retired": bool(row.get("disabled"))
+			or (meta.has_field("is_sales_item") and row.get("is_sales_item") == 0),
+			"desk_url": get_url(f"/app/{frappe.scrub(doctype).replace('_', '-')}/{row['name']}"),
+		}
+		if doctype == "Item":
+			found["price"] = prices.get(row["name"], 0.0)
+			found["stock"] = stock.get(row["name"], 0.0)
+			found["uom"] = row.get("stock_uom")
+		out.append(found)
+	return out

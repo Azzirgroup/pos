@@ -1,13 +1,22 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { Button, Dialog, FormControl, Spinner } from 'frappe-ui'
-import { createMaster, getMasterOptions, getMasterRecord, listMasterTypes, updateMaster } from '@/data/api'
+import {
+	createMaster,
+	findSimilarMasters,
+	getMasterOptions,
+	getMasterRecord,
+	listMasterTypes,
+	updateMaster,
+} from '@/data/api'
+import { fmtMoney } from '@/utils/format'
 import { resolveIcon } from '@/utils/icons'
 import { useCatalogStore } from '@/stores/catalog'
 import LinkField from './LinkField.vue'
 import ImageField from './ImageField.vue'
 import LucidePlus from '~icons/lucide/plus'
 import LucideExternalLink from '~icons/lucide/external-link'
+import LucideSearchCheck from '~icons/lucide/search-check'
 
 /**
  * Quick-add for the records a shop creates itself.
@@ -52,6 +61,69 @@ const editing = ref(null)
 
 const active = computed(() => types.value.find((t) => t.key === activeKey.value) || null)
 
+/* ---------- is this already on the system? ---------- */
+
+/**
+ * Records that already look like the one being typed.
+ *
+ * A shop adds the same product twice because the person filling in this form
+ * cannot see the shelf list while they are in it — so one product ends up
+ * under two codes and its stock never adds up again. Asked while they type
+ * rather than refused on save: two products genuinely can share words, and the
+ * shop is the one who knows which.
+ */
+const similar = ref([])
+const similarChecking = ref(false)
+
+/** The box that names the record — the one worth checking for duplicates. */
+const probeText = computed(() => {
+	if (!active.value || editing.value) return ''
+	const title = active.value.title_field
+	const typed = String(values.value[title] ?? '').trim()
+	// The code is the other thing somebody types that already exists.
+	return typed || String(values.value[active.value.fields[0]?.fieldname] ?? '').trim()
+})
+
+let probeTimer = null
+let probeSeq = 0
+watch(probeText, (text) => {
+	clearTimeout(probeTimer)
+	if (text.length < 3) {
+		similar.value = []
+		similarChecking.value = false
+		return
+	}
+	similarChecking.value = true
+	// Typing speed, not network speed: a lookup per keystroke would run a
+	// dozen queries to answer a question asked once.
+	probeTimer = setTimeout(async () => {
+		const mine = ++probeSeq
+		try {
+			const found = await findSimilarMasters({ key: activeKey.value, text })
+			if (mine !== probeSeq) return
+			similar.value = found
+		} catch {
+			if (mine === probeSeq) similar.value = []
+		} finally {
+			if (mine === probeSeq) similarChecking.value = false
+		}
+	}, 350)
+})
+
+/** Open the one that already exists instead of adding another. */
+async function openExisting(row) {
+	clearTimeout(probeTimer)
+	similar.value = []
+	loading.value = true
+	try {
+		await loadRecord(row.name)
+	} catch (e) {
+		emit('notify', { message: e.message || 'Could not open that record', tone: 'bad' })
+	} finally {
+		loading.value = false
+	}
+}
+
 watch(
 	() => props.open,
 	async (open) => {
@@ -78,6 +150,7 @@ function pick(key) {
 	editing.value = null
 	values.value = {}
 	created.value = null
+	similar.value = []
 	// Link fields (`LinkField`) search the server themselves as the cashier
 	// types, rather than choosing from a list pre-fetched here — see that
 	// component for why. Only plain `select` fields still read from
@@ -91,8 +164,8 @@ const canSave = computed(
 			.every((f) => String(values.value[f.fieldname] ?? '').trim()) ?? false,
 )
 
-async function loadRecord() {
-	editing.value = await getMasterRecord({ key: activeKey.value, name: props.editName })
+async function loadRecord(name = props.editName) {
+	editing.value = await getMasterRecord({ key: activeKey.value, name })
 	// Nulls become empty strings so the controls are actually editable rather
 	// than showing a placeholder that will not clear.
 	values.value = Object.fromEntries(
@@ -131,6 +204,7 @@ async function save() {
 		const res = await createMaster({ key: activeKey.value, values: values.value })
 		created.value = res
 		values.value = {}
+		similar.value = []
 		emit('created', res)
 		emit('notify', { message: res.message, tone: 'good' })
 		refreshTillCatalog()
@@ -235,6 +309,52 @@ function optionsFor(field) {
 							:options="field.type === 'select' ? optionsFor(field) : undefined"
 						/>
 					</template>
+				</div>
+
+				<!-- What is already there, while they are still typing. Advisory on
+				     purpose: it offers the existing record and never blocks the new
+				     one, because two products can share a word and only the shop
+				     knows which case this is. -->
+				<div
+					v-if="!editing && (similar.length || similarChecking)"
+					class="rounded-lg border border-outline-amber-2 bg-surface-amber-1 px-3 py-2.5"
+				>
+					<div class="flex items-center gap-2 text-p-sm font-medium text-ink-amber-3">
+						<LucideSearchCheck class="h-4 w-4 shrink-0" />
+						<span v-if="similar.length">
+							Already on the system — {{ similar.length }} like this
+						</span>
+						<span v-else>Checking what is already there…</span>
+					</div>
+					<ul v-if="similar.length" class="mt-2 flex flex-col gap-1">
+						<li
+							v-for="row in similar"
+							:key="row.name"
+							class="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-md bg-surface-white px-2.5 py-2"
+						>
+							<span class="min-w-0 flex-1 truncate text-p-sm font-medium text-ink-gray-9">
+								{{ row.title }}
+								<span v-if="row.code" class="ml-1 font-normal text-ink-gray-5">{{ row.code }}</span>
+								<span v-if="row.retired" class="ml-1 rounded bg-surface-gray-3 px-1 py-0.5 text-p-xs font-normal text-ink-gray-6">
+									retired
+								</span>
+							</span>
+							<span v-if="row.group" class="shrink-0 text-p-xs text-ink-gray-5">{{ row.group }}</span>
+							<span v-if="row.stock !== undefined" class="tabular shrink-0 text-p-xs text-ink-gray-6">
+								{{ Number(row.stock) }} {{ row.uom || '' }} · {{ fmtMoney(row.price) }}
+							</span>
+							<button
+								type="button"
+								class="shrink-0 rounded-md border border-outline-gray-2 bg-surface-white px-2 py-1 text-p-xs font-semibold text-ink-gray-8 hover:bg-surface-gray-2"
+								@click="openExisting(row)"
+							>
+								Open this one
+							</button>
+						</li>
+					</ul>
+					<p v-if="similar.length" class="mt-2 text-p-xs text-ink-amber-3">
+						Carry on if yours is a different product — this only says what is there.
+					</p>
 				</div>
 
 				<!-- Confirmation stays on screen so several can be added in a row,

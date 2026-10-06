@@ -369,7 +369,7 @@ def statement_html(
 
 	rows = "".join(
 		f"<tr><td>{r['posting_date']}</td><td>{frappe.utils.escape_html(r['voucher_type'])}</td>"
-		f"<td>{frappe.utils.escape_html(r['voucher_no'])}</td>"
+		f"<td class='doc'>{frappe.utils.escape_html(r['voucher_no'])}</td>"
 		f"<td class='n'>{money(r['charged']) if r['charged'] else ''}</td>"
 		f"<td class='n'>{money(r['settled']) if r['settled'] else ''}</td>"
 		f"<td class='n'>{money(r['balance'])}</td></tr>"
@@ -378,36 +378,76 @@ def statement_html(
 	contact = " · ".join(x for x in (data.get("mobile_no"), data.get("email_id"), data.get("location")) if x)
 	charged_label = _("Billed") if party_type == "Customer" else _("Billed to us")
 
+	summary = [(_("Opening"), money(data["opening"])), (_("Closing"), money(data["closing"]))]
+	if data.get("credit_limit"):
+		summary.append((_("Credit limit"), money(data["credit_limit"])))
+	sum_cells = "".join(
+		f"<td><span class='k'>{label}</span><span class='v'>{value}</span></td>"
+		for label, value in summary
+	)
+
 	return f"""<!doctype html><html><head><meta charset="utf-8">
 <title>{_("Statement")} — {frappe.utils.escape_html(data['title'])}</title>
 <style>
-  body {{ font-family: system-ui, "Helvetica Neue", Arial, sans-serif; font-size: 12px; color: #1a1a1a; margin: 28px; }}
-  .head {{ border-bottom: 2px solid #1a1a1a; padding-bottom: 8px; margin-bottom: 14px; }}
-  h1 {{ font-size: 17px; margin: 14px 0 2px; }}
-  .muted {{ color: #666; }}
-  .sum {{ display: flex; gap: 28px; margin: 12px 0; }}
-  .sum b {{ display: block; font-size: 14px; }}
-  table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
+  /* Paper first. The page used to carry a 28px body margin and no page rule,
+     so the printer added its own on top of it and the sheet sat low and left.
+     One margin, declared here, and the body has none. */
+  @page {{ size: A4; margin: 14mm 12mm; }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    font-family: system-ui, "Helvetica Neue", Arial, sans-serif;
+    font-size: 11.5px; color: #1a1a1a; margin: 0;
+    /* Header bands and rules are the alignment cues on a long statement, and
+       browsers drop background colour from print by default. */
+    -webkit-print-color-adjust: exact; print-color-adjust: exact;
+  }}
+  .head {{ border-bottom: 2px solid #1a1a1a; padding-bottom: 8px; margin-bottom: 12px; }}
+  /* A letterhead is somebody else's HTML, often with a logo sized for screen.
+     Left to itself it pushes the page wider than the paper and every column
+     after it sits off the edge. */
+  .head img {{ max-width: 100%; height: auto; }}
+  .head table {{ width: 100% !important; }}
+  h1 {{ font-size: 16px; margin: 10px 0 2px; }}
+  .muted {{ color: #666; font-size: 11px; }}
+  /* A table, not flexbox. `display:flex` is ignored outright by the PDF engine
+     the shop's statements are rendered with, which stacked these three figures
+     down the left margin instead of setting them in a row. */
+  .sum {{ width: auto; margin: 10px 0 0; border-collapse: collapse; }}
+  .sum td {{ padding: 0 28px 0 0; border: 0; vertical-align: top; }}
+  .sum .k {{ display: block; font-size: 10.5px; color: #666; }}
+  .sum .v {{ display: block; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }}
+  /* Fixed layout with a colgroup: the columns are then the same width on every
+     page, which is what makes a three-page statement read as one document. */
+  table.ledger {{ width: 100%; border-collapse: collapse; margin-top: 12px; table-layout: fixed; }}
   th, td {{ padding: 5px 6px; border-bottom: 1px solid #e0e0e0; text-align: left; }}
-  th {{ background: #f4f4f4; }}
-  .n {{ text-align: right; font-variant-numeric: tabular-nums; }}
-  tfoot td {{ font-weight: 600; border-top: 2px solid #1a1a1a; }}
-  .foot {{ margin-top: 18px; color: #666; font-size: 11px; }}
+  th {{ background: #f4f4f4; font-size: 10.5px; text-transform: uppercase; letter-spacing: .02em; }}
+  /* Repeated at the top of every printed page. Without this the second page of
+     a long statement is a wall of figures with nothing saying which column is
+     which — the usual complaint about a statement that will not sit straight. */
+  thead {{ display: table-header-group; }}
+  tfoot {{ display: table-footer-group; }}
+  tr {{ page-break-inside: avoid; break-inside: avoid; }}
+  .n {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+  .doc {{ font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }}
+  .brought td {{ font-style: italic; color: #555; }}
+  tfoot td {{ font-weight: 700; border-top: 2px solid #1a1a1a; border-bottom: 0; }}
+  .foot {{ margin-top: 16px; padding-top: 8px; border-top: 1px solid #e0e0e0;
+           color: #666; font-size: 10.5px; page-break-inside: avoid; }}
 </style></head><body>
   <div class="head">{head['header']}</div>
   <h1>{frappe.utils.escape_html(data['title'])}</h1>
   <div class="muted">{_("Statement of account")} · {data['from_date']} {_("to")} {data['to_date']}</div>
   <div class="muted">{frappe.utils.escape_html(contact)}</div>
-  <div class="sum">
-    <div>{_("Opening")}<b>{money(data['opening'])}</b></div>
-    <div>{_("Closing")}<b>{money(data['closing'])}</b></div>
-    {f"<div>{_('Credit limit')}<b>{money(data['credit_limit'])}</b></div>" if data.get("credit_limit") else ""}
-  </div>
-  <table>
+  <table class="sum"><tr>{sum_cells}</tr></table>
+  <table class="ledger">
+    <colgroup>
+      <col style="width:13%"><col style="width:17%"><col style="width:26%">
+      <col style="width:15%"><col style="width:14%"><col style="width:15%">
+    </colgroup>
     <thead><tr><th>{_("Date")}</th><th>{_("Type")}</th><th>{_("Document")}</th>
       <th class="n">{charged_label}</th><th class="n">{_("Paid")}</th><th class="n">{_("Balance")}</th></tr></thead>
     <tbody>
-      <tr><td colspan="5">{_("Balance brought forward")}</td><td class="n">{money(data['opening'])}</td></tr>
+      <tr class="brought"><td colspan="5">{_("Balance brought forward")}</td><td class="n">{money(data['opening'])}</td></tr>
       {rows}
     </tbody>
     <tfoot><tr><td colspan="5">{_("Balance due")}</td><td class="n">{money(data['closing'])}</td></tr></tfoot>

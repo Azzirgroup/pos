@@ -20,6 +20,7 @@ MPESA_MODE = "M-Pesa"
 
 #: Set once, when the one-shift-per-day rule is first switched on for a site.
 SHIFT_RULE_MARKER = "cosmestics_one_shift_per_day_applied"
+OWNER_NOTICE_MARKER = "cosmestics_notify_sale_changes_applied"
 
 # M-Pesa reaches a Kenyan shop three ways, and each one settles differently: a
 # Send Money lands in the till's own wallet, a Paybill in the business account,
@@ -73,6 +74,7 @@ def setup_prerequisites():
 	ensure_transfer_approval_fields()
 	ensure_material_request_customer_field()
 	ensure_one_shift_per_day_default()
+	ensure_owner_notice_default()
 	ensure_print_formats()
 	ensure_notification_defaults()
 	ensure_sale_notice_payment_line()
@@ -431,6 +433,28 @@ def ensure_one_shift_per_day_default():
 
 	frappe.db.set_single_value("Cosmestics POS Settings", "one_shift_per_day", 1)
 	frappe.db.set_default(SHIFT_RULE_MARKER, "1")
+
+
+def ensure_owner_notice_default():
+	"""Turn the void and closed-quote notices on for a shop that already exists.
+
+	Same reason as `ensure_one_shift_per_day_default`: a `default` on a new
+	field never reaches a Single whose row was written before the field existed,
+	so the setting lands as 0 and the shop that asked to be told about voids is
+	told nothing, with the box on screen showing exactly that and no clue why.
+
+	Marked so a shop that switches it back off keeps that through every later
+	migrate.
+	"""
+	if not frappe.db.exists("DocType", "Cosmestics POS Settings"):
+		return
+	if not frappe.get_meta("Cosmestics POS Settings").get_field("notify_sale_changes"):
+		return
+	if frappe.db.get_default(OWNER_NOTICE_MARKER):
+		return
+
+	frappe.db.set_single_value("Cosmestics POS Settings", "notify_sale_changes", 1)
+	frappe.db.set_default(OWNER_NOTICE_MARKER, "1")
 
 
 def ensure_material_request_customer_field():

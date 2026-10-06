@@ -20,6 +20,7 @@
   "column_break_wa",
   "whatsapp_sender",
   "notify_sales_return",
+  "notify_sale_changes",
   "notify_shift_close",
   "material_request_template",
   "delivery_notice_section",
@@ -178,6 +179,13 @@
    "fieldname": "notify_sales_return",
    "fieldtype": "Check",
    "label": "Notify Customers of Sales Reversals"
+  },
+  {
+   "default": "1",
+   "description": "Tell the owner on WhatsApp when a sale is voided or a quotation is closed or deleted \u2014 the two things that undo work after the customer has gone.",
+   "fieldname": "notify_sale_changes",
+   "fieldtype": "Check",
+   "label": "Notify Owner of Voids and Closed Quotes"
   },
   {
    "default": "1",
