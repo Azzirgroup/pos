@@ -278,6 +278,19 @@ def _statement_reach(r):
 	r.check("the statement knows where to send", bool(_reachable_number(party)), _reachable_number(party))
 	contact.delete()
 
+	# A statement line stands for a document, and the row opens it.
+	from cosmestics.api.parties import _document_key, statement
+
+	r.check("a sale on a statement can be opened", _document_key("Sales Invoice") == "sales-invoice",
+	        str(_document_key("Sales Invoice")))
+	r.check("…and a payment too", _document_key("Payment Entry") == "payment-entry",
+	        str(_document_key("Payment Entry")))
+	r.check("a type the till has no screen for stays plain", _document_key("Journal Entry") is None,
+	        "no link offered")
+	rows = statement("Customer", party, add_days(nowdate(), -60), nowdate())["rows"]
+	if rows:
+		r.check("statement rows carry it", "doc_key" in rows[0], str(rows[0].get("doc_key")))
+
 
 def _statement_print(r):
 	"""The statement is a printed sheet, so it is checked as one."""

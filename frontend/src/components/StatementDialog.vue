@@ -6,6 +6,7 @@ import { fmtMoney } from '@/utils/format'
 import { printHtml } from '@/utils/silentPrint'
 import DateField from './DateField.vue'
 import MoneySheet from './MoneySheet.vue'
+import DocumentModal from './DocumentModal.vue'
 import LucideShield from '~icons/lucide/shield'
 import LucideCircleAlert from '~icons/lucide/circle-alert'
 import LucideCircleCheck from '~icons/lucide/circle-check'
@@ -202,6 +203,25 @@ async function print() {
 	} finally {
 		printing.value = false
 	}
+}
+
+/**
+ * Open the document a statement line stands for.
+ *
+ * `doc_key` comes from the server, which asks the `documents` registry — so
+ * the statement can only ever offer to open something the till actually has a
+ * screen for, and a line it has none for stays plain text rather than becoming
+ * a link that apologises.
+ */
+const voucherKey = ref(null)
+const voucherName = ref(null)
+const voucherOpen = ref(false)
+
+function openVoucher(row) {
+	if (!row?.doc_key) return
+	voucherKey.value = row.doc_key
+	voucherName.value = row.voucher_no
+	voucherOpen.value = true
 }
 
 /**
@@ -419,10 +439,21 @@ async function sendOnWhatsapp() {
 									<td class="px-3 py-2" colspan="4">Balance brought forward</td>
 									<td class="tabular px-3 py-2 text-right">{{ fmtMoney(data.opening) }}</td>
 								</tr>
-								<tr v-for="r in data.rows" :key="r.voucher_no + r.posting_date" class="border-t border-outline-gray-1">
+								<!-- A statement line is a document. Reading one and then having to
+								     go and find it somewhere else is the trip this saves — the row
+								     opens the invoice, the payment, whatever it is. -->
+								<tr
+									v-for="r in data.rows"
+									:key="r.voucher_no + r.posting_date"
+									class="border-t border-outline-gray-1"
+									:class="r.doc_key ? 'cursor-pointer transition-colors hover:bg-surface-gray-1' : ''"
+									@click="openVoucher(r)"
+								>
 									<td class="whitespace-nowrap px-3 py-2 text-ink-gray-7">{{ r.posting_date }}</td>
 									<td class="px-3 py-2">
-										<div class="text-ink-gray-9">{{ r.voucher_no }}</div>
+										<div :class="r.doc_key ? 'font-medium text-ink-blue-3 underline decoration-dotted underline-offset-2' : 'text-ink-gray-9'">
+											{{ r.voucher_no }}
+										</div>
 										<div class="text-p-xs text-ink-gray-5">{{ r.voucher_type }}</div>
 									</td>
 									<td class="tabular px-3 py-2 text-right text-ink-gray-8">{{ r.charged ? fmtMoney(r.charged) : '' }}</td>
@@ -459,6 +490,17 @@ async function sendOnWhatsapp() {
 		:mode="isCustomer ? 'receive' : 'pay-supplier'"
 		:party="party"
 		@done="onPaid"
+		@notify="emit('notify', $event)"
+	/>
+
+	<!-- The line's own document, in the same viewer the Sales screen uses.
+	     Reloads the statement on the way out: a sale cancelled from here
+	     changes the balance the dialog is showing. -->
+	<DocumentModal
+		v-model:open="voucherOpen"
+		:doc-key="voucherKey"
+		:name="voucherName"
+		@changed="load"
 		@notify="emit('notify', $event)"
 	/>
 </template>

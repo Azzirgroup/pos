@@ -201,6 +201,22 @@ def list_parties(
 	}
 
 
+def _document_key(voucher_type: str | None) -> str | None:
+	"""The `documents` registry key for a voucher type, if the till has one.
+
+	Asked of the registry rather than derived from the name, so a statement can
+	never offer to open something `documents.get_document` would refuse.
+	"""
+	if not voucher_type:
+		return None
+	from cosmestics.api.documents import DOCUMENTS
+
+	for entry in DOCUMENTS:
+		if entry["doctype"] == voucher_type:
+			return entry["key"]
+	return None
+
+
 def _reachable_number(party: str) -> str | None:
 	"""A number this party can actually be reached on.
 
@@ -288,6 +304,11 @@ def statement(
 				"charged": charged,
 				"settled": settled,
 				"balance": balance,
+				# Which document this line is, in the till's own terms, so a row
+				# can be opened from the statement instead of being a number the
+				# shop has to go and look up somewhere else. `None` for a type
+				# the app has no screen for — the desk link covers those.
+				"doc_key": _document_key(e.voucher_type),
 			}
 		)
 
@@ -460,6 +481,12 @@ def statement_html(
     -webkit-print-color-adjust: exact; print-color-adjust: exact;
   }}
   .head {{ border-bottom: 2px solid #1a1a1a; padding-bottom: 8px; margin-bottom: 12px; }}
+  /* A letter head that floats — and plenty do, to sit a logo beside an address
+     — would otherwise have the customer's name and the whole ledger ride up
+     alongside it. The header is made to contain its own floats, and what
+     follows starts below them. */
+  .head::after {{ content: ""; display: table; clear: both; }}
+  h1, .muted, .sum, table.ledger {{ clear: both; }}
   /* A letterhead is somebody else's HTML, often with a logo sized for screen.
      Left to itself it pushes the page wider than the paper and every column
      after it sits off the edge. */
