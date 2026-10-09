@@ -150,6 +150,7 @@ def _run(r):
 	_duplicate_items(r, item)
 	_owner_notices(r, item)
 	_statement_print(r)
+	_statement_reach(r)
 
 
 def _quote_sourcing(r, item):
@@ -243,6 +244,41 @@ def _owner_notices(r, item):
 	r.check("…and why", "Bought elsewhere" in wording, "reason carried")
 
 
+def _statement_reach(r):
+	"""Whether the statement can find a number to send to.
+
+	The WhatsApp button went dead for most customers because it read
+	`Customer.mobile_no` — a field ERPNext fills only from a primary contact. A
+	number living on the contact's own phone table, which is where ERPNext
+	actually puts it, read as no number at all.
+	"""
+	from cosmestics.api.notifications import contact_numbers
+	from cosmestics.api.parties import _reachable_number
+
+	print()
+	party = frappe.db.get_value("Customer", {"disabled": 0}, "name")
+	contact = frappe.get_doc(
+		{
+			"doctype": "Contact",
+			"first_name": "Smoke Reach",
+			"links": [{"link_doctype": "Customer", "link_name": party}],
+			"phone_nos": [
+				{"phone": "254700000111", "is_primary_mobile_no": 1},
+				{"phone": "254700000222"},
+			],
+		}
+	).insert()
+	found = [n["number"] for n in contact_numbers(party=party)["numbers"]]
+	r.check("a number on the contact is found", "254700000111" in found, str(found))
+	r.check(
+		"…including one that is not the primary",
+		"254700000222" in found,
+		"second number reachable",
+	)
+	r.check("the statement knows where to send", bool(_reachable_number(party)), _reachable_number(party))
+	contact.delete()
+
+
 def _statement_print(r):
 	"""The statement is a printed sheet, so it is checked as one."""
 	from cosmestics.api.parties import statement_html
@@ -256,6 +292,31 @@ def _statement_print(r):
 	r.check("column headers repeat on every page", "table-header-group" in html, "thead repeats")
 	r.check("the sheet declares its own page", "@page" in html, "page box set")
 	r.check("rows are not split across a page break", "page-break-inside: avoid" in html, "rows kept whole")
+
+	# The letter head is somebody else's HTML, written in a rich-text editor and
+	# routinely left open. Unclosed, it swallowed the whole statement into its
+	# own table and the customer got an unreadable column of figures.
+	head = frappe.get_doc(
+		{
+			"doctype": "Letter Head",
+			"letter_head_name": "Smoke Unbalanced",
+			"is_default": 1,
+			"content": '<table width="300"><tr><td><b>Smoke Shop</b>',
+			"footer": "<div>Thank you",
+		}
+	).insert()
+	rough = statement_html("Customer", party, add_days(nowdate(), -30), nowdate())
+	r.check(
+		"an unclosed letter head is closed before it is used",
+		rough.count("</table>") >= 3,  # the letter head, the summary, the ledger
+		f"{rough.count('</table>')} tables closed",
+	)
+	r.check(
+		"the ledger keeps its own width whatever the letter head says",
+		"width: 100% !important" in rough,
+		"structural rules protected",
+	)
+	head.delete()
 
 
 def _quotations(r, item):

@@ -542,6 +542,13 @@ def _send_media_to_group(jid: str, message: str, media_url: str, filename: str) 
 		return False
 
 
+def _stem(filename: str | None) -> str | None:
+	"""A file name with its `.pdf` taken off, if it had one."""
+	if not filename:
+		return filename
+	return filename[:-4] if filename.lower().endswith(".pdf") else filename
+
+
 def send_file(to: str, message: str, media_url: str, filename: str) -> bool:
 	"""Send an attachment, to a group or a number.
 
@@ -566,7 +573,12 @@ def send_file(to: str, message: str, media_url: str, filename: str) -> bool:
 				to_number=to,
 				message=message,
 				media_url=media_url,
-				file_name=filename,
+				# Without the extension: `send_whatsapp_media` adds `.pdf`
+				# itself, so a name that already carried one reached the
+				# customer as "statement-....pdf.pdf". The group path below
+				# takes the name verbatim and still wants it, so the two are
+				# normalised here rather than at each call site.
+				file_name=_stem(filename),
 				country_name=None,
 				sender=None,
 			)
@@ -884,6 +896,19 @@ def contact_numbers(
 		who = " ".join(filter(None, [doc.first_name, doc.last_name])) or contact
 		add(doc.mobile_no, who)
 		add(doc.phone, f"{who} (landline)")
+		# `Contact.mobile_no` and `Contact.phone` are derived: ERPNext fills them
+		# from whichever row of the contact's phone table is flagged primary. A
+		# number entered without that flag — which is what happens when somebody
+		# adds a second number, or imports a list — left the contact reading as
+		# having none at all, and the shop with a WhatsApp button that would not
+		# press. The rows themselves are where the numbers actually are.
+		for row in frappe.get_all(
+			"Contact Phone",
+			filters={"parent": contact},
+			fields=["phone", "is_primary_mobile_no"],
+			order_by="is_primary_mobile_no desc, idx asc",
+		):
+			add(row.phone, who if row.is_primary_mobile_no else f"{who} (other)")
 
 	return {"party": party, "numbers": numbers}
 

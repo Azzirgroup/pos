@@ -204,8 +204,29 @@ async function print() {
 	}
 }
 
-/** Send it to the customer, with the shop's own covering line. */
+/**
+ * Send it to the customer, with the shop's own covering line.
+ *
+ * The button used to disable itself when the record had no number, and said so
+ * only in a `title` tooltip — which a phone cannot show. From the counter that
+ * is a green button that will not press, with no reason given. It stays
+ * pressable now and asks for the number, which is the thing that was missing.
+ */
 const sending = ref(false)
+const askNumber = ref(false)
+const typedNumber = ref('')
+
+const reachable = computed(() => (data.value?.mobile_no || '').trim())
+
+function startSend() {
+	if (!data.value) return
+	if (!reachable.value && !typedNumber.value.trim()) {
+		askNumber.value = true
+		return
+	}
+	sendOnWhatsapp()
+}
+
 async function sendOnWhatsapp() {
 	if (!data.value) return
 	sending.value = true
@@ -215,7 +236,13 @@ async function sendOnWhatsapp() {
 			party: props.party,
 			fromDate: fromDate.value,
 			toDate: toDate.value,
+			// Typed here when the record had none. The server keeps it, so the
+			// next statement has somewhere to go without being asked again.
+			to: typedNumber.value.trim() || null,
 		})
+		askNumber.value = false
+		typedNumber.value = ''
+		if (res.sent) load()
 		emit('notify', { message: res.message, tone: res.sent ? 'good' : 'bad' })
 	} catch (e) {
 		emit('notify', { message: e.message || 'Could not send the statement', tone: 'bad' })
@@ -296,7 +323,7 @@ async function sendOnWhatsapp() {
 
 				<div class="flex justify-end">
 					<button
-						class="flex h-8 items-center gap-1.5 rounded-lg bg-surface-green-2 px-3 text-p-sm font-medium text-ink-green-3 transition-colors hover:opacity-90"
+						class="flex min-h-touch items-center gap-1.5 rounded-lg bg-surface-green-2 px-3 text-p-sm font-medium text-ink-green-3 transition-colors hover:opacity-90"
 						@click="payOpen = true"
 					>
 						<LucideCreditCard class="h-4 w-4" />
@@ -309,18 +336,61 @@ async function sendOnWhatsapp() {
 						<div class="mr-auto text-p-base font-semibold text-ink-gray-9">Statement</div>
 						<DateField v-model="fromDate" label="From" :max="toDate" class="w-[170px]" />
 						<DateField v-model="toDate" label="To" :min="fromDate" class="w-[170px]" />
-						<Button :icon-left="LucidePrinter" label="Print" :loading="printing" :disabled="!data" @click="print" />
-						<!-- The same page, sent to the number on the record. -->
+						<!-- Touch-sized. At the default height these were 28px tall on a
+						     phone, which is under half a fingertip — a button that has to
+						     be aimed at reads as a button that does not work. -->
+						<Button
+							:icon-left="LucidePrinter"
+							label="Print"
+							class="min-h-touch"
+							:loading="printing"
+							:disabled="!data"
+							@click="print"
+						/>
+						<!-- The same page, sent to the number on the record. Never
+						     disabled for a missing number: that turned the button into
+						     a dead press with the reason in a tooltip no phone shows.
+						     It asks for the number instead. -->
 						<Button
 							:icon-left="LucideSend"
 							theme="green"
 							variant="subtle"
 							label="WhatsApp"
+							class="min-h-touch"
 							:loading="sending"
-							:disabled="!data || !data.mobile_no"
-							:title="data && !data.mobile_no ? 'No phone number on this record' : 'Send the statement'"
+							:disabled="!data"
+							@click="startSend"
+						/>
+					</div>
+
+					<!-- Asked only when there is nothing on file. Saved with the
+					     record on the way out, so it is asked once. -->
+					<div
+						v-if="askNumber"
+						class="flex flex-wrap items-end gap-2 border-b border-outline-gray-2 bg-surface-amber-1 p-3"
+					>
+						<div class="w-full text-p-sm text-ink-amber-3">
+							No phone number on {{ data?.title || 'this record' }} — type one to send the statement.
+						</div>
+						<input
+							v-model="typedNumber"
+							type="tel"
+							inputmode="tel"
+							placeholder="2547…"
+							class="min-h-touch min-w-[180px] flex-1 rounded-lg border border-outline-gray-2 bg-surface-white px-3 text-p-sm text-ink-gray-9 placeholder-ink-gray-4"
+							@keyup.enter="sendOnWhatsapp"
+						/>
+						<Button
+							:icon-left="LucideSend"
+							theme="green"
+							variant="solid"
+							label="Send"
+							class="min-h-touch"
+							:loading="sending"
+							:disabled="!typedNumber.trim()"
 							@click="sendOnWhatsapp"
 						/>
+						<Button variant="subtle" label="Cancel" class="min-h-touch" @click="askNumber = false" />
 					</div>
 
 					<div v-if="loading" class="grid h-32 place-items-center">

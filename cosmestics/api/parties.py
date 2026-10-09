@@ -201,6 +201,27 @@ def list_parties(
 	}
 
 
+def _reachable_number(party: str) -> str | None:
+	"""A number this party can actually be reached on.
+
+	Not `Customer.mobile_no` alone. On ERPNext that field is filled from the
+	party's *primary contact*, so a customer whose number was typed against a
+	Contact — which is most of them — reads as having no number at all. The
+	statement's WhatsApp button went grey for those, and on a phone there is no
+	tooltip to explain why, so it simply looked broken.
+
+	`contact_numbers` already looks everywhere a shop keeps a number; the first
+	it finds is the one the shop would have picked.
+	"""
+	from cosmestics.api.notifications import contact_numbers
+
+	try:
+		numbers = contact_numbers(party=party).get("numbers") or []
+	except Exception:
+		return None
+	return numbers[0]["number"] if numbers else None
+
+
 @frappe.whitelist()
 def statement(
 	party_type: str,
@@ -281,7 +302,7 @@ def statement(
 		"party_type": party_type,
 		"party": party,
 		"title": doc.get(spec["title"]) or party,
-		"mobile_no": doc.get("mobile_no"),
+		"mobile_no": _reachable_number(party),
 		"email_id": doc.get("email_id"),
 		"location": location,
 		"party_kind": doc.get(spec["kind"]),
@@ -354,7 +375,44 @@ def _letter_head(company: str | None) -> dict:
 	if not name:
 		return {"header": f"<h2 style='margin:0'>{frappe.utils.escape_html(company or '')}</h2>", "footer": ""}
 	row = frappe.db.get_value("Letter Head", name, ["content", "footer"], as_dict=True) or {}
-	return {"header": row.get("content") or "", "footer": row.get("footer") or ""}
+	return {
+		"header": _balanced(row.get("content")),
+		"footer": _balanced(row.get("footer")),
+	}
+
+
+def _balanced(html: str | None) -> str:
+	"""Letterhead HTML with every tag closed.
+
+	A letter head is written in a rich-text editor and is routinely left
+	unbalanced — most often a `<table>` with no `</table>`. Dropped into a page
+	as-is, the HTML parser never closes it, so **the whole statement below it**
+	becomes content of that table: the ledger is squeezed into the letterhead's
+	own width, the columns collapse on top of each other, and the PDF that
+	reaches the customer is unreadable. The `</div>` around it cannot help —
+	inside an open table a stray close tag is ignored.
+
+	Parsing and re-serialising closes what the shop left open, and changes
+	nothing about a letterhead that was already well formed.
+	"""
+	markup = html or ""
+	if not markup.strip():
+		return ""
+	try:
+		from bs4 import BeautifulSoup
+
+		# `html.parser` keeps this a fragment: the others wrap it in
+		# `<html><body>`, which cannot be embedded mid-page.
+		soup = BeautifulSoup(markup, "html.parser")
+		# A statement is a printed sheet. Script in it does nothing in a PDF and
+		# runs for real in the print frame, which is a letterhead reaching
+		# further than a letterhead should.
+		for tag in soup.find_all("script"):
+			tag.decompose()
+		return soup.decode()
+	except Exception:
+		frappe.log_error("Could not tidy the letter head", "Cosmetics POS")
+		return markup
 
 
 def statement_html(
@@ -418,8 +476,16 @@ def statement_html(
   .sum .v {{ display: block; font-size: 14px; font-weight: 600; font-variant-numeric: tabular-nums; }}
   /* Fixed layout with a colgroup: the columns are then the same width on every
      page, which is what makes a three-page statement read as one document. */
-  table.ledger {{ width: 100%; border-collapse: collapse; margin-top: 12px; table-layout: fixed; }}
-  th, td {{ padding: 5px 6px; border-bottom: 1px solid #e0e0e0; text-align: left; }}
+  /* `!important` on the structural rules only.
+     A letter head can carry its own <style>, and because it is written into
+     the body it comes after this block and wins on order — one `table {{ width:
+     200px }}` in a letterhead and the ledger is a ribbon down the page. These
+     are the rules that decide whether the sheet is readable at all; everything
+     cosmetic below is still the shop's to override. */
+  table.ledger {{ width: 100% !important; border-collapse: collapse; margin-top: 12px;
+                  table-layout: fixed !important; font-size: 11.5px !important; }}
+  th, td {{ padding: 5px 6px !important; border-bottom: 1px solid #e0e0e0; text-align: left;
+            font-size: inherit !important; }}
   th {{ background: #f4f4f4; font-size: 10.5px; text-transform: uppercase; letter-spacing: .02em; }}
   /* Repeated at the top of every printed page. Without this the second page of
      a long statement is a wall of figures with nothing saying which column is
@@ -427,7 +493,7 @@ def statement_html(
   thead {{ display: table-header-group; }}
   tfoot {{ display: table-footer-group; }}
   tr {{ page-break-inside: avoid; break-inside: avoid; }}
-  .n {{ text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }}
+  .n {{ text-align: right !important; font-variant-numeric: tabular-nums; white-space: nowrap; }}
   .doc {{ font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }}
   .brought td {{ font-style: italic; color: #555; }}
   tfoot td {{ font-weight: 700; border-top: 2px solid #1a1a1a; border-bottom: 0; }}
@@ -471,6 +537,21 @@ STATEMENT_MESSAGE = (
 )
 
 
+def _remember_number(party_type: str, party: str, number: str):
+	"""Put a number typed at the counter onto the record.
+
+	Quietly: the cashier asked to send a statement, not to edit a customer, and
+	a failure here must not lose them the send they did ask for.
+	"""
+	try:
+		if not frappe.has_permission(party_type, "write", doc=party):
+			return
+		if frappe.get_meta(party_type).has_field("mobile_no"):
+			frappe.db.set_value(party_type, party, "mobile_no", number)
+	except Exception:
+		frappe.log_error(f"Could not save {number} on {party}", "Cosmetics POS")
+
+
 @frappe.whitelist(methods=["POST"])
 def send_statement(
 	party_type: str,
@@ -487,8 +568,14 @@ def send_statement(
 	number = (to or data.get("mobile_no") or "").strip()
 	if not number:
 		frappe.throw(
-			_("{0} has no phone number on file — add one first.").format(data["title"])
+			_("{0} has no phone number on file. Add one on the record and send it again.").format(
+				data["title"]
+			)
 		)
+	# A number typed into the send box is worth keeping: the next statement, and
+	# every receipt after it, then has somewhere to go.
+	if to and not _reachable_number(party):
+		_remember_number(party_type, party, number)
 
 	body = (message or "").strip() or _(STATEMENT_MESSAGE)
 	html = statement_html(party_type, party, from_date, to_date)
