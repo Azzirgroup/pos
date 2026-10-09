@@ -397,43 +397,123 @@ def _letter_head(company: str | None) -> dict:
 		return {"header": f"<h2 style='margin:0'>{frappe.utils.escape_html(company or '')}</h2>", "footer": ""}
 	row = frappe.db.get_value("Letter Head", name, ["content", "footer"], as_dict=True) or {}
 	return {
-		"header": _balanced(row.get("content")),
-		"footer": _balanced(row.get("footer")),
+		"header": _letterhead_fragment(row.get("content")),
+		"footer": _letterhead_fragment(row.get("footer")),
 	}
 
 
-def _balanced(html: str | None) -> str:
-	"""Letterhead HTML with every tag closed.
+def _letterhead_fragment(html: str | None) -> str:
+	"""A letter head reduced to something that cannot restyle the page it sits on.
 
-	A letter head is written in a rich-text editor and is routinely left
-	unbalanced — most often a `<table>` with no `</table>`. Dropped into a page
-	as-is, the HTML parser never closes it, so **the whole statement below it**
-	becomes content of that table: the ledger is squeezed into the letterhead's
-	own width, the columns collapse on top of each other, and the PDF that
-	reaches the customer is unreadable. The `</div>` around it cannot help —
-	inside an open table a stray close tag is ignored.
+	A letter head is whatever somebody pasted into the editor, and this shop's
+	is an entire HTML document — doctype, `<head>`, and a stylesheet that opens
+	with `* { margin: 0; padding: 0 }` and
+	`body { padding: 30px; display: flex; justify-content: center }`.
 
-	Parsing and re-serialising closes what the shop left open, and changes
-	nothing about a letterhead that was already well formed.
+	Dropped into a page as-is the nested `<html>` is ignored, but **the style
+	block is not**: `body { display: flex }` turns the statement's own body into
+	a flex row, so the heading, the dates, the totals and the ledger line up
+	beside each other as narrow columns and the printed sheet is unreadable.
+	That is the bug, and no amount of tidying the markup fixes it.
+
+	So the stylesheet is kept — the letter head needs it to look like itself —
+	but every rule in it is scoped to `.head`, the only part of the page that
+	belongs to the letter head. `body` becomes `.head`, `*` becomes `.head *`,
+	and the statement below is left alone. Parsing also closes whatever the
+	editor left open, and drops the document furniture that means nothing
+	mid-page.
 	"""
 	markup = html or ""
 	if not markup.strip():
 		return ""
+
 	try:
 		from bs4 import BeautifulSoup
 
-		# `html.parser` keeps this a fragment: the others wrap it in
-		# `<html><body>`, which cannot be embedded mid-page.
 		soup = BeautifulSoup(markup, "html.parser")
-		# A statement is a printed sheet. Script in it does nothing in a PDF and
-		# runs for real in the print frame, which is a letterhead reaching
-		# further than a letterhead should.
-		for tag in soup.find_all("script"):
-			tag.decompose()
-		return soup.decode()
 	except Exception:
-		frappe.log_error("Could not tidy the letter head", "Cosmetics POS")
+		frappe.log_error("Could not read the letter head", "Cosmetics POS")
 		return markup
+
+	css = []
+	for tag in soup.find_all("style"):
+		css.append(tag.get_text())
+		tag.decompose()
+	# Script does nothing in a PDF and runs for real in the print frame.
+	for name in ("script", "title", "meta", "link"):
+		for tag in soup.find_all(name):
+			tag.decompose()
+
+	# Unwrap a whole document down to what it actually draws.
+	for name in ("html", "head", "body"):
+		for tag in soup.find_all(name):
+			tag.unwrap()
+
+	scoped = _scope_css("\n".join(css), ".head")
+	fragment = soup.decode()
+	return f"<style>{scoped}</style>{fragment}" if scoped.strip() else fragment
+
+
+#: At-rules whose contents are themselves rules, so scoping has to go inside.
+_NESTED_AT_RULES = ("@media", "@supports", "@layer", "@container")
+
+
+def _scope_css(css: str, scope: str) -> str:
+	"""Rewrite a stylesheet so every rule applies only inside `scope`.
+
+	Deliberately small: letterhead CSS is a handful of flat rules, and a real
+	CSS parser would be a dependency for the sake of one document. Anything it
+	does not recognise is passed through untouched rather than guessed at.
+	"""
+	out = []
+	i = 0
+	n = len(css)
+	while i < n:
+		brace = css.find("{", i)
+		if brace == -1:
+			break
+		prelude = css[i:brace].strip()
+		# This block's matching close, counting nesting.
+		depth = 0
+		j = brace
+		while j < n:
+			if css[j] == "{":
+				depth += 1
+			elif css[j] == "}":
+				depth -= 1
+				if depth == 0:
+					break
+			j += 1
+		body = css[brace + 1 : j]
+		i = j + 1
+
+		if prelude.startswith(_NESTED_AT_RULES):
+			out.append(prelude + "{" + _scope_css(body, scope) + "}")
+		elif prelude.startswith("@"):
+			# @font-face, @keyframes, @import — no selectors to scope.
+			out.append(prelude + "{" + body + "}")
+		else:
+			selectors = ", ".join(
+				_scope_selector(sel, scope) for sel in prelude.split(",") if sel.strip()
+			)
+			if selectors:
+				out.append(selectors + "{" + body + "}")
+	return "\n".join(out)
+
+
+def _scope_selector(selector: str, scope: str) -> str:
+	"""One selector, rewritten to apply only inside `scope`."""
+	sel = selector.strip()
+	if not sel:
+		return ""
+	# What a letter head means by "body" is itself, once it is embedded in
+	# somebody else's page.
+	if sel in ("body", "html", ":root", "html body"):
+		return scope
+	for prefix in ("body ", "html ", ":root "):
+		if sel.startswith(prefix):
+			return f"{scope} {sel[len(prefix):].strip()}"
+	return f"{scope} {sel}"
 
 
 def statement_html(

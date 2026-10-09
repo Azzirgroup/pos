@@ -300,36 +300,58 @@ def _statement_print(r):
 	party = frappe.db.get_value("Customer", {"disabled": 0}, "name")
 	html = statement_html("Customer", party, add_days(nowdate(), -30), nowdate())
 	# `display:flex` is ignored by the engine that renders the PDF the shop
-	# sends, which stacked the three figures down the margin.
-	r.check("the statement uses no flexbox", "display: flex" not in html, "table layout")
+	# sends, which stacked the three figures down the margin. Only the
+	# statement's *own* stylesheet is examined: a letter head may use flex for
+	# its own band, and that is scoped to `.head` where it does no harm.
+	own_css = html.split("</head>")[0]
+	r.check("the statement's own layout uses no flexbox", "display: flex" not in own_css, "table layout")
 	r.check("column headers repeat on every page", "table-header-group" in html, "thead repeats")
 	r.check("the sheet declares its own page", "@page" in html, "page box set")
 	r.check("rows are not split across a page break", "page-break-inside: avoid" in html, "rows kept whole")
 
-	# The letter head is somebody else's HTML, written in a rich-text editor and
-	# routinely left open. Unclosed, it swallowed the whole statement into its
-	# own table and the customer got an unreadable column of figures.
+	# The letter head is somebody else's HTML. This shop's is a whole document
+	# with its own stylesheet, and `body { display: flex }` in it turned the
+	# statement's body into a flex row — every block became a narrow column and
+	# the printed sheet was unreadable. Its CSS has to stay with it.
 	head = frappe.get_doc(
 		{
 			"doctype": "Letter Head",
-			"letter_head_name": "Smoke Unbalanced",
+			"letter_head_name": "Smoke Hostile",
 			"is_default": 1,
-			"content": '<table width="300"><tr><td><b>Smoke Shop</b>',
+			"content": (
+				"<!DOCTYPE html><html><head><title>Hdr</title>"
+				"<style>* { margin: 0 } body { display: flex; padding: 30px }"
+				" table { width: 200px } .band { background: #000 }</style></head>"
+				"<body><div class='band'><b>Smoke Shop</b></div>"  # table left open below
+				"<table width='300'><tr><td>Nairobi"
+			),
 			"footer": "<div>Thank you",
 		}
 	).insert()
 	rough = statement_html("Customer", party, add_days(nowdate(), -30), nowdate())
+	head.delete()
+
+	css = rough.split("</style>")
+	leaked = [
+		rule
+		for rule in ("body { display: flex", "body{display:flex", "\nbody {", "\n* {")
+		if rule in rough
+	]
+	r.check("a letter head cannot restyle the statement's own body", not leaked, str(leaked))
+	r.check("its rules are scoped to the letter head", ".head *" in rough or ".head b" in rough,
+	        "scoped to .head")
+	r.check("the band keeps its own styling", ".head .band" in rough, "letter head still styled")
 	r.check(
 		"an unclosed letter head is closed before it is used",
 		rough.count("</table>") >= 3,  # the letter head, the summary, the ledger
 		f"{rough.count('</table>')} tables closed",
 	)
+	r.check("the document furniture is dropped", "<title>Hdr</title>" not in rough, "no nested title")
 	r.check(
 		"the ledger keeps its own width whatever the letter head says",
 		"width: 100% !important" in rough,
 		"structural rules protected",
 	)
-	head.delete()
 
 
 def _quotations(r, item):
