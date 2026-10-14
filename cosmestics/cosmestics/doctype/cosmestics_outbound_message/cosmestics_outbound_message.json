@@ -1,0 +1,93 @@
+{
+ "actions": [],
+ "autoname": "hash",
+ "creation": "2026-10-14 09:00:00.000000",
+ "doctype": "DocType",
+ "editable_grid": 0,
+ "engine": "InnoDB",
+ "field_order": [
+  "status",
+  "kind",
+  "subject",
+  "column_break_head",
+  "to_number",
+  "is_group",
+  "sender",
+  "message_section",
+  "body",
+  "media_url",
+  "filename",
+  "delivery_section",
+  "attempts",
+  "sent_at",
+  "column_break_delivery",
+  "last_error",
+  "reference_doctype",
+  "reference_name"
+ ],
+ "fields": [
+  {
+   "fieldname": "status",
+   "fieldtype": "Select",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Status",
+   "options": "Queued\nSent\nFailed",
+   "default": "Queued",
+   "read_only": 1
+  },
+  {
+   "fieldname": "kind",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "in_standard_filter": 1,
+   "label": "Kind",
+   "read_only": 1,
+   "description": "What this message was — a statement, a shift summary, a receipt."
+  },
+  {
+   "fieldname": "subject",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "About",
+   "read_only": 1
+  },
+  {"fieldname": "column_break_head", "fieldtype": "Column Break"},
+  {
+   "fieldname": "to_number",
+   "fieldtype": "Data",
+   "in_list_view": 1,
+   "label": "To",
+   "read_only": 1
+  },
+  {"fieldname": "is_group", "fieldtype": "Check", "label": "To A Group", "read_only": 1},
+  {"fieldname": "sender", "fieldtype": "Data", "label": "Sent From", "read_only": 1},
+  {"fieldname": "message_section", "fieldtype": "Section Break", "label": "Message"},
+  {"fieldname": "body", "fieldtype": "Text", "label": "Body", "read_only": 1},
+  {"fieldname": "media_url", "fieldtype": "Data", "label": "Attachment", "read_only": 1},
+  {"fieldname": "filename", "fieldtype": "Data", "label": "File Name", "read_only": 1},
+  {"fieldname": "delivery_section", "fieldtype": "Section Break", "label": "Delivery"},
+  {"fieldname": "attempts", "fieldtype": "Int", "label": "Attempts", "read_only": 1},
+  {"fieldname": "sent_at", "fieldtype": "Datetime", "label": "Sent At", "read_only": 1},
+  {"fieldname": "column_break_delivery", "fieldtype": "Column Break"},
+  {"fieldname": "last_error", "fieldtype": "Small Text", "label": "Last Error", "read_only": 1},
+  {"fieldname": "reference_doctype", "fieldtype": "Link", "label": "About Document", "options": "DocType", "read_only": 1},
+  {"fieldname": "reference_name", "fieldtype": "Dynamic Link", "label": "Document", "options": "reference_doctype", "read_only": 1}
+ ],
+ "index_web_pages_for_search": 0,
+ "links": [],
+ "modified": "2026-10-14 09:00:00.000000",
+ "modified_by": "Administrator",
+ "module": "Cosmestics",
+ "name": "Cosmestics Outbound Message",
+ "owner": "Administrator",
+ "permissions": [
+  {"create": 1, "delete": 1, "email": 1, "export": 1, "print": 1, "read": 1, "report": 1, "role": "System Manager", "share": 1, "write": 1},
+  {"read": 1, "report": 1, "role": "Cosmestics Analytics"}
+ ],
+ "sort_field": "creation",
+ "sort_order": "DESC",
+ "states": [],
+ "title_field": "subject",
+ "track_changes": 0
+}

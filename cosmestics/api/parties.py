@@ -684,9 +684,20 @@ def send_statement(
 	if to and not _reachable_number(party):
 		_remember_number(party_type, party, number)
 
+	from cosmestics.api.notifications import outbound
+
 	body = (message or "").strip() or _(STATEMENT_MESSAGE)
 	html = statement_html(party_type, party, from_date, to_date)
 	url = _publish_statement_pdf(html, f"Statement-{party}-{data['to_date']}")
+
+	# Named for the message log, so a statement that never went out can be
+	# found by the day it was due and sent again — see `api/outbox.py`.
+	with outbound("Statement", data["title"], (party_type, party)):
+		return _deliver_statement(data, number, body, url, party)
+
+
+def _deliver_statement(data, number, body, url, party):
+	from cosmestics.api.notifications import send_file, send_text
 
 	if not url:
 		# The figures still reach them, which beats silence.

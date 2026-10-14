@@ -151,6 +151,7 @@ def _run(r):
 	_owner_notices(r, item)
 	_statement_print(r)
 	_statement_reach(r)
+	_outbox(r)
 
 
 def _quote_sourcing(r, item):
@@ -242,6 +243,65 @@ def _owner_notices(r, item):
 	r.check("a closed quote names the document", quote.name in wording, wording.splitlines()[1])
 	r.check("…who closed it", "Jane" in wording, "Closed by line present")
 	r.check("…and why", "Bought elsewhere" in wording, "reason carried")
+
+
+def _outbox(r):
+	"""The message log, and sending again what never went.
+
+	The senders are best-effort so a notification cannot fail a sale; the cost
+	is that an outage passes in silence. This is the record that makes it
+	answerable afterwards.
+	"""
+	from cosmestics.api import notifications as N
+	from cosmestics.api import outbox
+
+	print()
+
+	# An explicit refusal is a refusal. The bridge answers a lapsed
+	# subscription with a status and no `error` key, which used to read as
+	# delivered — so every message sent during an outage was logged as sent.
+	r.check(
+		"an explicit error from the bridge is not a delivery",
+		N._succeeded({"status": "error", "message": "Subscription expired"}) is False,
+		"refused",
+	)
+	r.check("…and a plain success still is", N._succeeded({"status": "success"}) is True, "accepted")
+
+	real_send, real_available, real_warm = N._send_once, N._integration_available, N.warm_up
+	real_backoff, real_attempts = N.BACKOFF_SECONDS, N.SEND_ATTEMPTS
+	down = {"on": True}
+	N._send_once = lambda to, msg, sender: (
+		{"status": "error", "message": "Subscription expired"} if down["on"] else {"status": "success"}
+	)
+	N._integration_available = lambda: True
+	N.warm_up = lambda: True
+	N.BACKOFF_SECONDS, N.SEND_ATTEMPTS = [], 1
+	try:
+		with N.outbound("Statement", "Smoke Party"):
+			N.send_text("254700000123", "Your statement")
+
+		listing = outbox.list_messages()
+		mine = [row for row in listing["rows"] if row["to"] == "254700000123"]
+		r.check("a message that did not go is recorded", bool(mine), f"{len(listing['rows'])} rows today")
+		if mine:
+			r.check("…with why", "Subscription expired" in (mine[0]["error"] or ""), str(mine[0]["error"]))
+			r.check("…and it is offered for resending", mine[0]["status"] == "Failed", mine[0]["status"])
+
+			down["on"] = False
+			outbox.resend([mine[0]["name"]])
+			after = frappe.db.get_value(
+				"Cosmestics Outbound Message", mine[0]["name"], ["status", "attempts"], as_dict=True
+			)
+			r.check("sending again marks it sent", after.status == "Sent", after.status)
+			r.check("…on the same row, not a new one", after.attempts == 2, str(after.attempts))
+
+			# Asked for by name after it has gone: skipped, never sent twice.
+			outbox.resend([mine[0]["name"]])
+			twice = frappe.db.get_value("Cosmestics Outbound Message", mine[0]["name"], "attempts")
+			r.check("an already-sent message is not sent again", twice == 2, str(twice))
+	finally:
+		N._send_once, N._integration_available, N.warm_up = real_send, real_available, real_warm
+		N.BACKOFF_SECONDS, N.SEND_ATTEMPTS = real_backoff, real_attempts
 
 
 def _statement_reach(r):

@@ -33,6 +33,7 @@ declare module 'vue' {
     LinkField: typeof import('./src/components/LinkField.vue')['default']
     MasterSheet: typeof import('./src/components/MasterSheet.vue')['default']
     MaterialRequestSheet: typeof import('./src/components/MaterialRequestSheet.vue')['default']
+    MessageLog: typeof import('./src/components/MessageLog.vue')['default']
     MobileCartBar: typeof import('./src/components/MobileCartBar.vue')['default']
     ModuleTabs: typeof import('./src/components/ModuleTabs.vue')['default']
     MoneySheet: typeof import('./src/components/MoneySheet.vue')['default']

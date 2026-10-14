@@ -27,6 +27,7 @@ block the stock document that triggered it — the shop still needs the request.
 """
 
 import time
+from contextlib import contextmanager
 
 import frappe
 import requests
@@ -46,6 +47,11 @@ BACKOFF_SECONDS = (1, 4)
 # at again here — two different opinions about what "sent" means is how a
 # delivered message gets logged as a failure.
 ACCEPTED_STATUSES = ("success", "sent", "queued", "processing", "ok", "true")
+
+#: …and the ones that are a refusal however the rest of the reply is shaped.
+#: Mirrors `whatsapp_integration.service.rest.reports_success`, which has
+#: always read these as a no.
+REFUSED_STATUSES = ("error", "false", "failed")
 
 
 def _settings():
@@ -123,6 +129,84 @@ def _quiet(fn, *args, **kwargs):
 		frappe.flags.mute_messages = previous
 
 
+#: What a message was about, so an outbox can tell a statement from a shift
+#: summary. Set by `outbound()` around a send; `None` outside one.
+_KIND = "cosmestics_outbound_kind"
+
+
+@contextmanager
+def outbound(kind: str, subject: str | None = None, reference: tuple | None = None):
+	"""Name what is being sent, for the outbox.
+
+	A context manager rather than an argument on every sender: `send_text` is
+	called from two dozen places, and threading a label through all of them
+	would be a change to each of those call sites for the benefit of one
+	screen. What matters is only that a row can be read back later and
+	understood.
+	"""
+	previous = getattr(frappe.local, _KIND, None)
+	setattr(frappe.local, _KIND, {"kind": kind, "subject": subject, "reference": reference})
+	try:
+		yield
+	finally:
+		setattr(frappe.local, _KIND, previous)
+
+
+def _record(to: str, body: str, media_url=None, filename=None, sender=None):
+	"""Open an outbox row for one attempt, or `None` if it cannot be written.
+
+	Never raises. A log that breaks the thing it is logging is worse than no
+	log, and this one sits in the path of every sale notice.
+	"""
+	if getattr(frappe.local, "cosmestics_outbox_replaying", False):
+		# A resend updates the row it came from rather than breeding new ones.
+		return None
+	try:
+		if not frappe.db.exists("DocType", "Cosmestics Outbound Message"):
+			return None
+		about = getattr(frappe.local, _KIND, None) or {}
+		reference = about.get("reference") or (None, None)
+		doc = frappe.get_doc(
+			{
+				"doctype": "Cosmestics Outbound Message",
+				"status": "Queued",
+				"kind": about.get("kind") or "Message",
+				"subject": (about.get("subject") or "")[:140] or None,
+				"to_number": to,
+				"is_group": 1 if is_group(to) else 0,
+				"sender": sender,
+				"body": body,
+				"media_url": media_url,
+				"filename": filename,
+				"reference_doctype": reference[0],
+				"reference_name": reference[1],
+			}
+		)
+		doc.flags.ignore_permissions = True
+		doc.insert()
+		return doc.name
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Cosmetics POS outbox")
+		return None
+
+
+def _settle(name: str | None, sent: bool, error=None):
+	"""Mark an outbox row with what happened. Never raises, same reason."""
+	if not name:
+		return sent
+	try:
+		values = {
+			"status": "Sent" if sent else "Failed",
+			"attempts": (frappe.db.get_value("Cosmestics Outbound Message", name, "attempts") or 0) + 1,
+			"last_error": None if sent else str(error or "no reply from the bridge")[:500],
+			"sent_at": frappe.utils.now() if sent else None,
+		}
+		frappe.db.set_value("Cosmestics Outbound Message", name, values, update_modified=False)
+	except Exception:
+		frappe.log_error(frappe.get_traceback(), "Cosmetics POS outbox")
+	return sent
+
+
 def _send_once(to: str, message: str, sender: str | None):
 	"""One attempt, through the highest-level API this install has."""
 	try:
@@ -167,12 +251,14 @@ def send_text(to: str, message: str, sender: str | None = None) -> bool:
 
 	warm_up()
 
+	logged = _record(to, message, sender=sender)
+
 	last_error = None
 	for attempt in range(SEND_ATTEMPTS):
 		try:
 			result = _send_once(to, message, sender)
 			if _succeeded(result):
-				return True
+				return _settle(logged, True)
 			last_error = result
 		except Exception as e:
 			last_error = e
@@ -187,10 +273,11 @@ def send_text(to: str, message: str, sender: str | None = None) -> bool:
 		f"WhatsApp send to {to} failed after {SEND_ATTEMPTS} attempts: {last_error}",
 		"Cosmetics POS",
 	)
-	_remember_failure(
-		_reason_from(last_error) if isinstance(last_error, dict) else last_error or _("no reply from the bridge")
-	)
-	return False
+	reason = (
+		_reason_from(last_error) if isinstance(last_error, dict) else last_error
+	) or _("no reply from the bridge")
+	_remember_failure(reason)
+	return _settle(logged, False, reason)
 
 
 def send_document(doctype: str, name: str, to: str, message: str | None = None, sender: str | None = None) -> bool:
@@ -426,6 +513,13 @@ def _succeeded(result) -> bool:
 		return True
 
 	status = str(result.get("status", "")).lower()
+	# An explicit refusal, first. The bridge answers a lapsed subscription with
+	# `{"status": "error", "message": "..."}` and no `error` key at all — which
+	# fell through to the "no error field, so it must be fine" branch below and
+	# was counted as delivered. Every message sent during an outage was recorded
+	# as sent, which is the one way a message log can be worse than none.
+	if status in REFUSED_STATUSES:
+		return False
 	if status in ACCEPTED_STATUSES:
 		return True
 
@@ -558,34 +652,43 @@ def send_file(to: str, message: str, media_url: str, filename: str) -> bool:
 	if not to or not media_url:
 		return False
 
+	logged = _record(to, message, media_url=media_url, filename=filename)
+
 	if is_group(to):
-		return _send_media_to_group(to, message, media_url, filename)
+		return _settle(logged, _send_media_to_group(to, message, media_url, filename))
 
 	try:
 		from whatsapp_integration.service.rest import send_whatsapp_media
 	except ImportError:
+		# The text still goes; the row belongs to that attempt now.
+		_settle(logged, False, "no media transport — sent as text instead")
 		return send_text(to, message)
 
 	try:
-		return _succeeded(
-			_quiet(
-				send_whatsapp_media,
-				to_number=to,
-				message=message,
-				media_url=media_url,
+		result = _quiet(
+			send_whatsapp_media,
+			**{
+				"to_number": to,
+				"message": message,
+				"media_url": media_url,
 				# Without the extension: `send_whatsapp_media` adds `.pdf`
 				# itself, so a name that already carried one reached the
 				# customer as "statement-....pdf.pdf". The group path below
 				# takes the name verbatim and still wants it, so the two are
 				# normalised here rather than at each call site.
-				file_name=_stem(filename),
-				country_name=None,
-				sender=None,
-			)
+				"file_name": _stem(filename),
+				"country_name": None,
+				"sender": None,
+			},
 		)
+		sent = _succeeded(result)
+		# The bridge's own words, not "no reply from the bridge": "Subscription
+		# expired" is the difference between a shop that knows what to do and
+		# one that opens a support ticket.
+		return _settle(logged, sent, None if sent else _reason_from(result))
 	except Exception as e:
 		frappe.log_error(f"WhatsApp file send to {to} failed: {e}", "Cosmetics POS")
-		return False
+		return _settle(logged, False, e)
 
 
 def publish_pdf(doctype: str, name: str, print_format: str | None = None) -> str | None:
@@ -1204,6 +1307,11 @@ def queue_material_request_notice(docname: str):
 
 
 def _enqueued_material_request_notice(docname: str):
+	with outbound("Material request", docname, ("Material Request", docname)):
+		return _material_request_notice(docname)
+
+
+def _material_request_notice(docname: str):
 	"""Post one request to the staff group, with the document attached.
 
 	**A PDF rather than a CSV.** The list used to go as a spreadsheet, on the
@@ -1314,6 +1422,11 @@ def queue_delivery_dispatch_notice(name: str):
 
 
 def _enqueued_delivery_dispatch_notice(name: str):
+	with outbound("Delivery", name, ("Cosmestics Delivery", name)):
+		return _delivery_dispatch_notice(name)
+
+
+def _delivery_dispatch_notice(name: str):
 	"""The customer, then the manager. Both best-effort and independent."""
 	doc = frappe.get_doc("Cosmestics Delivery", name)
 	settings = _settings()
@@ -1441,7 +1554,8 @@ def on_shift_close(doc, method=None):
 		manager = (settings.get("manager_whatsapp") or "").strip()
 		if not manager:
 			return
-		send_text(manager, format_shift_close(doc))
+		with outbound("Shift summary", doc.name, ("POS Closing Entry", doc.name)):
+			send_text(manager, format_shift_close(doc))
 	except Exception:
 		frappe.log_error(frappe.get_traceback(), "Cosmetics POS")
 
@@ -1513,6 +1627,11 @@ def on_sales_invoice_submit(doc, method=None):
 def _enqueued_sales_return_notice(docname: str):
 	doc = frappe.get_doc("Sales Invoice", docname)
 
+	with outbound("Sale reversed", docname, ("Sales Invoice", docname)):
+		return _send_sales_return(doc, docname)
+
+
+def _send_sales_return(doc, docname: str):
 	message = format_sales_return(doc)
 	numbers = contact_numbers(doctype="Sales Invoice", name=docname).get("numbers") or []
 	# A walk-in has no number on file, and most returns are walk-ins — so the
@@ -1649,14 +1768,15 @@ def queue_payment_change_notice(old: str, new: str, was: str, became: str, chang
 def _enqueued_payment_change_notice(old: str, new: str, was: str, became: str, changed_by: str) -> int:
 	message = format_payment_change(old, new, was, became, changed_by)
 	sent = 0
-	for jid, sender in _sale_group_targets():
-		try:
-			from whatsapp_integration.service.groups import send_group_text
+	with outbound("Payment changed", new, ("Sales Invoice", new)):
+		for jid, sender in _sale_group_targets():
+			try:
+				from whatsapp_integration.service.groups import send_group_text
 
-			ok = send_group_text(jid, message, sender)
-		except ImportError:
-			ok = _send_to_group(jid, message) if is_group(jid) else send_text(jid, message, sender)
-		sent += 1 if ok else 0
+				ok = send_group_text(jid, message, sender)
+			except ImportError:
+				ok = _send_to_group(jid, message) if is_group(jid) else send_text(jid, message, sender)
+			sent += 1 if ok else 0
 	return sent
 
 
@@ -1763,7 +1883,8 @@ def _enqueued_sale_void_notice(invoice: str, reason: str | None, voided_by: str)
 	if not _owner_notices_on():
 		return 0
 	doc = frappe.get_doc("Sales Invoice", invoice)
-	return _announce_to_owner(format_sale_void(doc, reason, voided_by))
+	with outbound("Sale voided", invoice, ("Sales Invoice", invoice)):
+		return _announce_to_owner(format_sale_void(doc, reason, voided_by))
 
 
 def format_quote_ended(doc, action: str, reason: str | None, ended_by: str) -> str:
@@ -1818,7 +1939,8 @@ def queue_quote_ended_notice(name: str, action: str, reason: str | None, ended_b
 
 
 def _enqueued_owner_notice(message: str) -> int:
-	return _announce_to_owner(message)
+	with outbound("Quotation ended", message.splitlines()[1] if len(message.splitlines()) > 1 else None):
+		return _announce_to_owner(message)
 
 
 def on_quotation_trash(doc, method=None):

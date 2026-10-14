@@ -15,6 +15,7 @@ import { useTillStore } from '@/stores/till'
 import { useCatalogStore } from '@/stores/catalog'
 import PageHeader from '@/components/PageHeader.vue'
 import PillTabs from '@/components/PillTabs.vue'
+import MessageLog from '@/components/MessageLog.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideSave from '~icons/lucide/save'
 import LucideCheck from '~icons/lucide/check'
@@ -41,6 +42,7 @@ const TABS = [
 	{ label: 'Till', value: 'pos' },
 	{ label: 'This till', value: 'profile' },
 	{ label: 'You', value: 'user' },
+	{ label: 'Messages', value: 'messages' },
 ]
 const tab = ref('pos')
 
@@ -317,6 +319,7 @@ async function toggleAssign(profile) {
 }
 
 const canSave = computed(() => {
+	if (tab.value === 'messages') return false
 	if (tab.value === 'pos') return data.value?.can_edit_pos
 	if (tab.value === 'profile') return data.value?.can_edit_profile && profileName.value
 	return true
@@ -338,7 +341,10 @@ function notify(message, tone = 'good') {
 			</template>
 
 			<template #primary>
+				<!-- Nothing on the Messages tab is edited, so there is nothing to
+				     save there; the button would be a dead control. -->
 				<Button
+					v-if="tab !== 'messages'"
 					theme="gray"
 					variant="solid"
 					:icon-left="LucideSave"
@@ -489,6 +495,9 @@ function notify(message, tone = 'good') {
 					</div>
 				</section>
 			</div>
+
+			<!-- ---------- What WhatsApp took, and what it did not ---------- -->
+			<MessageLog v-else-if="tab === 'messages'" @notify="notify($event.message, $event.tone)" />
 
 			<!-- ---------- The POS Profile behind this till ---------- -->
 			<div v-else-if="tab === 'profile'" class="flex max-w-3xl flex-col gap-4">

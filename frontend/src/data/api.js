@@ -113,6 +113,24 @@ export function submitSale({ items, payment, customer, discountAmount }) {
 	})
 }
 
+/* ---------- the message log ---------- */
+
+/** What WhatsApp took on a given day, and what it did not. */
+export const listOutbound = ({ fromDate, toDate, status } = {}) =>
+	call('cosmestics.api.outbox.list_messages', {
+		from_date: fromDate || null,
+		to_date: toDate || null,
+		status: status || null,
+	})
+
+/** Send these again — see `outbox.resend`. */
+export const resendOutbound = ({ names }) =>
+	call('cosmestics.api.outbox.resend', { names })
+
+/** Everything that did not go out on one day, bar the time-bound notices. */
+export const resendOutboundDay = ({ date }) =>
+	call('cosmestics.api.outbox.resend_day', { date: date || null })
+
 /* ---------- catalog ---------- */
 
 /** Whole sellable catalog in one call; searched locally thereafter. */
