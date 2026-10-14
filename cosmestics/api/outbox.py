@@ -13,7 +13,7 @@ Tuesday", so the only honest record is the one kept here.
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, cint, getdate, nowdate
+from frappe.utils import add_days, cint, get_time, getdate, nowdate
 
 #: Kinds whose message is only true on the day it was made.
 #:
@@ -26,6 +26,43 @@ PERISHABLE = {"Shift summary", "Sale voided", "Quotation ended", "Payment change
 
 #: How long a perishable notice is still worth sending, in days.
 PERISHABLE_DAYS = 1
+
+
+def _clock(value: str | None, fallback: str) -> str:
+	"""`09:00` or `9:00 am` as a database time, or the fallback.
+
+	Anything unreadable falls back rather than throwing: a half-typed time in a
+	filter box should narrow nothing, not refuse the whole screen.
+	"""
+	text = (value or "").strip()
+	if not text:
+		return fallback
+	try:
+		parts = get_time(text)
+	except Exception:
+		return fallback
+	return parts.strftime("%H:%M:%S")
+
+
+def _window(from_date, to_date, from_time, to_time) -> tuple[str, str]:
+	"""The slice of time being asked about, as two timestamps.
+
+	A day on its own is the whole day. Given times, it is the part of it the
+	shop is actually asking about — "between nine and one, when WhatsApp was
+	down" is the question, and reading a whole day of messages to find it is
+	the thing this saves.
+	"""
+	start_date = getdate(from_date or nowdate())
+	end_date = getdate(to_date or from_date or nowdate())
+	if start_date > end_date:
+		start_date, end_date = end_date, start_date
+
+	start = f"{start_date} {_clock(from_time, '00:00:00')}"
+	end = f"{end_date} {_clock(to_time, '23:59:59')}"
+	# A pair typed the wrong way round still answers the question it meant.
+	if start > end:
+		start, end = end, start
+	return start, end
 
 
 def _spec(row) -> dict:
@@ -54,23 +91,23 @@ def _spec(row) -> dict:
 def list_messages(
 	from_date: str | None = None,
 	to_date: str | None = None,
+	from_time: str | None = None,
+	to_time: str | None = None,
 	status: str | None = None,
 	limit: int = 200,
 ) -> dict:
-	"""One day's outbound messages, newest first.
+	"""Outbound messages in a window, newest first.
 
-	Defaults to today, because the question is nearly always asked about the
-	morning that just went wrong.
+	Defaults to the whole of today, because the question is nearly always asked
+	about the morning that just went wrong — and narrows to an hour of it when
+	the shop knows when the trouble was.
 	"""
 	if not frappe.has_permission("Cosmestics Outbound Message", "read"):
 		frappe.throw(_("You may not see the message log"), frappe.PermissionError)
 
-	start = getdate(from_date or nowdate())
-	end = getdate(to_date or from_date or nowdate())
-	if start > end:
-		start, end = end, start
+	start, end = _window(from_date, to_date, from_time, to_time)
 
-	filters = {"creation": ["between", [f"{start} 00:00:00", f"{end} 23:59:59"]]}
+	filters = {"creation": ["between", [start, end]]}
 	if status in ("Queued", "Sent", "Failed"):
 		filters["status"] = status
 
@@ -91,8 +128,10 @@ def list_messages(
 		counts[r["status"]] = counts.get(r["status"], 0) + 1
 
 	return {
-		"from_date": str(start),
-		"to_date": str(end),
+		"from": start,
+		"to": end,
+		"from_date": start.split(" ")[0],
+		"to_date": end.split(" ")[0],
 		"rows": out,
 		"counts": counts,
 		# What "Send the failed ones again" would actually do, so the button can
@@ -168,14 +207,32 @@ def resend(names: list | str) -> dict:
 
 
 @frappe.whitelist(methods=["POST"])
-def resend_day(date: str | None = None) -> dict:
-	"""Everything that did not go out on one day.
+def resend_window(
+	from_date: str | None = None,
+	to_date: str | None = None,
+	from_time: str | None = None,
+	to_time: str | None = None,
+) -> dict:
+	"""Everything that did not go out in one window.
 
-	Perishable notices are left out — see `PERISHABLE`. They are still in the
-	list and can be sent one at a time if the shop wants them.
+	Takes the same window the screen is showing, so the button sends exactly
+	what is in front of the person pressing it and nothing else — a shop that
+	has narrowed to the hour WhatsApp was down does not want the rest of the
+	day going out with it.
+
+	Perishable notices are left out — see `PERISHABLE`. They stay in the list
+	and can be sent one at a time if the shop wants them.
 	"""
-	listing = list_messages(from_date=date, to_date=date)
+	listing = list_messages(
+		from_date=from_date, to_date=to_date, from_time=from_time, to_time=to_time
+	)
 	names = [r["name"] for r in listing["rows"] if r["status"] != "Sent" and not r["stale"]]
 	if not names:
-		return {"sent": [], "failed": [], "message": _("Nothing left to send for {0}").format(listing["from_date"])}
+		return {
+			"sent": [],
+			"failed": [],
+			"message": _("Nothing left to send between {0} and {1}").format(
+				listing["from"], listing["to"]
+			),
+		}
 	return resend(names)

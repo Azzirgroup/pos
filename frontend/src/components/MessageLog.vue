@@ -1,7 +1,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { Button, Spinner } from 'frappe-ui'
-import { listOutbound, resendOutbound, resendOutboundDay } from '@/data/api'
+import { listOutbound, resendOutbound, resendOutboundWindow } from '@/data/api'
 import DateField from './DateField.vue'
 import LucideRefreshCw from '~icons/lucide/refresh-cw'
 import LucideSend from '~icons/lucide/send'
@@ -21,14 +21,30 @@ const emit = defineEmits(['notify'])
 
 const today = new Date().toISOString().slice(0, 10)
 const date = ref(today)
+/**
+ * The part of the day being asked about.
+ *
+ * Blank is the whole day, which is the common case. A shop that knows when the
+ * trouble was — "between nine and one, when WhatsApp was down" — narrows to it
+ * rather than reading a day of messages to find the gap.
+ */
+const fromTime = ref('')
+const toTime = ref('')
 const data = ref(null)
 const loading = ref(false)
 const busy = ref('')
 
+const windowArgs = computed(() => ({
+	fromDate: date.value,
+	toDate: date.value,
+	fromTime: fromTime.value || null,
+	toTime: toTime.value || null,
+}))
+
 async function load() {
 	loading.value = true
 	try {
-		data.value = await listOutbound({ fromDate: date.value, toDate: date.value })
+		data.value = await listOutbound(windowArgs.value)
 	} catch (e) {
 		emit('notify', { message: e.message || 'Could not read the message log', tone: 'bad' })
 	} finally {
@@ -36,7 +52,28 @@ async function load() {
 	}
 }
 
-watch(date, load, { immediate: true })
+let timer = null
+watch(
+	windowArgs,
+	() => {
+		// Debounced: a time box fires on every digit, and the half-typed ones in
+		// between are a query nobody asked for.
+		clearTimeout(timer)
+		timer = setTimeout(load, 250)
+	},
+	{ immediate: true, deep: true },
+)
+
+/** Said on the button, so it cannot send more than what is on screen. */
+const windowLabel = computed(() => {
+	if (!fromTime.value && !toTime.value) return 'all day'
+	return `${fromTime.value || '00:00'}–${toTime.value || '23:59'}`
+})
+
+function wholeDay() {
+	fromTime.value = ''
+	toTime.value = ''
+}
 
 const rows = computed(() => data.value?.rows || [])
 const counts = computed(() => data.value?.counts || {})
@@ -46,7 +83,7 @@ async function resendAll() {
 	if (!resendable.value) return
 	busy.value = 'all'
 	try {
-		const res = await resendOutboundDay({ date: date.value })
+		const res = await resendOutboundWindow(windowArgs.value)
 		emit('notify', { message: res.message, tone: res.failed?.length ? 'bad' : 'good' })
 		await load()
 	} catch (e) {
@@ -100,6 +137,38 @@ const when = (at) => (at || '').slice(11, 16)
 				/>
 			</header>
 
+			<!-- Narrowing to the hours it went wrong. Left blank it is the whole
+			     day, which is what most people want; an outage is easier to read
+			     when the rest of the day is out of the way. -->
+			<div class="flex flex-wrap items-end gap-2 border-b border-outline-gray-2 px-4 py-2.5">
+				<label class="flex flex-col">
+					<span class="mb-1.5 text-p-xs font-medium text-ink-gray-7">From</span>
+					<input
+						v-model="fromTime"
+						type="time"
+						class="min-h-touch rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9"
+					/>
+				</label>
+				<label class="flex flex-col">
+					<span class="mb-1.5 text-p-xs font-medium text-ink-gray-7">To</span>
+					<input
+						v-model="toTime"
+						type="time"
+						class="min-h-touch rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-sm text-ink-gray-9"
+					/>
+				</label>
+				<Button
+					v-if="fromTime || toTime"
+					variant="ghost"
+					class="min-h-touch"
+					label="Whole day"
+					@click="wholeDay"
+				/>
+				<span class="ml-auto self-center text-p-xs text-ink-gray-5">
+					Showing {{ windowLabel }}
+				</span>
+			</div>
+
 			<div class="flex flex-wrap items-center gap-3 border-b border-outline-gray-2 px-4 py-2.5">
 				<span class="flex items-center gap-1.5 text-p-sm text-ink-gray-7">
 					<LucideCircleCheck class="h-4 w-4 text-ink-green-3" />
@@ -122,6 +191,7 @@ const when = (at) => (at || '').slice(11, 16)
 					:loading="busy === 'all'"
 					:disabled="!resendable"
 					:label="resendable ? `Send ${resendable} again` : 'Nothing to send again'"
+					:title="`Sends only what is shown — ${windowLabel}`"
 					@click="resendAll"
 				/>
 			</div>
@@ -130,7 +200,7 @@ const when = (at) => (at || '').slice(11, 16)
 				<Spinner class="h-4 w-4" />
 			</div>
 			<p v-else-if="!rows.length" class="px-4 py-8 text-center text-p-sm text-ink-gray-5">
-				Nothing was sent on this day.
+				Nothing was sent {{ windowLabel === 'all day' ? 'on this day' : `between ${windowLabel}` }}.
 			</p>
 
 			<ul v-else class="divide-y divide-outline-gray-1">

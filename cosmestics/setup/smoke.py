@@ -299,6 +299,30 @@ def _outbox(r):
 			outbox.resend([mine[0]["name"]])
 			twice = frappe.db.get_value("Cosmestics Outbound Message", mine[0]["name"], "attempts")
 			r.check("an already-sent message is not sent again", twice == 2, str(twice))
+
+			# The log is asked about an hour, not only a day: "between nine and
+			# one, when WhatsApp was down" is the question a shop actually has.
+			frappe.db.set_value(
+				"Cosmestics Outbound Message", mine[0]["name"],
+				"creation", f"{nowdate()} 10:30:00", update_modified=False,
+			)
+			inside = outbox.list_messages(from_time="09:00", to_time="13:00")
+			outside = outbox.list_messages(from_time="15:00", to_time="17:00")
+			names_in = [row["name"] for row in inside["rows"]]
+			names_out = [row["name"] for row in outside["rows"]]
+			r.check("a window includes what falls in it", mine[0]["name"] in names_in, f"{len(names_in)} rows")
+			r.check("…and leaves out what does not", mine[0]["name"] not in names_out, f"{len(names_out)} rows")
+			backwards = outbox.list_messages(from_time="13:00", to_time="09:00")
+			r.check(
+				"a window typed backwards still answers",
+				[row["name"] for row in backwards["rows"]] == names_in,
+				"same rows",
+			)
+			r.check(
+				"an unreadable time falls back to the whole day",
+				len(outbox.list_messages(from_time="half nine")["rows"]) >= len(names_in),
+				"not refused",
+			)
 	finally:
 		N._send_once, N._integration_available, N.warm_up = real_send, real_available, real_warm
 		N.BACKOFF_SECONDS, N.SEND_ATTEMPTS = real_backoff, real_attempts

@@ -115,11 +115,13 @@ export function submitSale({ items, payment, customer, discountAmount }) {
 
 /* ---------- the message log ---------- */
 
-/** What WhatsApp took on a given day, and what it did not. */
-export const listOutbound = ({ fromDate, toDate, status } = {}) =>
+/** What WhatsApp took in a window, and what it did not. Times are optional. */
+export const listOutbound = ({ fromDate, toDate, fromTime, toTime, status } = {}) =>
 	call('cosmestics.api.outbox.list_messages', {
 		from_date: fromDate || null,
 		to_date: toDate || null,
+		from_time: fromTime || null,
+		to_time: toTime || null,
 		status: status || null,
 	})
 
@@ -127,9 +129,18 @@ export const listOutbound = ({ fromDate, toDate, status } = {}) =>
 export const resendOutbound = ({ names }) =>
 	call('cosmestics.api.outbox.resend', { names })
 
-/** Everything that did not go out on one day, bar the time-bound notices. */
-export const resendOutboundDay = ({ date }) =>
-	call('cosmestics.api.outbox.resend_day', { date: date || null })
+/**
+ * Everything that did not go out in the window on screen, bar the time-bound
+ * notices. Takes the same window the list is showing, so the button cannot
+ * send more than what is in front of whoever pressed it.
+ */
+export const resendOutboundWindow = ({ fromDate, toDate, fromTime, toTime } = {}) =>
+	call('cosmestics.api.outbox.resend_window', {
+		from_date: fromDate || null,
+		to_date: toDate || null,
+		from_time: fromTime || null,
+		to_time: toTime || null,
+	})
 
 /* ---------- catalog ---------- */
 
