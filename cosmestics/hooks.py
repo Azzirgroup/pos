@@ -146,6 +146,9 @@ doc_events = {
 		"on_trash": "cosmestics.api.notifications.on_quotation_trash",
 	},
 	"Sales Invoice": {
+		# An amended or duplicated invoice must not inherit the till's basket
+		# key — see `pos.clear_copied_sale_key`.
+		"before_insert": "cosmestics.api.pos.clear_copied_sale_key",
 		# Credit notes only: tells the customer their sale was reversed. Every
 		# other invoice falls straight through — see `on_sales_invoice_submit`.
 		"on_submit": "cosmestics.api.notifications.on_sales_invoice_submit",

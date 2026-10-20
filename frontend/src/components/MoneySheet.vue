@@ -3,6 +3,7 @@ import { computed, ref, watch } from 'vue'
 import { Button, Dialog, FormControl } from 'frappe-ui'
 import {
 	getPayAccounts,
+	getPaymentMethods,
 	getSupplierOwed,
 	payCustomer,
 	payPurchaseInvoice,
@@ -86,12 +87,28 @@ const overCap = computed(
 	() => cap.value !== null && Number(amount.value || 0) > Number(cap.value) + 0.001,
 )
 
+/**
+ * How a customer's payment came in — cash, M-Pesa, card.
+ *
+ * Receiving is the one mode with no account picker: the shop does not choose a
+ * ledger account for a customer payment, it says how the money arrived and the
+ * mode decides where it lands. The guard below used to demand an account
+ * anyway, so the button read "Choose an account" with no account field on
+ * screen and could never be pressed — receiving a payment from this screen had
+ * never worked.
+ */
+const methods = ref([])
+const payMode = ref(null)
+const todayISO = new Date().toISOString().slice(0, 10)
+
 const blocker = computed(() => {
 	if (!Number(amount.value)) return 'Enter an amount'
 	if (overCap.value) return `That is more than the ${fmtMoney(cap.value)} available`
 	if (props.mode === 'transfer') {
 		if (!from.value || !to.value) return 'Choose both accounts'
 		if (from.value === to.value) return 'Choose two different accounts'
+	} else if (props.mode === 'receive') {
+		if (!payMode.value) return 'Say how it was paid'
 	} else if (!from.value) {
 		return 'Choose an account'
 	}
@@ -108,6 +125,7 @@ watch(
 		date.value = new Date().toISOString().slice(0, 10)
 		from.value = ''
 		to.value = ''
+		payMode.value = null
 		party.value = props.party || props.supplier || ''
 		owed.value = null
 		// Pre-filled with what is owed: the commonest payment is the whole bill,
@@ -115,6 +133,16 @@ watch(
 		amount.value = props.mode === 'pay-invoice' ? props.invoice?.outstanding || '' : ''
 		try {
 			accounts.value = await getPayAccounts()
+			if (props.mode === 'receive' && !methods.value.length) {
+				try {
+					const res = await getPaymentMethods()
+					methods.value = res?.methods || []
+				} catch {
+					// Not fatal: the server falls back to the shop's cash mode.
+					methods.value = []
+				}
+			}
+			if (props.mode === 'receive') payMode.value = methods.value[0]?.mode_of_payment || null
 		} catch (e) {
 			emit('notify', { message: e.message || 'Could not load accounts', tone: 'bad' })
 		}
@@ -173,7 +201,12 @@ async function submit() {
 			res = await payCustomer({
 				customer: party.value,
 				amount: Number(amount.value),
+				modeOfPayment: payMode.value,
 				reference: reference.value,
+				// Was collected and then dropped: this sheet shows a Date box
+				// for every mode, and on this one alone the value never left
+				// the browser, so a back-dated receipt silently posted today.
+				postingDate: date.value,
 			})
 		}
 		emit('notify', { message: res.message, tone: 'good' })
@@ -292,10 +325,28 @@ async function submit() {
 					</select>
 				</div>
 
+				<!-- Receiving has no account picker: the shop says how the money
+				     arrived and the mode of payment decides where it lands. Without
+				     this the sheet asked for an account it never showed. -->
+				<div v-if="mode === 'receive'" class="flex flex-col gap-1">
+					<label class="text-p-sm font-medium text-ink-gray-7">Paid by</label>
+					<select
+						v-model="payMode"
+						class="h-10 w-full rounded-lg border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:bg-surface-white focus:outline-none"
+					>
+						<option v-for="m in methods" :key="m.key || m.mode_of_payment" :value="m.mode_of_payment">
+							{{ m.label || m.mode_of_payment }}
+						</option>
+					</select>
+				</div>
+
 				<div class="grid grid-cols-2 gap-3">
 					<FormControl v-model="reference" type="text" label="Reference" placeholder="Txn ID" />
-					<FormControl v-model="date" type="date" label="Date" />
+					<FormControl v-model="date" type="date" label="Date" :max="todayISO" />
 				</div>
+				<p v-if="mode === 'receive' && date !== todayISO" class="-mt-1 text-p-xs text-ink-amber-3">
+					Dated {{ date }} — it will not be counted in today's drawer.
+				</p>
 			</div>
 		</template>
 

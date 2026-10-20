@@ -69,6 +69,7 @@ def setup_prerequisites():
 	ensure_shift_cashier_field()
 	ensure_pin_login_fields()
 	ensure_quote_conversion_fields()
+	ensure_sale_key_field()
 	ensure_quote_sourcing_fields()
 	ensure_purchase_landed_cost_fields()
 	ensure_transfer_approval_fields()
@@ -247,6 +248,44 @@ def ensure_quote_conversion_fields():
 		if frappe.db.exists("Custom Field", {"dt": "Quotation", "fieldname": field["fieldname"]}):
 			continue
 		create_custom_field("Quotation", field)
+
+
+def ensure_sale_key_field():
+	"""Where a sale records which basket it came from.
+
+	The till posts a sale, the reply is lost on a weak line, and the cashier is
+	told it did not post and handed the basket back — so they press again and
+	the shop has two invoices, two stock movements and a payment that never
+	arrived. Ten of them in the first 4,500 sales.
+
+	The fix is a key the till generates once per basket. `submit_sale` stamps it
+	here, and a second attempt carrying the same key gets the first invoice back
+	instead of making another.
+
+	`unique = 1` matters more than the lookup does: two taps landing at the same
+	moment both find nothing and both insert, and only the database can break
+	that tie. A unique index on a nullable column leaves every existing invoice
+	alone, since they all hold NULL.
+	"""
+	from frappe.custom.doctype.custom_field.custom_field import create_custom_field
+
+	if frappe.db.exists("Custom Field", {"dt": "Sales Invoice", "fieldname": "cosmestics_sale_key"}):
+		return
+
+	create_custom_field(
+		"Sales Invoice",
+		{
+			"fieldname": "cosmestics_sale_key",
+			"label": "Till Basket Key",
+			"fieldtype": "Data",
+			"insert_after": "is_pos",
+			"read_only": 1,
+			"unique": 1,
+			"no_copy": 1,
+			"print_hide": 1,
+			"description": "One basket, one key. Stops a retried sale posting twice.",
+		},
+	)
 
 
 def ensure_quote_sourcing_fields():

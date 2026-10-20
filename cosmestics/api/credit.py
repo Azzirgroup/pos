@@ -26,7 +26,7 @@ drawer knows about it.
 
 import frappe
 from frappe import _
-from frappe.utils import add_days, flt, nowdate
+from frappe.utils import add_days, flt, getdate, nowdate
 
 #: How far back the till offers to collect. Anything older is a debt-collection
 #: matter rather than a customer at the counter, and the list stops being usable.
@@ -123,6 +123,7 @@ def pay_credit_sale(
 	amount: float | None = None,
 	mode_of_payment: str | None = None,
 	reference: str | None = None,
+	posting_date: str | None = None,
 ) -> dict:
 	"""Take money against a credit sale.
 
@@ -157,18 +158,22 @@ def pay_credit_sale(
 	if not mode:
 		frappe.throw(_("No mode of payment to receive this through"))
 
-	entry = _make_payment_entry(doc, amount, mode, reference)
-	movement = _record_till_receipt(doc, amount, mode, entry)
+	when = _received_on(posting_date)
+	entry = _make_payment_entry(doc, amount, mode, reference, when)
+	# See `pay_customer`: an earlier day's money is not in today's drawer.
+	movement = _record_till_receipt(doc, amount, mode, entry) if when == nowdate() else None
 
 	doc.reload()
 	return {
 		"payment_entry": entry,
+		"posting_date": when,
 		"invoice": doc.name,
 		"paid": amount,
 		"outstanding": flt(doc.outstanding_amount),
 		"settled": flt(doc.outstanding_amount) <= 0,
 		"mode_of_payment": mode,
 		"movement": movement,
+		"posting_date": when,
 	}
 
 
@@ -278,6 +283,7 @@ def pay_customer(
 	mode_of_payment: str | None = None,
 	reference: str | None = None,
 	days: int = DEFAULT_DAYS,
+	posting_date: str | None = None,
 ) -> dict:
 	"""Take money from a customer and settle it against their oldest sales first.
 
@@ -343,8 +349,17 @@ def pay_customer(
 		)
 		remaining -= applied
 
-	entry = _make_customer_payment_entry(customer, amount, allocation, mode, reference)
-	movement = _record_customer_receipt(customer, owed["customer_name"], amount, mode, entry)
+	when = _received_on(posting_date)
+	entry = _make_customer_payment_entry(customer, amount, allocation, mode, reference, when)
+	# Only money that went into the drawer that is open now belongs to it. A
+	# payment being entered for an earlier day went into a drawer that has
+	# already been counted, and adding it to today's would make today come up
+	# over by the same amount.
+	movement = (
+		_record_customer_receipt(customer, owed["customer_name"], amount, mode, entry)
+		if when == nowdate()
+		else None
+	)
 
 	settled = [a["invoice"] for a in allocation if a["now_owed"] <= 0.005]
 
@@ -364,7 +379,25 @@ def pay_customer(
 	}
 
 
-def _make_customer_payment_entry(customer, amount, allocation, mode, reference):
+def _received_on(posting_date: str | None) -> str:
+	"""The day the money actually came in.
+
+	Defaults to today, which is the common case. Back-dating is allowed because
+	a payment taken on Saturday and entered on Monday belongs on Saturday —
+	putting it on Monday moves the customer's balance, their statement and the
+	day's takings all to the wrong day. Forward-dating is not: money cannot
+	arrive tomorrow, and a mistyped year would quietly park the receipt in the
+	future where no report would find it.
+	"""
+	if not posting_date:
+		return nowdate()
+	when = getdate(posting_date)
+	if when > getdate(nowdate()):
+		frappe.throw(_("A payment cannot be dated in the future"))
+	return str(when)
+
+
+def _make_customer_payment_entry(customer, amount, allocation, mode, reference, posting_date=None):
 	"""One Payment Entry, allocated across the invoices in `allocation`.
 
 	Built from ERPNext's own `get_payment_entry` against the oldest invoice so
@@ -380,8 +413,11 @@ def _make_customer_payment_entry(customer, amount, allocation, mode, reference):
 	pe = get_payment_entry("Sales Invoice", first, party_amount=amount)
 	pe.mode_of_payment = mode
 	pe.reference_no = reference or f"{customer} payment"
-	pe.reference_date = nowdate()
-	pe.posting_date = nowdate()
+	when = posting_date or nowdate()
+	pe.reference_date = when
+	pe.posting_date = when
+	# Without this ERPNext overwrites `posting_date` with today on validate.
+	pe.set_posting_time = 1
 	pe.paid_amount = amount
 	pe.received_amount = amount
 
@@ -452,7 +488,7 @@ def _record_customer_receipt(customer, customer_name, amount, mode, entry):
 		return None
 
 
-def _make_payment_entry(invoice, amount, mode, reference):
+def _make_payment_entry(invoice, amount, mode, reference, posting_date=None):
 	"""An ordinary Payment Entry, allocated against the invoice.
 
 	Built through ERPNext's own `get_payment_entry` so the accounts, exchange
@@ -465,8 +501,11 @@ def _make_payment_entry(invoice, amount, mode, reference):
 	pe = get_payment_entry("Sales Invoice", invoice.name, party_amount=amount)
 	pe.mode_of_payment = mode
 	pe.reference_no = reference or invoice.name
-	pe.reference_date = nowdate()
-	pe.posting_date = nowdate()
+	when = posting_date or nowdate()
+	pe.reference_date = when
+	pe.posting_date = when
+	# Without this ERPNext overwrites `posting_date` with today on validate.
+	pe.set_posting_time = 1
 
 	account = frappe.db.get_value(
 		"Mode of Payment Account",

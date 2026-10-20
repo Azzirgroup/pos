@@ -117,6 +117,16 @@ const detail = ref(null)
 const amount = ref('')
 const mode = ref(null)
 const reference = ref('')
+/**
+ * The day the money came in.
+ *
+ * Defaults to today and usually stays there. It matters when it does not: a
+ * payment taken on Saturday and entered on Monday used to post on Monday, so
+ * the customer's statement, their balance and the day's takings all showed it
+ * on the wrong day, with nothing on screen to set it right.
+ */
+const today = new Date().toISOString().slice(0, 10)
+const paidOn = ref(today)
 /** Set when the cashier has chosen one specific invoice instead of the account. */
 const againstInvoice = ref('')
 
@@ -148,6 +158,7 @@ async function openPay(row) {
 	againstInvoice.value = ''
 	amount.value = ''
 	reference.value = ''
+	paidOn.value = today
 	mode.value = methods.value[0]?.mode_of_payment || null
 	payOpen.value = true
 	try {
@@ -183,12 +194,14 @@ async function takePayment() {
 					amount: amountNum.value,
 					modeOfPayment: mode.value,
 					reference: reference.value || null,
+					postingDate: paidOn.value,
 				})
 			: await payCustomer({
 					customer: active.value.customer,
 					amount: amountNum.value,
 					modeOfPayment: mode.value,
 					reference: reference.value || null,
+					postingDate: paidOn.value,
 				})
 
 		payOpen.value = false
@@ -403,6 +416,22 @@ watch(payOpen, (open) => {
 							</option>
 						</select>
 					</div>
+				</div>
+
+				<!-- When it came in. Today unless somebody says otherwise, and never
+				     later than today — money cannot arrive tomorrow, and a mistyped
+				     year would park the receipt where no report looks. -->
+				<div>
+					<label class="mb-1.5 block text-p-sm font-medium text-ink-gray-7">Date received</label>
+					<input
+						v-model="paidOn"
+						type="date"
+						:max="today"
+						class="h-12 w-full rounded-xl border border-outline-gray-2 bg-surface-gray-2 px-3 text-p-base text-ink-gray-9 focus:border-outline-gray-4 focus:bg-surface-white focus:outline-none"
+					/>
+					<p v-if="paidOn !== today" class="mt-1.5 text-p-xs text-ink-amber-3">
+						Dated {{ paidOn }} — it will not be counted in today's drawer.
+					</p>
 				</div>
 
 				<input

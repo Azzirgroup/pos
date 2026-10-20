@@ -152,6 +152,8 @@ def _run(r):
 	_statement_print(r)
 	_statement_reach(r)
 	_outbox(r)
+	_payment_dates(r)
+	_no_double_posting(r, item)
 
 
 def _quote_sourcing(r, item):
@@ -243,6 +245,195 @@ def _owner_notices(r, item):
 	r.check("a closed quote names the document", quote.name in wording, wording.splitlines()[1])
 	r.check("…who closed it", "Jane" in wording, "Closed by line present")
 	r.check("…and why", "Bought elsewhere" in wording, "reason carried")
+
+
+def _no_double_posting(r, item):
+	"""One basket, one sale — however many times the till asks.
+
+	The shop had ten double-posted sales in its first 4,500. Not a double tap:
+	the reply to a sale was lost on a weak line, the till told the cashier it
+	had failed and handed the basket back, and pressing again posted it twice.
+	A key per basket is what makes the second attempt recognisable.
+	"""
+	from cosmestics.api.pos import sale_for_key, submit_sale
+
+	print()
+	r.check(
+		"a sale carries a key the till can name it by",
+		frappe.get_meta("Sales Invoice").has_field("cosmestics_sale_key"),
+		"field present",
+	)
+	idx = frappe.db.sql(
+		"""show index from `tabSales Invoice` where Column_name = 'cosmestics_sale_key'""",
+		as_dict=True,
+	)
+	r.check(
+		"…and the database enforces it, not just the lookup",
+		any(row.get("Non_unique") == 0 for row in idx),
+		"unique index",
+	)
+
+	basket = [
+		{"item_code": item.item_code, "qty": 1, "rate": 500, "uom": None,
+		 "conversion_factor": 1, "discount_pct": 0}
+	]
+	pay = {"method": "cash", "tendered": 500, "change": 0}
+
+	key = f"smoke-{frappe.generate_hash(length=10)}"
+	first = submit_sale(items=list(basket), payment=dict(pay), sale_key=key)
+	again = submit_sale(items=list(basket), payment=dict(pay), sale_key=key)
+	r.check("pressing again gives back the same sale", again["invoice"] == first["invoice"],
+	        f"{first['invoice']} / {again['invoice']}")
+	r.check("…and says so, rather than announcing a new one",
+	        again.get("already_posted") is True, str(again.get("already_posted")))
+	r.check(
+		"only one invoice carries the key",
+		frappe.db.count("Sales Invoice", {"cosmestics_sale_key": key}) == 1,
+		"one",
+	)
+	r.check(
+		"the stock moved once",
+		frappe.db.count("Stock Ledger Entry", {"voucher_no": first["invoice"]}) == 1,
+		"one ledger entry",
+	)
+
+	# The question the till asks instead of guessing that a sale failed.
+	r.check("the till can ask whether a basket posted",
+	        sale_for_key(sale_key=key)["invoice"] == first["invoice"], "answered")
+	r.check("…and gets nothing for a basket that never did",
+	        sale_for_key(sale_key="never-sent-" + key)["invoice"] is None, "no invoice")
+
+	# A genuine second sale of the same thing must still be possible.
+	other = submit_sale(items=list(basket), payment=dict(pay),
+	                    sale_key=f"smoke-{frappe.generate_hash(length=10)}")
+	r.check("a real repeat sale is still allowed", other["invoice"] != first["invoice"],
+	        other["invoice"])
+
+	# An old till that sends no key keeps working.
+	plain = submit_sale(items=list(basket), payment=dict(pay))
+	r.check("a sale with no key still posts", bool(plain["invoice"]), plain["invoice"])
+	second_plain = submit_sale(items=list(basket), payment=dict(pay))
+	r.check(
+		"…and so does the next one",
+		bool(second_plain["invoice"]) and second_plain["invoice"] != plain["invoice"],
+		second_plain["invoice"],
+	)
+
+	# Correcting a sale copies the invoice, and `frappe.copy_doc` ignores
+	# `no_copy` — so the copy inherited the key and the unique index refused
+	# it. Every payment-method correction failed until the key was cleared on
+	# any copied document.
+	from cosmestics.api.sale_changes import change_payment
+
+	corrected_key = f"smoke-{frappe.generate_hash(length=10)}"
+	sale = submit_sale(items=list(basket), payment=dict(pay), sale_key=corrected_key)["invoice"]
+	profile = frappe.db.get_value("Sales Invoice", sale, "pos_profile")
+	modes = frappe.get_all("POS Payment Method", filters={"parent": profile}, pluck="mode_of_payment")
+	other_mode = next((m for m in modes if m.lower() != "cash"), None)
+	if other_mode:
+		try:
+			# The sale's own total, not a guess — `change_payment` rightly
+			# refuses payments that do not add up to what was charged.
+			charged = flt(frappe.db.get_value("Sales Invoice", sale, "rounded_total")) or flt(
+				frappe.db.get_value("Sales Invoice", sale, "grand_total")
+			)
+			changed = change_payment(
+				invoice=sale, payments=[{"mode_of_payment": other_mode, "amount": charged}]
+			)
+			r.check("a keyed sale can still have its payment corrected", bool(changed.get("invoice")),
+			        changed.get("invoice"))
+			r.check(
+				"…and the correction does not claim the same basket",
+				frappe.db.get_value("Sales Invoice", changed["invoice"], "cosmestics_sale_key") is None,
+				"key cleared on the amendment",
+			)
+		except Exception as e:
+			r.check("a keyed sale can still have its payment corrected", False,
+			        f"{type(e).__name__}: {str(e)[:80]}")
+
+	duplicate = frappe.copy_doc(frappe.get_doc("Sales Invoice", sale))
+	r.check(
+		"duplicating an invoice does not inherit the key either",
+		not duplicate.get("cosmestics_sale_key") or duplicate.insert() and not duplicate.cosmestics_sale_key,
+		"cleared on copy",
+	)
+
+
+def _payment_dates(r):
+	"""A payment lands on the day the money came in, not the day it was typed.
+
+	The credit screen had no date at all and the accounts dialog showed one it
+	then threw away, so a payment taken on Saturday and entered on Monday moved
+	the customer's balance, their statement and the day's takings to Monday.
+	"""
+	from cosmestics.api import credit
+
+	print()
+	customer = frappe.db.get_value(
+		"Customer", {"disabled": 0, "customer_name": ["!=", "Walk-in Customer"]}, "name"
+	)
+	if not customer:
+		return
+	item = frappe.db.get_value("Item", {"is_sales_item": 1, "disabled": 0, "is_stock_item": 1}, "name")
+	from cosmestics.api.pos import submit_sale
+
+	submit_sale(
+		items=[{"item_code": item, "qty": 3, "rate": 500, "uom": None,
+		        "conversion_factor": 1, "discount_pct": 0}],
+		payment={"method": "credit"},
+		customer=customer,
+	)
+
+	# The drawer is only touched for money that came in today — checked by
+	# watching the call, so it does not depend on a shift being open here.
+	real_receipt = credit._record_customer_receipt
+	touched = []
+	credit._record_customer_receipt = lambda *a, **k: (touched.append(1), "MOV")[1]
+	try:
+		yesterday = add_days(nowdate(), -1)
+		back = credit.pay_customer(customer=customer, amount=100, posting_date=yesterday)
+		r.check("a payment posts on the day it was received",
+		        str(frappe.db.get_value("Payment Entry", back["payment_entry"], "posting_date")) == yesterday,
+		        str(frappe.db.get_value("Payment Entry", back["payment_entry"], "posting_date")))
+		r.check("…and its reference date matches",
+		        str(frappe.db.get_value("Payment Entry", back["payment_entry"], "reference_date")) == yesterday,
+		        "same day")
+		r.check("…and an earlier day's money is not put in today's drawer",
+		        not touched, f"{len(touched)} movements")
+
+		today = credit.pay_customer(customer=customer, amount=100)
+		r.check("today's payment still posts today",
+		        str(frappe.db.get_value("Payment Entry", today["payment_entry"], "posting_date")) == nowdate(),
+		        nowdate())
+		r.check("…and does reach the drawer", len(touched) == 1, f"{len(touched)} movement")
+	finally:
+		credit._record_customer_receipt = real_receipt
+
+	try:
+		credit.pay_customer(customer=customer, amount=50, posting_date=add_days(nowdate(), 2))
+		r.check("a payment cannot be dated in the future", False, "it was accepted")
+	except frappe.ValidationError:
+		r.check("a payment cannot be dated in the future", True, "refused")
+
+	# How it was paid decides which account it lands in. The Receivables
+	# dialog never sent this — it asked for an account it did not show, so the
+	# button could not be pressed at all and nothing was ever received there.
+	modes = frappe.get_all(
+		"Mode of Payment Account", fields=["parent", "default_account"], limit=5
+	)
+	chosen = next((m for m in modes if m.default_account), None)
+	if chosen:
+		paid = credit.pay_customer(
+			customer=customer, amount=75, mode_of_payment=chosen.parent
+		)
+        # The entry says how it came in, and lands where that mode points.
+		entry = frappe.db.get_value(
+			"Payment Entry", paid["payment_entry"], ["mode_of_payment", "paid_to"], as_dict=True
+		)
+		r.check("a receipt records how it was paid", entry.mode_of_payment == chosen.parent,
+		        str(entry.mode_of_payment))
+		r.check("…and lands in that mode's account", entry.paid_to == chosen.default_account,
+		        str(entry.paid_to))
 
 
 def _outbox(r):

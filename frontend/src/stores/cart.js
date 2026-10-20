@@ -511,7 +511,9 @@ export const useCartStore = defineStore('cart', () => {
 					})()
 				: restored
 		if (!found) return null
-		recovered.value = { ...found, unverified: true }
+		// The key the interrupted submit was carrying, so the till can *ask*
+		// whether it posted instead of telling the cashier to go and look.
+		recovered.value = { ...found, unverified: true, saleKey: pending.saleKey || null }
 		return recovered.value
 	}
 

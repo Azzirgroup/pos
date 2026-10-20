@@ -82,9 +82,12 @@ function call(method, args, options) {
 }
 
 /** Submit a completed sale. Resolves with {invoice, grand_total, change, …}. */
-export function submitSale({ items, payment, customer, discountAmount }) {
+export function submitSale({ items, payment, customer, discountAmount, saleKey }) {
 	return call('cosmestics.api.pos.submit_sale', {
 		discount_amount: discountAmount || 0,
+		// One key per basket. Sent so a retry — after a reply that never
+		// arrived — gets the first invoice back instead of posting a second.
+		sale_key: saleKey || null,
 		items: items.map((l) => ({
 			item_code: l.item_code,
 			qty: l.qty,
@@ -141,6 +144,15 @@ export const resendOutboundWindow = ({ fromDate, toDate, fromTime, toTime } = {}
 		from_time: fromTime || null,
 		to_time: toTime || null,
 	})
+
+/**
+ * Did this basket already post?
+ *
+ * Asked when the reply to a sale goes missing, which is not the same as the
+ * sale failing — see `pos.sale_for_key`.
+ */
+export const saleForKey = ({ saleKey }) =>
+	call('cosmestics.api.pos.sale_for_key', { sale_key: saleKey })
 
 /* ---------- catalog ---------- */
 
@@ -510,12 +522,13 @@ export const listCreditSales = ({ days, thisShift, limit } = {}) =>
 	})
 
 /** Take money against a credit sale. Omit `amount` to settle it in full. */
-export const payCreditSale = ({ invoice, amount, modeOfPayment, reference }) =>
+export const payCreditSale = ({ invoice, amount, modeOfPayment, reference, postingDate }) =>
 	call('cosmestics.api.credit.pay_credit_sale', {
 		invoice,
 		amount: amount ?? null,
 		mode_of_payment: modeOfPayment || null,
 		reference: reference || null,
+		posting_date: postingDate || null,
 	})
 
 /** Who owes the shop money, one row per customer rather than per invoice. */
@@ -538,12 +551,15 @@ export const getCustomerCredit = ({ customer, days } = {}) =>
 export const applyCredits = ({ customer }) =>
 	call('cosmestics.api.credit.apply_credits', { customer })
 
-export const payCustomer = ({ customer, amount, modeOfPayment, reference }) =>
+export const payCustomer = ({ customer, amount, modeOfPayment, reference, postingDate }) =>
 	call('cosmestics.api.credit.pay_customer', {
 		customer,
 		amount,
 		mode_of_payment: modeOfPayment || null,
 		reference: reference || null,
+		// The day the money actually came in, which is not always today — a
+		// payment taken on Saturday and entered on Monday belongs on Saturday.
+		posting_date: postingDate || null,
 	})
 
 /* ---------- settings ---------- */

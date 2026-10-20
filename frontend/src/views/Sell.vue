@@ -12,6 +12,7 @@ import { useScanner } from '@/composables/useScanner'
 import { useShortcuts } from '@/composables/useShortcuts'
 import { fmtMoney } from '@/utils/format'
 import {
+	saleForKey,
 	submitSale,
 	requestTransfer as apiRequestTransfer,
 	getProfiles,
@@ -286,13 +287,30 @@ function recoverInterruptedSale() {
 
 watch(
 	() => cart.recovered,
-	(found) => {
+	async (found) => {
 		if (!found) return
+		cart.recovered = null
+
+		// Ask, rather than tell somebody to go and look.
+		//
+		// This basket was in the air when the tab died, so it may well have
+		// posted. It used to come back as a held ticket with a warning to
+		// check Recent sales first — which is a real safeguard right up until
+		// a busy counter ignores it and charges the customer twice. The key it
+		// was submitted with turns that warning into an answer.
+		if (found.saleKey) {
+			const posted = await didItPost(found.saleKey)
+			if (posted) {
+				cart.dropHeld(found.ticket.id)
+				notify(`That sale did post as ${posted} — the kept basket has been dropped`, 'ok')
+				return
+			}
+		}
+
 		notify(
 			`A sale was interrupted — basket kept as ${found.ticket.id}. Check Recent sales before charging it again.`,
 			'warn',
 		)
-		cart.recovered = null
 	},
 	{ immediate: true },
 )
@@ -1298,6 +1316,29 @@ function resumeHeld(id) {
 	notify('Sale resumed', 'ok')
 }
 
+/**
+ * Whether a basket posted after all, named by its key.
+ *
+ * Tried more than once: the reply went missing because the line was bad, so
+ * one failed question proves nothing. Returns the invoice, or null when the
+ * shop really has no sale for this basket — and null on no answer at all,
+ * because giving the basket back is the safe wrong answer and charging twice
+ * is not.
+ */
+async function didItPost(saleKey, tries = 3) {
+	for (let attempt = 0; attempt < tries; attempt += 1) {
+		try {
+			const res = await saleForKey({ saleKey })
+			if (res?.invoice) return res.invoice
+			return null
+		} catch (err) {
+			console.warn('[pos] could not check whether the sale posted', err)
+			await new Promise((r) => setTimeout(r, 800 * (attempt + 1)))
+		}
+	}
+	return null
+}
+
 async function completeSale(payment) {
 	// Snapshot before clearing — the cart is emptied immediately so the next
 	// customer can be served while the invoice posts in the background.
@@ -1308,9 +1349,19 @@ async function completeSale(payment) {
 		// `discountAmount` is what actually applies and what was charged.
 		discountAmount: cart.discountAmount,
 	}
+	// One key for this basket, for as long as it takes to post it.
+	//
+	// It is what lets a second attempt be recognised as the same sale. Without
+	// it a lost reply — the connection drops after the server has committed —
+	// ended as two invoices, two stock movements and a payment that never
+	// arrived; ten times in the shop's first 4,500 sales.
+	const saleKey =
+		crypto.randomUUID?.() || `${Date.now()}-${Math.random().toString(36).slice(2)}`
+
 	// The same basket in the shape the cart takes back, kept separately because
 	// the payload above is the server's shape and drops what a re-ring needs.
 	const basket = {
+		saleKey,
 		lines: lines.value.map((l) => ({ ...l })),
 		customer: customer.value,
 		discount: cart.discount,
@@ -1358,6 +1409,7 @@ async function completeSale(payment) {
 			items: snapshot.items,
 			customer: snapshot.customer,
 			discountAmount: snapshot.discountAmount,
+			saleKey,
 			payment: {
 				method: payment.method,
 				// Present only for split tender; the backend treats it as the
@@ -1432,6 +1484,21 @@ async function completeSale(payment) {
 		// next load parks it as a held ticket, which someone has to look at
 		// before it can be charged again. See `cartStorage.isUnloading`.
 		if (isUnloading()) return
+
+		// Ask before saying it failed.
+		//
+		// A dropped connection means "I do not know", not "it did not post" —
+		// and this branch used to say the second, hand the whole basket back
+		// and invite the cashier to press again. When the server had in fact
+		// committed, that is a duplicate sale. The key makes the question
+		// answerable, so it gets asked.
+		const posted = await didItPost(saleKey)
+		if (posted) {
+			cart.submitSettled()
+			catalog.refresh()
+			notify(`Invoice ${posted} did post — the reply was lost, not the sale`, 'ok')
+			return
+		}
 
 		cart.submitSettled()
 		// The counts were taken off the cards when it was charged; it did not post.
