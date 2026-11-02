@@ -951,34 +951,42 @@ def send_whatsapp(name: str, to: str, sender: str | None = None) -> dict:
 
 
 def format_quotation(doc) -> str:
-	"""The quote as a table, for the covering message.
+	"""The quote as a message a customer can actually read on a phone.
 
-	Mirrors the stock request: the customer is reading this on a phone and wants
-	the prices, not the document metadata.
+	This used to be a fixed-width table in a code block. It looked right in a
+	terminal and fell apart in WhatsApp: the block does not reflow, so on a
+	phone every row wrapped and the amount landed on its own line underneath —
+	and item names were cut to 22 characters, which is exactly where the size
+	lives ("…150ml", "…64ml"), so half the lines became indistinguishable.
+	A forty-line quote was unreadable.
+
+	So: no table and no truncation. The name on its own line in bold, because
+	that is what somebody scans for, and the arithmetic under it in the order
+	they would check it — how many, at what price, to what. Long names wrap the
+	way ordinary text wraps instead of being cut.
 	"""
-	from cosmestics.api.notifications import _table
+	currency = doc.currency or frappe.db.get_value("Company", doc.company, "default_currency") or ""
 
-	rows = []
-	for item in doc.items:
-		name = item.item_name or item.item_code
-		rows.append(
-			[
-				f"{flt(item.qty):g}",
-				name if len(name) <= 22 else name[:21] + "…",
-				f"{flt(item.rate):,.0f}",
-				f"{flt(item.amount):,.0f}",
-			]
-		)
+	def money(value):
+		return f"{flt(value):,.0f}"
 
 	lines = [
-		"*Quotation*",
-		f"{doc.name} · {doc.customer_name or doc.party_name}",
+		f"*Quotation {doc.name}*",
+		f"For {doc.customer_name or doc.party_name} · {len(doc.items)} item"
+		+ ("" if len(doc.items) == 1 else "s"),
 		"",
-		_table(["Qty", "Item", "Rate", "Amount"], rows),
-		f"Total: {flt(doc.grand_total):,.0f}",
 	]
+
+	for item in doc.items:
+		name = item.item_name or item.item_code
+		lines.append(f"*{name}*")
+		# "72 × 160 = 11,520" — the way the customer would check it themselves.
+		lines.append(f"{flt(item.qty):g} × {money(item.rate)} = {money(item.amount)}")
+
+	lines.append("")
+	lines.append(f"*Total: {currency} {money(doc.grand_total)}*")
 	if doc.valid_till:
-		lines.append(f"Valid until {doc.valid_till}")
+		lines.append(f"Valid until {frappe.utils.formatdate(doc.valid_till, 'd MMM yyyy')}")
 
 	# No link. This message goes to a customer, and the link pointed at the
 	# shop's own documents screen — useless to them, and an invitation to a

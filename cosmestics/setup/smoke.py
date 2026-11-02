@@ -156,6 +156,48 @@ def _run(r):
 	_no_double_posting(r, item)
 
 
+def _quote_message(r, item):
+	"""The quote a customer reads on WhatsApp.
+
+	It used to be a fixed-width table in a code block, which does not reflow:
+	on a phone every row wrapped and the amount landed on its own line, and
+	names were cut at 22 characters — exactly where the size lives, so
+	"...150ml" and "...64ml" became the same line twice.
+	"""
+	from cosmestics.api.quotations import create, format_quotation
+
+	print()
+	long_name = "princess claire hydraquinone brightening cream 500ml"
+	original = frappe.db.get_value("Item", item.item_code, "item_name")
+	quoted = create(
+		items=[{"item_code": item.item_code, "qty": 72, "rate": 160, "discount_pct": 0}],
+		valid_days=7,
+	)
+	doc = frappe.get_doc("Quotation", quoted["name"])
+	doc.items[0].item_name = long_name
+	message = format_quotation(doc)
+
+	r.check("the quote names the product in full", long_name in message, "nothing cut")
+	r.check("…and nothing is truncated", "…" not in message, "no ellipsis")
+	r.check(
+		"it is not a fixed-width table, which a phone cannot reflow",
+		"```" not in message,
+		"no code block",
+	)
+	r.check("each line says how many, at what price, to what", "72 × 160 = 11,520" in message,
+	        "arithmetic readable")
+	r.check("the total carries its currency", "Total:" in message and "11,520" in message,
+	        [l for l in message.splitlines() if l.startswith("*Total")][:1])
+	r.check("and it says how long it stands", "Valid until" in message,
+	        [l for l in message.splitlines() if "Valid" in l][:1])
+	# Nothing on screen should be wider than a phone: the longest line is the
+	# name itself, and the name is never padded to a column width.
+	widest = max(len(line) for line in message.splitlines())
+	r.check("no line is padded out to a table width", widest <= len(f"*{long_name}*") + 2,
+	        f"{widest} characters")
+	frappe.db.set_value("Item", item.item_code, "item_name", original, update_modified=False)
+
+
 def _quote_sourcing(r, item):
 	"""A quote must remember what is to be bought from the shop next door.
 
@@ -664,6 +706,7 @@ def _quotations(r, item):
 		r.check("loaded line keeps the QUOTED rate (333)", flt(line["rate"]) == 333,
 		        str(line["rate"]))
 
+	_quote_message(r, item)
 	_quote_sourcing(r, item)
 
 	listed = list_quotations(days=1)
