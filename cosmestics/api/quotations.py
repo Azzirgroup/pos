@@ -965,6 +965,8 @@ def format_quotation(doc) -> str:
 	they would check it — how many, at what price, to what. Long names wrap the
 	way ordinary text wraps instead of being cut.
 	"""
+	from cosmestics.api.notifications import quantity
+
 	currency = doc.currency or frappe.db.get_value("Company", doc.company, "default_currency") or ""
 
 	def money(value):
@@ -980,8 +982,10 @@ def format_quotation(doc) -> str:
 	for item in doc.items:
 		name = item.item_name or item.item_code
 		lines.append(f"*{name}*")
-		# "72 × 160 = 11,520" — the way the customer would check it themselves.
-		lines.append(f"{flt(item.qty):g} × {money(item.rate)} = {money(item.amount)}")
+		# "72pcs × 160 = 11,520" — the way the customer would check it
+		# themselves. The count carries its unit because otherwise the line is
+		# three bare numbers and the reader has to work out which is the price.
+		lines.append(f"{quantity(item.qty, item.uom)} × {money(item.rate)} = {money(item.amount)}")
 
 	lines.append("")
 	lines.append(f"*Total: {currency} {money(doc.grand_total)}*")

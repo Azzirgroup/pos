@@ -184,8 +184,15 @@ def _quote_message(r, item):
 		"```" not in message,
 		"no code block",
 	)
-	r.check("each line says how many, at what price, to what", "72 × 160 = 11,520" in message,
-	        "arithmetic readable")
+	r.check("each line says how many, at what price, to what",
+	        "72pcs × 160 = 11,520" in message, "arithmetic readable")
+	# The count is useless as a bare number beside a price — which of the three
+	# is the price? — so it carries its unit, and one of a thing is "1pc".
+	one = frappe.get_doc("Quotation", quoted["name"])
+	one.items[0].qty = 1
+	one.items[0].amount = 160
+	r.check("a single unit reads as one piece, not a bare 1",
+	        "1pc × 160" in format_quotation(one), "singular unit")
 	r.check("the total carries its currency", "Total:" in message and "11,520" in message,
 	        [l for l in message.splitlines() if l.startswith("*Total")][:1])
 	r.check("and it says how long it stands", "Valid until" in message,

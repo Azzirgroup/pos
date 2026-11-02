@@ -1126,6 +1126,36 @@ def app_url(path: str) -> str:
 	return f"{frappe.utils.get_url()}/pos{path}"
 
 
+#: Units of measure that tell a customer nothing. ERPNext stamps every item with
+#: "Nos" on creation and nobody in a cosmetics shop has ever changed it, so the
+#: field carries no information — but a bare number carries none either. These
+#: are spoken as "pc"/"pcs"; a unit somebody actually chose (Box, Carton,
+#: Dozen) is their own word and is printed as they wrote it.
+PLACEHOLDER_UOMS = {
+	"nos", "no", "nr", "number", "numbers",
+	"unit", "units", "each", "ea",
+	"pc", "pcs", "piece", "pieces",
+}
+
+
+def quantity(qty, uom: str | None = None) -> str:
+	"""How many, in a word — "1pc", "72pcs", "3 Box".
+
+	A count next to a price is two bare numbers, and a reader has to work out
+	which is which: "72 x 160" could be read either way round. Naming the unit
+	settles it at a glance and costs three characters.
+
+	Pluralising is only safe for the unit this function supplies itself, so an
+	explicit UOM is printed verbatim: "Boxs" would be worse than "3 Box".
+	"""
+	count = flt(qty)
+	number = f"{count:g}"
+	word = (uom or "").strip()
+	if not word or word.lower() in PLACEHOLDER_UOMS:
+		return f"{number}pc" if count == 1 else f"{number}pcs"
+	return f"{number} {word}"
+
+
 def _table(headers: list, rows: list) -> str:
 	"""A fixed-width table, wrapped in a WhatsApp code block.
 
