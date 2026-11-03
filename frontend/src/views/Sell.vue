@@ -457,6 +457,17 @@ const recentLoading = ref(false)
 const recentMine = ref(true)
 /** Scoped to the open shift by default — see `pos.recent_sales`. */
 const recentThisShift = ref(true)
+/**
+ * How many rows to fetch. The sheet opens on the newest few because that is
+ * what "did that go through?" needs, and the rest is a tap away — see
+ * `recentHidden`.
+ */
+const RECENT_PAGE = 25
+const recentLimit = ref(RECENT_PAGE)
+/** Sales the day has that the list is not showing. */
+const recentHidden = computed(() =>
+	Math.max((recent.value.totals?.count || 0) - (recent.value.totals?.shown || 0), 0),
+)
 
 async function openRecent() {
 	recentSheet.value = true
@@ -467,7 +478,7 @@ async function loadRecent() {
 	recentLoading.value = true
 	try {
 		recent.value = await getRecentSales({
-			limit: 25,
+			limit: recentLimit.value,
 			mine: recentMine.value,
 			// A day and a shift are different scopes; the server ignores the shift
 			// when a date is given rather than returning the intersection, which is
@@ -501,8 +512,19 @@ async function loadRecent() {
 const recentDate = ref(new Date().toISOString().slice(0, 10))
 
 watch([recentMine, recentThisShift, recentDate], () => {
+	recentLimit.value = RECENT_PAGE
 	if (recentSheet.value) loadRecent()
 })
+
+/**
+ * Drop the cap and reload, for "let me see the whole day". Asks for exactly
+ * what the count says is there rather than a round number; the server clamps
+ * it, so a freak day cannot pull the whole ledger into one sheet.
+ */
+async function showAllRecent() {
+	recentLimit.value = Math.max(recent.value.totals?.count || 0, RECENT_PAGE)
+	await loadRecent()
+}
 
 const SHIFT_TABS = ['count', 'credit']
 
@@ -1954,6 +1976,10 @@ useShortcuts({
 						:label="recent.shift ? 'This shift only' : 'This shift only (none open)'"
 						:disabled="!!recentDate || (!recent.shift && recentThisShift)"
 					/>
+					<!-- The figure is the whole scope, not the page. It used to be
+					     summed from the rows on screen, so it moved every time a sale
+					     was rung up and looked like the ledger was changing. When the
+					     list is cut off it says so, rather than reading as the lot. -->
 					<span class="tabular text-p-sm text-ink-gray-6">
 						{{ recent.totals.count || 0 }} sales · {{ fmtMoney(recent.totals.revenue || 0) }}
 					</span>
@@ -1973,6 +1999,26 @@ useShortcuts({
 					<span v-if="recentDate" class="text-p-xs text-ink-gray-5">
 						Showing that whole day, not just this shift
 					</span>
+				</div>
+
+				<!-- Said plainly instead of leaving a short list to pass for the
+				     whole of it: the total above counts sales that are not on
+				     screen, and without this the two disagree for no visible
+				     reason. -->
+				<div
+					v-if="recentHidden"
+					class="flex flex-wrap items-center gap-2 rounded-lg bg-surface-gray-2 px-3 py-2 text-p-xs text-ink-gray-6"
+				>
+					<span>
+						Newest {{ recent.totals.shown }} of {{ recent.totals.count }} listed —
+						{{ recentHidden }} more below them.
+					</span>
+					<button
+						class="font-medium text-ink-gray-9 underline underline-offset-2"
+						@click="showAllRecent"
+					>
+						Show all {{ recent.totals.count }}
+					</button>
 				</div>
 
 				<div v-if="recentLoading" class="grid h-32 place-items-center">

@@ -769,6 +769,8 @@ def recent_sales(
 			shift = frappe._dict(name=open_shift["name"], period_start_date=open_shift["period_start_date"])
 			filters["creation"] = (">=", open_shift["period_start_date"])
 
+	page = min(max(cint(limit) or 20, 1), 500)
+
 	rows = frappe.get_all(
 		"Sales Invoice",
 		filters=filters,
@@ -794,7 +796,7 @@ def recent_sales(
 			"pos_profile",
 		],
 		order_by="creation desc",
-		limit_page_length=min(max(cint(limit) or 20, 1), 100),
+		limit_page_length=page,
 	)
 
 	_attach_payment_modes(rows)
@@ -811,12 +813,34 @@ def recent_sales(
 		for r in rows:
 			r.salesperson = names.get(r.owner) or r.owner
 
+	# Counted over everything the filters match, not over the page.
+	#
+	# These used to be summed from `rows`, which is cut off at the page size, so
+	# the line above the list read "25 sales · KES 503,600" when the day had 38
+	# — and the figure moved every time a sale was rung up, because a different
+	# 25 fell inside the window. It looked like the ledger was changing. It was
+	# the window sliding. A total describing a day has to be asked of the day.
+	# The same `filters` the page was read with, so the two can never describe
+	# different sets. Aggregates go through the dict form because v16 refuses
+	# SQL functions written as strings, and the column it names them back is
+	# the raw expression ("COUNT(`name`)") — so they are read by position, in
+	# the order asked for, rather than by guessing at that spelling.
+	measured = frappe.get_all(
+		"Sales Invoice",
+		filters=filters,
+		fields=[{"COUNT": "name"}, {"SUM": "grand_total"}, {"SUM": "outstanding_amount"}],
+	)
+	counted, earned, owed = (list(measured[0].values()) + [0, 0, 0])[:3] if measured else (0, 0, 0)
+
 	return {
 		"rows": rows,
 		"totals": {
-			"count": len(rows),
-			"revenue": sum(flt(r.grand_total) for r in rows),
-			"outstanding": sum(flt(r.outstanding_amount) for r in rows),
+			"count": cint(counted),
+			"revenue": flt(earned),
+			"outstanding": flt(owed),
+			# How many of them are actually on screen, so the sheet can say so
+			# rather than let the reader assume the list is the whole of it.
+			"shown": len(rows),
 		},
 		"mine": bool(cint(mine)),
 		# So the sheet can say which it is showing. A list scoped to a shift and

@@ -2757,6 +2757,52 @@ def _recent_sales(r):
 			all(x["name"] in mine for x in data["rows"]),
 		)
 
+	_recent_totals(r)
+
+
+def _recent_totals(r):
+	"""The figure above the list has to describe the list's scope, not its page.
+
+	It was summed from the rows that came back, which stop at the page size. So
+	a day of 64 sales reported whatever the newest 25 happened to add up to —
+	and the number moved every time a sale was rung up, because a different 25
+	fell inside the window. It read as a ledger that would not sit still.
+	"""
+	from cosmestics.api import pos
+
+	busiest = frappe.db.sql(
+		"""select posting_date, count(*) n, sum(grand_total) total
+		   from `tabSales Invoice` where docstatus = 1
+		   group by posting_date order by n desc limit 1""",
+		as_dict=True,
+	)
+	if not busiest or busiest[0].n < 3:
+		print("  SKIP: no day with enough sales to page")
+		return
+
+	day = str(busiest[0].posting_date)
+	seen = []
+	# Deliberately asked for fewer rows than the day holds.
+	for limit in (1, 2, busiest[0].n + 10):
+		data = frappe.call(pos.recent_sales, limit=limit, mine=0, this_shift=0, on_date=day)
+		seen.append((limit, data["totals"]))
+
+	r.check(
+		"the day's total is the same however many rows are shown",
+		len({round(flt(t["revenue"]), 2) for _, t in seen}) == 1,
+		[f"limit {lim}: {t['count']} · {flt(t['revenue']):,.0f}" for lim, t in seen],
+	)
+	r.check(
+		"and it is the day's real total",
+		round(flt(seen[0][1]["revenue"]), 2) == round(flt(busiest[0].total), 2),
+		f"{flt(busiest[0].total):,.0f} on {day}",
+	)
+	r.check(
+		"a cut-off list says how much of the day it is showing",
+		seen[0][1]["shown"] == 1 and seen[0][1]["count"] == busiest[0].n,
+		f"showing {seen[0][1]['shown']} of {seen[0][1]['count']}",
+	)
+
 
 def _barcodes(r):
 	"""Generated barcodes have to be real barcodes.
